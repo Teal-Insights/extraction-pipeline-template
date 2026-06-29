@@ -2,7 +2,7 @@
 
 Cookie-cutter template for turning an Excel financial model into a semantic, distributable Python library using [excel-grapher](https://github.com/Teal-Insights/excel-grapher). The pipeline combines target-driven graph extraction, explicit dynamic-reference constraints, series bindings, LLM-assisted naming and documentation, and Excel-backed parity tests.
 
-See [artifacts/good-extraction-standard.md](artifacts/good-extraction-standard.md) for the acceptance bar and [artifacts/lessons-learned.md](artifacts/lessons-learned.md) for design rationale.
+See [technical-standard.md](technical-standard.md) for the acceptance bar and [lessons-learned.md](lessons-learned.md) for design rationale.
 
 ## What you provide
 
