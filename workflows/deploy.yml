@@ -1,0 +1,33 @@
+name: Deploy generated package
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run export pipeline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: uv run python -m src.extraction_pipeline
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-package
+          path: dist/

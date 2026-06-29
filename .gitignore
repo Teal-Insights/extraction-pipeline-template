@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.ty_cache/
+.cache/
+dist/
+docs/dependency-graph/
+docs/human-hypothesis-graph/
+.env
