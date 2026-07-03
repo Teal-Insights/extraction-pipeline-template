@@ -24,10 +24,18 @@ from src.pipeline_config import PipelineConfig, discover_public_api_symbols
 from src.qmd_python_validation import PublicApiPolicy, validate_qmd_files
 
 SECTION_REWRITE_MODEL_ENV = "SECTION_REWRITE_MODEL"
-SECTION_REWRITE_PROMPT_VERSION = 5
+SECTION_REWRITE_PROMPT_VERSION = 6
 MAX_SECTION_REWRITE_ATTEMPTS = 3
-CANONICAL_API_USAGE_HEADING = "Canonical API usage"
 VALIDATION_PAGE_FILENAME = "03-excel-parity-validation.qmd"
+
+SETTER_INPUT_SHAPE_GUIDANCE = (
+    "Setter input shapes: single-cell setters accept a bare scalar; series setters "
+    "accept a 1-D sequence of measure values, a tidy Polars DataFrame, a single "
+    "record, or a list of records when the series is keyed. Reuse "
+    "ctx = make_context() across runnable cells. Tabulate compute_* results with "
+    "Polars, selecting the measure column with a clear alias as shown in the "
+    "canonical_api_usage reference."
+)
 
 
 def _rewrite_cache_path(config: PipelineConfig) -> Path:
@@ -50,7 +58,11 @@ def _no_api_signatures() -> str:
     return "No generated package API symbols are required for this section."
 
 
-def _introduction_focus_instructions(config: PipelineConfig) -> str:
+def _format_section_focus_template(template_path: Path, **placeholders: str) -> str:
+    return template_path.read_text(encoding="utf-8").strip().format(**placeholders)
+
+
+def introduction_focus_instructions(config: PipelineConfig) -> str:
     metadata = config.dist_metadata
     install = metadata.resolved_install_command()
     repo_hint = (
@@ -58,30 +70,27 @@ def _introduction_focus_instructions(config: PipelineConfig) -> str:
         if metadata.repository_url
         else "from the configured package source"
     )
-    return (
-        "Rewrite the source introduction as the landing page for the generated "
-        f"Python package documentation. Recommend installing with `{install}` "
-        f"{repo_hint}. Clarify that {metadata.library_name} is a Python "
-        "reimplementation of the source Excel workbook, produced using programmatic "
-        "extraction, machine translation, and AI. Keep provenance concise."
+    return _format_section_focus_template(
+        config.section_rewrite_introduction_focus_path,
+        install=install,
+        repo_hint=repo_hint,
+        library_name=metadata.library_name,
     )
 
 
-def _functional_overview_focus(api_import_path: str) -> str:
-    return (
-        "Preserve section structure and conceptual flow, but replace workbook "
-        f"navigation and manual cell editing with {api_import_path} usage. "
-        "Mirror the canonical_api_usage reference example for import style, "
-        "ctx = make_context(), and compute_* calls."
+def functional_overview_focus_instructions(config: PipelineConfig) -> str:
+    return _format_section_focus_template(
+        config.section_rewrite_functional_overview_focus_path,
+        api_import_path=config.api_import_path,
+        canonical_api_example_path=str(config.canonical_api_example_path),
     )
 
 
-def _illustrative_example_focus(api_import_path: str) -> str:
-    return (
-        "Keep the scenario faithful to the original narrative. "
-        f"Express each step with {api_import_path} using the same interaction "
-        "model as canonical_api_usage. Split the workflow into several short "
-        "runnable cells that reuse ctx = make_context()."
+def illustrative_example_focus_instructions(config: PipelineConfig) -> str:
+    return _format_section_focus_template(
+        config.section_rewrite_illustrative_example_focus_path,
+        api_import_path=config.api_import_path,
+        canonical_api_example_path=str(config.canonical_api_example_path),
     )
 
 
@@ -348,7 +357,7 @@ Hard constraints:
 - For runnable code examples, use Quarto executable fences exactly as ` ```{{python}} ` and not ` ```python `.
 - Return valid JSON matching the response schema exactly.
 - Runnable code may only use Python standard library, polars, and matplotlib.
-- Tabulate compute_* results with polars, following the reference example.
+- {SETTER_INPUT_SHAPE_GUIDANCE}
 - Use matplotlib when plots are needed.
 
 Section name: {section_name}
@@ -450,7 +459,7 @@ def sync_validated_pages_to_rewrite_cache(
         source_section_markdown=extract_markdown_section(
             guide_text, "II. Functional Overview"
         ),
-        python_focus_instructions=_functional_overview_focus(api_import_path),
+        python_focus_instructions=functional_overview_focus_instructions(config),
         pipeline_context_blocks=api_context,
         api_signatures=extract_api_signatures(config.api_module_path, api_symbols),
         response_schema=response_schema,
@@ -460,7 +469,7 @@ def sync_validated_pages_to_rewrite_cache(
         source_section_markdown=extract_markdown_section(
             guide_text, "III. Illustrative Example"
         ),
-        python_focus_instructions=_illustrative_example_focus(api_import_path),
+        python_focus_instructions=illustrative_example_focus_instructions(config),
         pipeline_context_blocks=api_context,
         api_signatures=extract_api_signatures(config.api_module_path, api_symbols),
         response_schema=response_schema,
@@ -572,8 +581,8 @@ def rewrite_guide_section(
             f"You are a technical documentation writer for the "
             f"{config.dist_metadata.library_name} library. "
             f"Runnable examples use {api_import_path} with make_context(), "
-            "records-shaped setters, and compute_* functions, as shown in the "
-            "reference example. Return only valid JSON matching the provided schema."
+            "setter input shapes from the reference example, and compute_* "
+            "functions. Return only valid JSON matching the provided schema."
         ),
         user_prompt=prompt,
         response_model=SectionRewriteResponse,
@@ -654,7 +663,7 @@ def write_introduction_page(
         section_id="introduction",
         section_name="Introduction",
         source_section_markdown=introduction_source,
-        python_focus_instructions=_introduction_focus_instructions(config),
+        python_focus_instructions=introduction_focus_instructions(config),
         pipeline_context_blocks={},
         api_signatures=_no_api_signatures(),
     )
@@ -691,7 +700,7 @@ def write_rewritten_guide_pages(config: PipelineConfig, client: OpenAI | None) -
         section_id="functional_overview",
         section_name="Functional Overview",
         source_section_markdown=functional_overview_source,
-        python_focus_instructions=_functional_overview_focus(api_import_path),
+        python_focus_instructions=functional_overview_focus_instructions(config),
         pipeline_context_blocks=api_context,
         api_signatures=functional_overview_api,
     )
@@ -710,7 +719,7 @@ def write_rewritten_guide_pages(config: PipelineConfig, client: OpenAI | None) -
         section_id="illustrative_example",
         section_name="Illustrative Example",
         source_section_markdown=illustrative_example_source,
-        python_focus_instructions=_illustrative_example_focus(api_import_path),
+        python_focus_instructions=illustrative_example_focus_instructions(config),
         pipeline_context_blocks=api_context,
         api_signatures=illustrative_example_api,
     )
