@@ -103,6 +103,9 @@ uv run python -m src.extraction_pipeline
 LLM steps (semantic labeling, docstrings, internals refactor, guide rewrites) cache results under `.cache/`. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
 
 ```bash
+# .env — logging verbosity for pipeline entry points (default: INFO)
+LOG_LEVEL=INFO
+
 # .env — provider API keys (set the key for whichever model family you use)
 OPENAI_API_KEY=sk-...
 ZAI_API_KEY=...
