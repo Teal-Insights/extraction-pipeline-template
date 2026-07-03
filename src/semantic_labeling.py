@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -13,22 +12,25 @@ import fastpyxl
 from excel_grapher.grapher.graph import DependencyGraph
 from excel_grapher.grapher.node import NodeKey
 from fastpyxl.utils import get_column_letter
-from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.llm_json import generate_validated_json
+from src.llm_providers import build_client, model_from_env
 
-DEFAULT_SEMANTIC_LABEL_MODEL = "gpt-5.5"
+SEMANTIC_LABEL_MODEL_ENV = "SEMANTIC_LABEL_MODEL"
 DEFAULT_SEMANTIC_LABEL_PROMPT_VERSION = 1
 DEFAULT_SEMANTIC_LABEL_CACHE_PATH = (
     Path(__file__).resolve().parents[1] / ".cache/semantic-labels.json"
 )
-OPENAI_BASE_URL = "https://api.openai.com/v1/"
-
 SheetLabelProvider = Callable[
     [str, list[NodeKey], list[dict[str, Any]], Mapping[str, Any]],
     "SheetSemanticLabels",
 ]
+
+
+def resolve_semantic_label_model(model: str | None) -> str:
+    """Return the caller's model, else the ``SEMANTIC_LABEL_MODEL`` env value."""
+    return model_from_env(SEMANTIC_LABEL_MODEL_ENV, model)
 
 
 class SemanticLabel(BaseModel):
@@ -257,12 +259,12 @@ def get_sheet_semantic_labels(
     candidate_addresses: list[NodeKey],
     sheet_cells: list[dict[str, Any]],
     concept_scheme: Mapping[str, Any],
-    model: str = DEFAULT_SEMANTIC_LABEL_MODEL,
+    model: str | None = None,
     prompt_version: int = DEFAULT_SEMANTIC_LABEL_PROMPT_VERSION,
     cache_path: Path = DEFAULT_SEMANTIC_LABEL_CACHE_PATH,
     api_key: str | None = None,
-    base_url: str = OPENAI_BASE_URL,
 ) -> SheetSemanticLabels:
+    model = resolve_semantic_label_model(model)
     schema = SheetSemanticLabels.model_json_schema()
     cache = load_json_cache(cache_path)
     cache_key = semantic_label_cache_key(
@@ -277,15 +279,11 @@ def get_sheet_semantic_labels(
     if cache_key in cache:
         content = cache[cache_key]
     else:
-        resolved_api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not resolved_api_key:
-            raise RuntimeError(
-                "OPENAI_API_KEY is required to generate uncached semantic labels"
-            )
-        client = OpenAI(api_key=resolved_api_key, base_url=base_url)
+        client, provider = build_client(model, api_key=api_key)
         _, content = generate_validated_json(
             client=client,
             model=model,
+            provider=provider,
             system_prompt=(
                 "You label Excel workbook cells for dependency graph "
                 "refactoring. Return only valid JSON matching the schema."
@@ -325,11 +323,12 @@ def label_internal_graph_cells(
     target_cells: Iterable[NodeKey],
     concept_scheme: Mapping[str, Any],
     provider: SheetLabelProvider | None = None,
-    model: str = DEFAULT_SEMANTIC_LABEL_MODEL,
+    model: str | None = None,
     prompt_version: int = DEFAULT_SEMANTIC_LABEL_PROMPT_VERSION,
     cache_path: Path = DEFAULT_SEMANTIC_LABEL_CACHE_PATH,
     api_key: str | None = None,
 ) -> SemanticLabelingSummary:
+    model = resolve_semantic_label_model(model)
     formula_workbook = fastpyxl.load_workbook(workbook_path, data_only=False)
     value_workbook = fastpyxl.load_workbook(workbook_path, data_only=True)
     graph_cells = set(graph.keys(order="workbook"))
