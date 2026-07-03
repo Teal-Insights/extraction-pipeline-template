@@ -41,9 +41,12 @@ def discover_allowed_runtime_symbols(runtime_path: Path) -> tuple[str, ...]:
             names.append(node.name)
     names = [name for name in names if name not in _SENTINEL_RETURNING_EXCLUDED_SYMBOLS]
     module = _load_runtime_module(runtime_path)
-    for name in names:
-        getattr(module, name)
-    return tuple(sorted(names))
+    try:
+        for name in names:
+            getattr(module, name)
+        return tuple(sorted(names))
+    finally:
+        sys.modules.pop("_runtime_symbols_probe", None)
 
 
 def _runtime_path_from_config() -> Path:

@@ -7,7 +7,6 @@ from pathlib import Path
 from excel_grapher.exporter import BaseProjectionManifest, CodeGenerator
 
 from src.subgraph_projection import build_refactor_projection
-from tests.fixtures.synthetic_pipeline import WORKBOOK_PATH
 
 
 def _base_manifest(manifest: object) -> BaseProjectionManifest:
@@ -33,12 +32,13 @@ def test_projected_codegen_preserves_public_series_api(
     tmp_path: Path,
     synthetic_graph,
     synthetic_series_bindings,
+    synthetic_workbook_path,
 ) -> None:
     projection = build_refactor_projection(synthetic_graph)
     modules = CodeGenerator(projection).generate_modules(
         list(synthetic_graph.target_keys()),
         series_bindings=synthetic_series_bindings,
-        bindings_workbook=WORKBOOK_PATH,
+        bindings_workbook=synthetic_workbook_path,
     )
 
     assert "def compute_result_a" in modules["api.py"]

@@ -9,7 +9,6 @@ from excel_grapher.series_bindings import (
 )
 
 from src.extraction_pipeline import build_pipeline_graph
-from src.pipeline_context import activate_pipeline_config
 from src.semantic_labeling import SemanticLabelingSummary
 
 
@@ -17,7 +16,6 @@ def test_build_pipeline_graph_on_synthetic_workbook(
     synthetic_pipeline_config_fixture,
 ) -> None:
     config = synthetic_pipeline_config_fixture
-    activate_pipeline_config(config)
     stub_summary = SemanticLabelingSummary(
         labeled_cell_count=0,
         sheet_count=0,

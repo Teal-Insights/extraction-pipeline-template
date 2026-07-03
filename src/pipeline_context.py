@@ -12,6 +12,12 @@ def activate_pipeline_config(config: PipelineConfig) -> None:
     _active_config = config
 
 
+def reset_pipeline_config() -> None:
+    """Clear the active configuration (for tests and isolated tooling)."""
+    global _active_config
+    _active_config = None
+
+
 def require_pipeline_config() -> PipelineConfig:
     if _active_config is None:
         raise RuntimeError(

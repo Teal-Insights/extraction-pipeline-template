@@ -192,8 +192,8 @@ CLUSTER_INPUTS = [
 ]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _parity_gate_exported_package(tmp_path_factory: pytest.TempPathFactory) -> None:
+@pytest.fixture(scope="module")
+def parity_gate_dist_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("parity_gate_dist")
     package_root = root / "my_model"
     package_root.mkdir(parents=True)
@@ -205,15 +205,17 @@ def _parity_gate_exported_package(tmp_path_factory: pytest.TempPathFactory) -> N
         "DEFAULT_INPUTS = {}\nCONSTANTS = {}\n",
         encoding="utf-8",
     )
+    return root
 
-    from src.refactor_parity_gate import _dist_data, _runtime
-    from src.runtime_symbols import allowed_runtime_symbols
 
-    config = replace(load_pipeline_config(), dist_root=root)
+@pytest.fixture(autouse=True)
+def _parity_gate_active_config(parity_gate_dist_root: Path) -> None:
+    config = replace(load_pipeline_config(), dist_root=parity_gate_dist_root)
     activate_pipeline_config(config)
-    _runtime.cache_clear()
-    _dist_data.cache_clear()
-    allowed_runtime_symbols.cache_clear()
+    from tests.fixtures.test_state import clear_runtime_caches
+
+    clear_runtime_caches()
+    yield
 
 
 def test_allowed_runtime_symbols_exist_on_fixture_runtime() -> None:

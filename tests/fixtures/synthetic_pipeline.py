@@ -16,7 +16,6 @@ from src.subgraph_projection import build_refactor_projection
 from src.workbook_addresses import ProjectionColumnLayout
 
 FIXTURES_ROOT = Path(__file__).resolve().parent / "synthetic"
-WORKBOOK_PATH = FIXTURES_ROOT / "workbook.xlsx"
 BINDINGS_PATH = FIXTURES_ROOT
 
 TARGETS: tuple[str, ...] = ("Outputs!B1", "Outputs!C1")
@@ -34,7 +33,7 @@ PROJECTION_LAYOUT = ProjectionColumnLayout(
 )
 
 
-def write_synthetic_workbook(path: Path = WORKBOOK_PATH) -> Path:
+def write_synthetic_workbook(path: Path) -> Path:
     """Write a minimal multi-sheet workbook with parallel formula families."""
     path.parent.mkdir(parents=True, exist_ok=True)
     workbook = fastpyxl.Workbook()
@@ -55,18 +54,11 @@ def write_synthetic_workbook(path: Path = WORKBOOK_PATH) -> Path:
     return path
 
 
-def ensure_synthetic_workbook(path: Path = WORKBOOK_PATH) -> Path:
-    if not path.is_file():
-        write_synthetic_workbook(path)
-    return path
-
-
-def build_synthetic_graph(
-    workbook_path: Path | None = None,
-) -> DependencyGraph:
-    path = ensure_synthetic_workbook(workbook_path or WORKBOOK_PATH)
+def build_synthetic_graph(workbook_path: Path) -> DependencyGraph:
+    if not workbook_path.is_file():
+        write_synthetic_workbook(workbook_path)
     return create_dependency_graph(
-        path,
+        workbook_path,
         list(TARGETS),
         load_values=True,
         dynamic_refs=DynamicRefConfig.from_constraints(CONSTRAINTS, {}),
@@ -75,10 +67,9 @@ def build_synthetic_graph(
 
 
 def build_synthetic_projection(
-    graph: DependencyGraph | None = None,
+    graph: DependencyGraph,
 ) -> ProjectionResult:
-    source_graph = graph if graph is not None else build_synthetic_graph()
-    return build_refactor_projection(source_graph)
+    return build_refactor_projection(graph)
 
 
 def load_synthetic_series_bindings(
@@ -89,17 +80,16 @@ def load_synthetic_series_bindings(
 
 def synthetic_pipeline_config(
     *,
+    workbook_path: Path,
     repo_root: Path | None = None,
-    workbook_path: Path | None = None,
 ) -> PipelineConfig:
     root = repo_root or Path(__file__).resolve().parents[2]
-    resolved_workbook = ensure_synthetic_workbook(
-        workbook_path or FIXTURES_ROOT / "workbook.xlsx"
-    )
+    if not workbook_path.is_file():
+        write_synthetic_workbook(workbook_path)
     templates_root = root / "templates"
     return PipelineConfig(
         repo_root=root,
-        workbook_path=resolved_workbook,
+        workbook_path=workbook_path,
         guide_path=root / "data" / "guide.md",
         bindings_path=FIXTURES_ROOT,
         dist_root=root / "dist",
