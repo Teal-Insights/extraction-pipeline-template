@@ -62,6 +62,7 @@ def _data_path() -> Path:
     config = require_pipeline_config()
     return config.package_root / "data.py"
 
+
 InputVector = Mapping[str, Any]
 
 

@@ -11,7 +11,7 @@ import fastpyxl
 from excel_grapher.series_bindings import load_series_bindings
 from excel_grapher.series_bindings.types import Scalar
 
-from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
+from src.workbook_addresses import ProjectionColumnLayout
 
 BindingKeyValue = str | int | float | bool
 
@@ -89,7 +89,9 @@ def _read_engine_time_period(
         read_only=True,
         keep_vba=keep_vba,
     )
-    value = workbook[layout.engine_sheet][f"{column}{layout.time_period_header_row}"].value
+    value = workbook[layout.engine_sheet][
+        f"{column}{layout.time_period_header_row}"
+    ].value
     if isinstance(value, bool):
         return None
     if isinstance(value, int):

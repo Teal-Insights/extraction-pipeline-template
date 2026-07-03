@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, Literal, Mapping, get_args, get_origin
+from typing import Any, Iterable, Literal, Mapping, Sequence, cast, get_args, get_origin
 
 from excel_grapher.grapher import (
     DependencyGraph,
@@ -14,11 +14,16 @@ from excel_grapher.series_bindings import (
     load_series_bindings,
     validate_series_bindings,
 )
+from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
 from src.docstring_callback import configure_docstring_callback
 from src.dependency_graph_viz import series_cell_keys
 from src.export_validation_assets import export_validation_assets
-from src.pipeline_config import PipelineConfig, load_pipeline_config, validate_pipeline_config
+from src.pipeline_config import (
+    PipelineConfig,
+    load_pipeline_config,
+    validate_pipeline_config,
+)
 from src.pipeline_context import activate_pipeline_config
 from src.qmd_python_validation import (
     DOCUMENTATION_BASELINE_DEV_DEPS,
@@ -28,6 +33,8 @@ from src.qmd_python_validation import (
 )
 from src.semantic_labeling import label_internal_graph_cells
 from src.subgraph_projection import build_refactor_projection
+
+SeriesResolutionList = Sequence[Mapping[str, Any]]
 
 
 def is_constant_constraint(constraint: object) -> bool:
@@ -50,8 +57,15 @@ def classify_leaves_from_constraints(
     }
 
 
-def build_pipeline_graph(config: PipelineConfig) -> tuple[DependencyGraph, object, object, object]:
-    series_bindings = load_series_bindings(config.bindings_path)
+def build_pipeline_graph(
+    config: PipelineConfig,
+) -> tuple[
+    DependencyGraph,
+    WorkbookSeriesBindings,
+    SeriesResolutionList,
+    SeriesResolutionList,
+]:
+    series_bindings: WorkbookSeriesBindings = load_series_bindings(config.bindings_path)
     dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints, {})
     graph = create_dependency_graph(
         config.workbook_path,
@@ -71,11 +85,13 @@ def build_pipeline_graph(config: PipelineConfig) -> tuple[DependencyGraph, objec
             f"Invalid series bindings: {binding_validation_report['issues']!r}"
         )
 
-    input_series = derive_input_series(
-        graph, series_bindings, workbook=config.workbook_path
+    input_series = cast(
+        SeriesResolutionList,
+        derive_input_series(graph, series_bindings, workbook=config.workbook_path),
     )
-    output_series = derive_output_series(
-        graph, series_bindings, workbook=config.workbook_path
+    output_series = cast(
+        SeriesResolutionList,
+        derive_output_series(graph, series_bindings, workbook=config.workbook_path),
     )
 
     label_internal_graph_cells(

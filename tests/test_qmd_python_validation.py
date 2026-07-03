@@ -5,7 +5,7 @@ from typing import cast
 import pytest
 from openai import OpenAI
 
-from src.pipeline_config import DistProjectMetadata, PipelineConfig
+from src.pipeline_config import DistProjectMetadata
 from src.qmd_python_validation import (
     PublicApiPolicy,
     aggregate_python_cells,

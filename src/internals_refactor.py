@@ -310,8 +310,12 @@ def _time_period_for_engine_column(
 
 
 def _default_bound_address_keys() -> dict[str, dict[str, BindingKeyValue]]:
-    from src.extraction_pipeline import input_series, output_series
+    from src.extraction_pipeline import build_pipeline_graph
+    from src.pipeline_context import require_pipeline_config
 
+    _graph, _series_bindings, input_series, output_series = build_pipeline_graph(
+        require_pipeline_config()
+    )
     return build_bound_address_keys(input_series, output_series)
 
 

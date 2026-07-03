@@ -1,8 +1,10 @@
-from pathlib import Path
-
 import pytest
 
-from src.pipeline_config import DistProjectMetadata, load_pipeline_config, validate_pipeline_config
+from src.pipeline_config import (
+    DistProjectMetadata,
+    load_pipeline_config,
+    validate_pipeline_config,
+)
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
 
 
