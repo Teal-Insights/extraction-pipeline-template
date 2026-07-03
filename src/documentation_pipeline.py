@@ -82,7 +82,9 @@ def functional_overview_focus_instructions(config: PipelineConfig) -> str:
     return _format_section_focus_template(
         config.section_rewrite_functional_overview_focus_path,
         api_import_path=config.api_import_path,
-        canonical_api_example_path=str(config.canonical_api_example_path),
+        canonical_api_example_path=config.repo_relative_posix_path(
+            config.canonical_api_example_path
+        ),
     )
 
 
@@ -90,7 +92,9 @@ def illustrative_example_focus_instructions(config: PipelineConfig) -> str:
     return _format_section_focus_template(
         config.section_rewrite_illustrative_example_focus_path,
         api_import_path=config.api_import_path,
-        canonical_api_example_path=str(config.canonical_api_example_path),
+        canonical_api_example_path=config.repo_relative_posix_path(
+            config.canonical_api_example_path
+        ),
     )
 
 

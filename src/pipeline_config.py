@@ -63,6 +63,11 @@ class PipelineConfig:
     def api_import_path(self) -> str:
         return f"{self.dist_metadata.package_name}.api"
 
+    def repo_relative_posix_path(self, path: Path) -> str:
+        """Return ``path`` relative to ``repo_root`` with forward slashes."""
+        resolved = path if path.is_absolute() else self.repo_root / path
+        return resolved.relative_to(self.repo_root).as_posix()
+
 
 def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
     """Load workbook-specific settings from the repository ``workbook_config`` module."""

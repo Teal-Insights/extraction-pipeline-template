@@ -190,6 +190,6 @@ def test_section_focus_templates_are_workbook_overridable(
     config = section_focus_config
     assert "Install with" in introduction_focus_instructions(config)
     assert config.api_import_path in functional_overview_focus_instructions(config)
-    assert str(config.canonical_api_example_path) in functional_overview_focus_instructions(
-        config
-    )
+    assert config.repo_relative_posix_path(
+        config.canonical_api_example_path
+    ) in functional_overview_focus_instructions(config)
