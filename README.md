@@ -100,11 +100,27 @@ uv run python -m src.extraction_pipeline
 
 ### Prerequisites
 
-LLM steps (semantic labeling, docstrings, internals refactor, guide rewrites) cache results under `.cache/`. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set:
+LLM steps (semantic labeling, docstrings, internals refactor, guide rewrites) cache results under `.cache/`. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
 
 ```bash
-# .env
+# .env — provider API keys (set the key for whichever model family you use)
 OPENAI_API_KEY=sk-...
+ZAI_API_KEY=...
+DEEPSEEK_API_KEY=...
+
+# Per-stage model selection (name prefix selects the provider: gpt-*, glm-*, deepseek-*)
+SEMANTIC_LABEL_MODEL=gpt-5.5
+DOCSTRING_MODEL=gpt-5.5
+REFACTOR_MODEL=gpt-5.5
+SECTION_REWRITE_MODEL=gpt-5.5
+```
+
+If an uncached LLM step is reached without the required API key, the pipeline fails fast with an `*_API_KEY is required ...` error.
+
+DeepSeek runs with thinking mode disabled by default. To enable it (and pass reasoning effort through, which DeepSeek only honors in thinking mode), set `DEEPSEEK_THINKING` to a truthy value (`1`, `true`, `yes`, or `on`):
+
+```bash
+DEEPSEEK_THINKING=1
 ```
 
 ## Graph exploration

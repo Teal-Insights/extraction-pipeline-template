@@ -15,10 +15,15 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.llm_json import generate_validated_json
+from src.llm_providers import (
+    build_client_if_configured,
+    model_from_env,
+    provider_for_model,
+)
 from src.pipeline_config import PipelineConfig, discover_public_api_symbols
 from src.qmd_python_validation import PublicApiPolicy, validate_qmd_files
 
-SECTION_REWRITE_MODEL = "gpt-5.5"
+SECTION_REWRITE_MODEL_ENV = "SECTION_REWRITE_MODEL"
 SECTION_REWRITE_PROMPT_VERSION = 5
 MAX_SECTION_REWRITE_ATTEMPTS = 3
 CANONICAL_API_USAGE_HEADING = "Canonical API usage"
@@ -362,6 +367,10 @@ Response schema:
 """.strip()
 
 
+def section_rewrite_model() -> str:
+    return model_from_env(SECTION_REWRITE_MODEL_ENV)
+
+
 def rewrite_cache_key(
     *,
     section_id: str,
@@ -372,7 +381,7 @@ def rewrite_cache_key(
     response_schema: dict,
 ) -> str:
     payload = {
-        "model": SECTION_REWRITE_MODEL,
+        "model": section_rewrite_model(),
         "prompt_version": SECTION_REWRITE_PROMPT_VERSION,
         "section_id": section_id,
         "source_section_markdown": source_section_markdown,
@@ -538,8 +547,9 @@ def rewrite_guide_section(
         return SectionRewriteResponse.model_validate_json(cache[cache_key])
 
     if client is None:
+        provider = provider_for_model(section_rewrite_model())
         raise RuntimeError(
-            "OPENAI_API_KEY is required to generate uncached guide rewrites"
+            f"{provider.api_key_env} is required to generate uncached guide rewrites"
         )
 
     api_import_path = config.api_import_path
@@ -553,9 +563,11 @@ def rewrite_guide_section(
         api_signatures=api_signatures,
         response_schema=response_schema,
     )
+    model = section_rewrite_model()
     parsed, content = generate_validated_json(
         client=client,
-        model=SECTION_REWRITE_MODEL,
+        model=model,
+        provider=provider_for_model(model),
         system_prompt=(
             f"You are a technical documentation writer for the "
             f"{config.dist_metadata.library_name} library. "
@@ -804,12 +816,8 @@ def run_documentation_pipeline(config: PipelineConfig) -> None:
 
     configure_great_docs_yml(config)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    section_client = (
-        OpenAI(api_key=api_key, base_url="https://api.openai.com/v1/")
-        if api_key
-        else None
-    )
+    model = section_rewrite_model()
+    section_client, _ = build_client_if_configured(model)
     guide_text = config.guide_path.read_text(encoding="utf-8")
     write_introduction_page(config, section_client, guide_text)
     write_rewritten_guide_pages(config, section_client)

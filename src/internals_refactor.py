@@ -16,11 +16,11 @@ from typing import Literal
 from dotenv import load_dotenv
 from excel_grapher.exporter import ProjectionResult
 from excel_grapher.grapher.graph import DependencyGraph
-from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.formula_clustering import FormulaCluster
 from src.llm_json import generate_validated_json
+from src.llm_providers import build_client, model_from_env, provider_for_model
 from src.pipeline_context import projection_layout as active_projection_layout
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
 from src.refactor_bindings import (
@@ -48,8 +48,19 @@ from src.semantic_naming import (
 
 repo_root = Path(__file__).resolve().parents[1]
 
-REFACTOR_MODEL = "gpt-5.5"
+REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
 REFACTOR_PROMPT_VERSION = 8
+
+
+def refactor_model() -> str:
+    return model_from_env(REFACTOR_MODEL_ENV)
+
+
+def _refactor_provider_key_present() -> bool:
+    provider = provider_for_model(refactor_model())
+    return bool(os.environ.get(provider.api_key_env))
+
+
 REFACTOR_CACHE_PATH = repo_root / ".cache/internals-refactors.json"
 FORMULA_SECTION_MARKER = "# --- Formula cell functions ---"
 RESOLVER_SECTION_MARKER = "# --- Formula resolver ---"
@@ -583,7 +594,7 @@ def refactor_cache_key(
     response_schema: dict[str, object],
 ) -> str:
     payload = {
-        "model": REFACTOR_MODEL,
+        "model": refactor_model(),
         "prompt_version": REFACTOR_PROMPT_VERSION,
         "cluster_id": ctx.cluster_id,
         "canonical_template": ctx.canonical_template,
@@ -1125,7 +1136,7 @@ def singleton_refactor_cache_key(
 ) -> str:
     payload = {
         "kind": "singleton",
-        "model": REFACTOR_MODEL,
+        "model": refactor_model(),
         "prompt_version": REFACTOR_PROMPT_VERSION,
         "address": ctx.address,
         "canonical_template": ctx.canonical_template,
@@ -2323,21 +2334,19 @@ def llm_refactor_singleton(
                 SingletonRefactorResponse.model_validate_json(cached_content)
             )
         except (ValueError, ValidationError):
-            if not os.environ.get("OPENAI_API_KEY"):
+            if not _refactor_provider_key_present():
                 raise
             del cache[cache_key]
             save_refactor_cache(cache)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is required to generate uncached refactor responses"
-        )
-    client = OpenAI(api_key=api_key, base_url="https://api.openai.com/v1/")
+    model = refactor_model()
+    client, provider = build_client(model)
     payload = singleton_prompt_payload(ctx)
     parsed, _ = generate_validated_json(
         client=client,
-        model=REFACTOR_MODEL,
+        model=model,
+        provider=provider,
+        structured=False,
         system_prompt=(
             "You rename and refactor one Excel-generated singleton helper "
             "into a semantic function. Return only JSON matching the schema. "
@@ -2398,21 +2407,19 @@ def llm_refactor_cluster(
         except (ValueError, ValidationError):
             # A cached response that no longer satisfies the gate is stale or
             # broken: drop it and regenerate (which re-prompts on failure).
-            if not os.environ.get("OPENAI_API_KEY"):
+            if not _refactor_provider_key_present():
                 raise
             del cache[cache_key]
             save_refactor_cache(cache)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is required to generate uncached refactor responses"
-        )
-    client = OpenAI(api_key=api_key, base_url="https://api.openai.com/v1/")
+    model = refactor_model()
+    client, provider = build_client(model)
     payload = prompt_payload(ctx)
     parsed, _ = generate_validated_json(
         client=client,
-        model=REFACTOR_MODEL,
+        model=model,
+        provider=provider,
+        structured=False,
         system_prompt=(
             "You refactor parallel Excel-generated Python helpers into one "
             "parameterized function. Return only JSON matching the schema. "

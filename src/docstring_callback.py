@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -15,13 +14,13 @@ from excel_grapher.exporter import (
     SeriesFunctionDoc,
     register_series_docstring_callback,
 )
-from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from src.llm_json import generate_validated_json
+from src.llm_providers import build_client, model_from_env
 from src.pipeline_config import PipelineConfig
 
-DOCSTRING_MODEL = "gpt-5.5"
+DOCSTRING_MODEL_ENV = "DOCSTRING_MODEL"
 DOCSTRING_PROMPT_VERSION = 3
 
 
@@ -138,9 +137,11 @@ def docstring_cache_path(repo_root: Path) -> Path:
     return repo_root / ".cache" / "series-docstrings.json"
 
 
-def docstring_cache_key(ctx, response_schema: dict, guide_text: str) -> str:
+def docstring_cache_key(
+    ctx, response_schema: dict, guide_text: str, model: str
+) -> str:
     payload = {
-        "model": DOCSTRING_MODEL,
+        "model": model,
         "prompt_version": DOCSTRING_PROMPT_VERSION,
         "function_name": ctx.function_name,
         "function_kind": str(ctx.function_kind),
@@ -176,20 +177,17 @@ def configure_docstring_callback(config: PipelineConfig) -> str:
     def openai_series_docstring(ctx) -> SeriesFunctionDoc:
         ResponseModel = build_doc_response_model(ctx)
         schema = ResponseModel.model_json_schema()
+        model = model_from_env(DOCSTRING_MODEL_ENV)
         cache = load_docstring_cache(cache_path)
-        cache_key = docstring_cache_key(ctx, schema, guide_text)
+        cache_key = docstring_cache_key(ctx, schema, guide_text, model)
         if cache_key in cache:
             content = cache[cache_key]
         else:
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if not api_key:
-                raise RuntimeError(
-                    "OPENAI_API_KEY is required to generate uncached docstrings"
-                )
-            client = OpenAI(api_key=api_key, base_url="https://api.openai.com/v1/")
+            client, provider = build_client(model)
             _, content = generate_validated_json(
                 client=client,
-                model=DOCSTRING_MODEL,
+                model=model,
+                provider=provider,
                 system_prompt=(
                     "You write concise, production-quality Python docstring "
                     "prose. Return only valid JSON matching the supplied schema."
