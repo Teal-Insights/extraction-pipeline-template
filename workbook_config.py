@@ -30,6 +30,8 @@ DIST_METADATA = DistProjectMetadata(
     description="Python implementation of the configured Excel workbook.",
     documentation_url="https://example.com/my-model/",
     repository_url=None,
+    # Optional markdown rendered in the generated README only, not in pyproject.toml.
+    # attribution="Created by Example Corp.\n\n![Logo](README_files/logo.png)",
 )
 
 DOCSTRING_CALLBACK_NAME = "series_docs"
