@@ -37,6 +37,7 @@ from src.refactor_order import (
     compute_multi_member_cluster_refactor_order,
     compute_singleton_cluster_refactor_order,
 )
+from src.runtime_symbols import allowed_runtime_symbols
 from src.semantic_naming import (
     SemanticLabelHints,
     cluster_naming_hints,
@@ -69,23 +70,6 @@ AddressDispatch = dict[str, tuple[str, dict[str, BindingKeyValue]]]
 
 REFACTOR_ROW_ORDER: tuple[int, ...] = ()
 """Optional legacy row order hint; prefer ``compute_multi_member_cluster_refactor_order``."""
-
-ALLOWED_RUNTIME_SYMBOLS: tuple[str, ...] = (
-    "XlError",
-    "np",
-    "to_bool",
-    "to_int",
-    "xl_add",
-    "xl_cell",
-    "xl_div",
-    "xl_eval",
-    "xl_ge",
-    "xl_index_ref",
-    "xl_match",
-    "xl_mul",
-    "xl_offset",
-    "xl_sub",
-)
 
 
 @dataclass(frozen=True)
@@ -472,7 +456,7 @@ def build_cluster_refactor_context(
             if resolved_layout is not None and resolved_layout.engine_columns
             else members[0].engine_column
         ),
-        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS,
+        allowed_runtime_symbols=allowed_runtime_symbols(),
         key_vocabulary=resolved_vocabulary,
         expected_member_keys=expected_member_keys,
         naming_hints=cluster_naming_hints(
@@ -540,7 +524,7 @@ def build_singleton_refactor_context(
             frozenset({address}),
             {function_name},
         ),
-        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS,
+        allowed_runtime_symbols=allowed_runtime_symbols(),
         naming_hints=_label_hints_for_address(
             resolved_source_graph, address
         ).to_payload(),
