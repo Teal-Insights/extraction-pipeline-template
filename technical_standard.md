@@ -21,7 +21,7 @@ A good extraction produces a distributable Python library whose **public API is 
 | Criterion | Pass condition |
 |---|---|
 | **Targets declared** | Every published output is a named target (range name or sheet-qualified address) driving target-driven graph extraction. |
-| **Series bindings authored** | `bindings/inputs.bindings.yaml` and `bindings/outputs.bindings.yaml` exist, use `schema_version: 1.2.0`, and declare one logical scalar/series/table per public I/O function. |
+| **Series bindings authored** | `bindings/inputs.bindings.yaml` and `bindings/outputs.bindings.yaml` exist, use `schema_version: 1.5.0`, and declare one logical scalar/series/table per public I/O function. |
 | **Bindings validated against graph** | `validate_series_bindings(...)` reports `ok`; input bindings overlap graph leaves, output bindings overlap target nodes. |
 | **Dynamic refs resolved** | All `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` dependencies are resolved via `DynamicRefConfig.from_constraints(...)` without `DynamicRefError`. |
 | **Every mutable leaf is bound** | Each leaf classified as `input` appears in `inputs.bindings.yaml`; unbound mutable leaves fail the pipeline. |

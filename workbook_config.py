@@ -40,5 +40,27 @@ DOCSTRING_CALLBACK_NAME = "series_docs"
 # Set to None when the workbook does not use a repeating Engine/Outputs projection.
 PROJECTION_LAYOUT: ProjectionColumnLayout | None = None
 
+# Reference example (Tiny DSA — uncomment and adapt for a similar workbook):
+#
+# PROJECTION_LAYOUT = ProjectionColumnLayout(
+#     engine_sheet="Engine",
+#     engine_columns=("C", "D", "E", "F", "G"),
+#     outputs_sheet="Outputs",
+#     outputs_column_to_engine={
+#         "B": "C",
+#         "C": "D",
+#         "D": "E",
+#         "E": "F",
+#         "F": "G",
+#     },
+#     time_period_to_engine_column={
+#         1: "C",
+#         2: "D",
+#         3: "E",
+#         4: "F",
+#         5: "G",
+#     },
+# )
+
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")

@@ -13,14 +13,15 @@ library.
 
 ## What to implement
 
-This template ships a **stub harness** at
-[`differential_test_exported_library.py`](differential_test_exported_library.py).
-Replace it with workbook-specific logic:
+The harness at [`differential_test_exported_library.py`](differential_test_exported_library.py)
+loads paths from `workbook_config.py`, compares Excel against the exported package,
+and writes parity reports. **Scenario definitions are workbook-specific** — implement
+the hooks at the bottom of that module:
 
-1. **Scenario sweep** — representative input combinations (single-axis sweeps plus a few multi-axis combos).
-2. **Cell mappings** — mirror your `bindings/*.bindings.yaml` addresses for Excel writes and output reads.
-3. **Input adaptation** — one `Inputs` dataclass converted to Excel cell dict and Records-shaped `set_*` calls.
-4. **Parity report** — CSV (one row per cell comparison) and TXT summary with pass rate, first divergence, and failure list.
+1. **`build_scenarios()`** — representative input combinations.
+2. **`output_cell_labels()`** and **`output_ranges()`** — mirror output bindings.
+3. **`inputs_for_excel()`** — map each scenario to Excel cell writes.
+4. **`apply_inputs_to_mvp()`** — map each scenario to Records-shaped `set_*` calls.
 
 Commit reference reports under `data/differential/exported_library/` after a passing Windows sweep. The export step copies harness, workbook fixture, and reports into `dist/tests/`.
 
@@ -36,7 +37,7 @@ uv run python tests/differential/differential_test_exported_library.py
 uv run --project dist --group validation python tests/differential_test_exported_library.py --layout exported
 ```
 
-Exit codes: **`0`** all comparisons pass, **`1`** any failure, **`2`** prerequisite missing or harness not implemented.
+Exit codes: **`0`** all comparisons pass, **`1`** any failure, **`2`** prerequisite missing or scenarios not configured.
 
 ## Optional: graph-oracle harness
 

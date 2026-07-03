@@ -1,15 +1,8 @@
-"""Exported-library differential test harness (workbook-specific).
+"""Exported-library differential test harness.
 
-Replace this stub with a scenario sweep that compares your exported package
-against Microsoft Excel via xlwings. The harness should:
-
-1. Load paths and import settings from ``workbook_config.py`` / ``--layout``.
-2. Define input scenarios and map them to Excel cell writes and Records-shaped
-   ``set_*`` calls on the exported public API.
-3. Read output cells from Excel and from ``compute_*`` entrypoints.
-4. Compare at ``atol = 1e-6`` and write ``parity_report.{csv,txt}``.
-
-See ``tests/differential/README.md`` for the oracle pattern and acceptance bar.
+Compare the generated standalone package against Microsoft Excel via xlwings.
+Workbook-specific scenario definitions live in the ``Workbook-specific hooks``
+section at the bottom of this module.
 
 Run from the extraction repo after export::
 
@@ -23,12 +16,66 @@ From the exported ``dist/`` project (Windows + Excel)::
 from __future__ import annotations
 
 import argparse
+import csv
+import importlib
+import logging
+import math
 import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from types import ModuleType
+from typing import Any, Literal, Mapping, cast
 
+logger = logging.getLogger(__name__)
 
 LayoutName = Literal["repo", "exported"]
+ATOL = 1e-6
+
+
+@dataclass(frozen=True)
+class DifferentialConfig:
+    """Runtime paths and import settings for one differential run."""
+
+    workbook_path: Path
+    package_dir: Path
+    package_name: str
+    import_root: Path
+    report_dir: Path
+    library_name: str
+    atol: float = ATOL
+
+
+@dataclass(frozen=True)
+class Scenario:
+    """One identified input configuration plus a stable scenario id."""
+
+    id: str
+    inputs: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class Comparison:
+    scenario_id: str
+    cell_address: str
+    cell_label: str
+    excel_value: Any
+    mvp_value: Any
+    abs_diff: float | None
+    rel_diff: float | None
+    passed: bool
+
+
+CSV_COLUMNS: tuple[str, ...] = (
+    "scenario_id",
+    "cell_address",
+    "cell_label",
+    "excel_value",
+    "mvp_value",
+    "abs_diff",
+    "rel_diff",
+    "passed",
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -42,6 +89,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path preset: extraction repo (default) or exported dist/tests copy.",
     )
     parser.add_argument(
+        "--workbook-path",
+        type=Path,
+        default=None,
+        help="Override workbook path (defaults depend on --layout).",
+    )
+    parser.add_argument(
+        "--package-name",
+        default=None,
+        help="Override import module for the MVP oracle (defaults depend on --layout).",
+    )
+    parser.add_argument(
+        "--import-root",
+        type=Path,
+        default=None,
+        help="Directory added to sys.path before importing the MVP oracle.",
+    )
+    parser.add_argument(
         "--report-dir",
         type=Path,
         default=None,
@@ -50,17 +114,442 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    print(
-        "Differential harness not implemented for this workbook yet.\n"
-        "Author scenarios and cell mappings in "
-        "tests/differential/differential_test_exported_library.py.\n"
-        f"Layout: {args.layout}"
+def _repo_root_from_script(script_path: Path, layout: LayoutName) -> Path:
+    if layout == "exported":
+        return script_path.parent.parent
+    return script_path.parents[2]
+
+
+def resolve_config(
+    *,
+    script_path: Path,
+    layout: LayoutName,
+    workbook_path: Path | None = None,
+    package_name: str | None = None,
+    import_root: Path | None = None,
+    report_dir: Path | None = None,
+) -> DifferentialConfig:
+    """Resolve paths from ``workbook_config.py`` and the selected layout."""
+    script_path = script_path.resolve()
+    repo_root = _repo_root_from_script(script_path, layout)
+
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from src.pipeline_config import load_pipeline_config
+
+    pipeline = load_pipeline_config(repo_root=repo_root)
+    package_dir = pipeline.package_root
+    package_slug = pipeline.dist_metadata.package_name
+    library_name = pipeline.dist_metadata.library_name
+
+    if layout == "exported":
+        tests_root = script_path.parent
+        dist_root = script_path.parent.parent
+        defaults = DifferentialConfig(
+            workbook_path=tests_root / "fixtures" / pipeline.workbook_path.name,
+            package_dir=dist_root / package_slug,
+            package_name=f"{package_slug}.api",
+            import_root=dist_root,
+            report_dir=tests_root / "results" / "local",
+            library_name=library_name,
+        )
+    else:
+        defaults = DifferentialConfig(
+            workbook_path=pipeline.workbook_path,
+            package_dir=package_dir,
+            package_name=f"dist.{package_slug}.api",
+            import_root=repo_root,
+            report_dir=repo_root / pipeline.differential_report_dir_rel,
+            library_name=library_name,
+        )
+
+    return DifferentialConfig(
+        workbook_path=(workbook_path or defaults.workbook_path).resolve(),
+        package_dir=defaults.package_dir.resolve(),
+        package_name=package_name or defaults.package_name,
+        import_root=(import_root or defaults.import_root).resolve(),
+        report_dir=(report_dir or defaults.report_dir).resolve(),
+        library_name=library_name,
+        atol=ATOL,
     )
-    if args.report_dir is not None:
-        print(f"Report dir (unused): {args.report_dir}")
-    return 2
+
+
+def config_from_args(script_path: Path, args: argparse.Namespace) -> DifferentialConfig:
+    return resolve_config(
+        script_path=script_path,
+        layout=args.layout,
+        workbook_path=args.workbook_path,
+        package_name=args.package_name,
+        import_root=args.import_root,
+        report_dir=args.report_dir,
+    )
+
+
+def compare_cell(
+    scenario_id: str,
+    cell_address: str,
+    cell_label: str,
+    excel: Any,
+    mvp: Any,
+    *,
+    atol: float,
+) -> Comparison:
+    if excel is None and mvp is None:
+        return Comparison(
+            scenario_id, cell_address, cell_label, None, None, 0.0, 0.0, True
+        )
+    if excel is None or mvp is None:
+        return Comparison(
+            scenario_id, cell_address, cell_label, excel, mvp, None, None, False
+        )
+    try:
+        excel_f = float(excel)  # type: ignore[arg-type]
+        mvp_f = float(mvp)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return Comparison(
+            scenario_id, cell_address, cell_label, excel, mvp, None, None, excel == mvp
+        )
+    if not (math.isfinite(excel_f) and math.isfinite(mvp_f)):
+        passed = excel_f == mvp_f or (math.isnan(excel_f) and math.isnan(mvp_f))
+        return Comparison(
+            scenario_id, cell_address, cell_label, excel_f, mvp_f, None, None, passed
+        )
+    abs_diff = abs(excel_f - mvp_f)
+    rel_diff = abs_diff / abs(excel_f) if excel_f != 0 else math.inf
+    return Comparison(
+        scenario_id,
+        cell_address,
+        cell_label,
+        excel_f,
+        mvp_f,
+        abs_diff,
+        rel_diff,
+        abs_diff <= atol,
+    )
+
+
+def compare_scenario(
+    scenario: Scenario,
+    excel_outputs: dict[str, Any],
+    mvp_outputs: dict[str, Any],
+    cell_labels: tuple[tuple[str, str], ...],
+    *,
+    atol: float,
+) -> list[Comparison]:
+    return [
+        compare_cell(
+            scenario.id,
+            cell_address,
+            cell_label,
+            excel_outputs.get(cell_address),
+            mvp_outputs.get(cell_address),
+            atol=atol,
+        )
+        for cell_label, cell_address in cell_labels
+    ]
+
+
+def crash_comparisons(
+    scenario: Scenario,
+    cell_labels: tuple[tuple[str, str], ...],
+    exc: BaseException,
+) -> list[Comparison]:
+    err_repr = f"<exception: {type(exc).__name__}: {exc}>"
+    return [
+        Comparison(
+            scenario_id=scenario.id,
+            cell_address=cell_address,
+            cell_label=cell_label,
+            excel_value=err_repr,
+            mvp_value=err_repr,
+            abs_diff=None,
+            rel_diff=None,
+            passed=False,
+        )
+        for cell_label, cell_address in cell_labels
+    ]
+
+
+def write_csv_report(comparisons: list[Comparison], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(CSV_COLUMNS)
+        for comparison in comparisons:
+            writer.writerow(
+                [
+                    comparison.scenario_id,
+                    comparison.cell_address,
+                    comparison.cell_label,
+                    comparison.excel_value,
+                    comparison.mvp_value,
+                    comparison.abs_diff,
+                    comparison.rel_diff,
+                    comparison.passed,
+                ]
+            )
+
+
+def write_txt_summary(
+    comparisons: list[Comparison],
+    path: Path,
+    *,
+    config: DifferentialConfig,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    total = len(comparisons)
+    failures = [comparison for comparison in comparisons if not comparison.passed]
+    passed = total - len(failures)
+    pass_rate = (100.0 * passed / total) if total else 0.0
+    result = "PASS" if not failures else "FAIL"
+    first = failures[0] if failures else None
+
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(
+            f"Parity report: exported {config.library_name} standalone library vs Excel\n"
+        )
+        handle.write(
+            f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n"
+        )
+        handle.write(f"Workbook:  {config.workbook_path}\n")
+        handle.write(
+            f"Package:   {config.package_dir} (imported as {config.package_name})\n"
+        )
+        handle.write(f"Tolerance: atol = {config.atol}\n\n")
+        handle.write(f"Total comparisons: {total}\n")
+        handle.write(f"Passed:            {passed}\n")
+        handle.write(f"Failed:            {len(failures)}\n")
+        handle.write(f"Pass rate:         {pass_rate:.2f}%\n")
+        handle.write("Acceptance bar:    100.00%\n")
+        handle.write(f"Result:            {result}\n")
+        if first is not None:
+            handle.write("\nFirst divergence:\n")
+            handle.write(f"  scenario:  {first.scenario_id}\n")
+            handle.write(f"  cell:      {first.cell_address}  ({first.cell_label})\n")
+            handle.write(f"  excel:     {first.excel_value!r}\n")
+            handle.write(f"  mvp:       {first.mvp_value!r}\n")
+            handle.write(f"  abs_diff:  {first.abs_diff!r}\n")
+            handle.write(f"  rel_diff:  {first.rel_diff!r}\n")
+
+
+def load_exported_library(import_root: Path, package_name: str) -> ModuleType:
+    root_str = str(import_root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+    return importlib.import_module(package_name)
+
+
+def run_excel_oracle(
+    workbook_path: Path,
+    scenario: Scenario,
+    output_addresses: tuple[str, ...],
+) -> dict[str, Any]:
+    import xlwings as xw
+
+    logger.info("Excel oracle: %s", scenario.id)
+    app = xw.App(visible=False, add_book=False)
+    try:
+        workbook = app.books.open(str(workbook_path))
+        try:
+            app.calculation = "manual"
+            for address, value in inputs_for_excel(scenario).items():
+                sheet, cell = address.split("!", 1)
+                workbook.sheets[sheet].range(cell).value = value
+            workbook.app.calculate()
+
+            def read(address: str) -> Any:
+                sheet, cell = address.split("!", 1)
+                return workbook.sheets[sheet].range(cell).value
+
+            return {address: read(address) for address in output_addresses}
+        finally:
+            workbook.close()
+    finally:
+        app.quit()
+
+
+def _records_to_cells(
+    records: list[dict[str, Any]],
+    cells: tuple[str, ...],
+) -> dict[str, Any]:
+    if len(records) != len(cells):
+        raise ValueError(f"expected {len(cells)} records, got {len(records)}")
+    raw_periods = [record.get("TIME_PERIOD") for record in records]
+    if all(period is not None for period in raw_periods):
+        periods = cast(list[Any], raw_periods)
+        if any(a >= b for a, b in zip(periods, periods[1:], strict=False)):
+            raise ValueError(
+                f"records' TIME_PERIOD values are not strictly increasing: {periods!r}"
+            )
+    by_cell: dict[str, Any] = {}
+    for index, (record, cell) in enumerate(zip(records, cells, strict=True)):
+        if "OBS_VALUE" not in record:
+            raise ValueError(f"record {index}: missing OBS_VALUE: {record!r}")
+        by_cell[cell] = record["OBS_VALUE"]
+    return by_cell
+
+
+def run_mvp_oracle(api: ModuleType, scenario: Scenario) -> dict[str, Any]:
+    logger.info("MVP oracle:   %s", scenario.id)
+    ctx = api.make_context()
+    apply_inputs_to_mvp(api, ctx, scenario)
+    outputs: dict[str, Any] = {}
+    for entrypoint, cells in output_ranges():
+        compute_fn = getattr(api, f"compute_{entrypoint}")
+        records = compute_fn(ctx=ctx)
+        outputs.update(_records_to_cells(records, cells))
+    return outputs
+
+
+def _verify_paths(config: DifferentialConfig) -> None:
+    if not config.workbook_path.is_file():
+        raise FileNotFoundError(
+            f"Workbook not found: {config.workbook_path}. "
+            "Populate data/ and workbook_config.py before running parity tests."
+        )
+    if (
+        not (config.package_dir / "__init__.py").is_file()
+        or not (config.package_dir / "api.py").is_file()
+    ):
+        raise FileNotFoundError(
+            f"Exported package incomplete at {config.package_dir} "
+            "(expected __init__.py and api.py). "
+            "Run 'uv run python -m src.extraction_pipeline' to regenerate."
+        )
+
+
+def _check_staleness(config: DifferentialConfig) -> None:
+    data_path = config.package_dir / "data.py"
+    if not data_path.is_file():
+        return
+    workbook_mtime = config.workbook_path.stat().st_mtime
+    data_mtime = data_path.stat().st_mtime
+    if workbook_mtime > data_mtime:
+        logger.warning(
+            "Workbook is newer than exported data.py; regenerate dist/ if constants changed."
+        )
+
+
+def _validate_workbook_hooks() -> None:
+    scenarios = build_scenarios()
+    if not scenarios:
+        raise RuntimeError(
+            "No differential scenarios configured. Author build_scenarios(), "
+            "output_cell_labels(), output_ranges(), inputs_for_excel(), and "
+            "apply_inputs_to_mvp() in "
+            "tests/differential/differential_test_exported_library.py."
+        )
+    if not output_cell_labels():
+        raise RuntimeError(
+            "output_cell_labels() returned no cells. Mirror your output bindings "
+            "as (label, address) pairs."
+        )
+    if not output_ranges():
+        raise RuntimeError(
+            "output_ranges() returned no compute groups. Map each compute_* "
+            "entrypoint to its output cell addresses."
+        )
+
+
+def run_differential_test(config: DifferentialConfig) -> int:
+    _validate_workbook_hooks()
+    _verify_paths(config)
+    _check_staleness(config)
+
+    api = load_exported_library(config.import_root, config.package_name)
+    scenarios = build_scenarios()
+    cell_labels = output_cell_labels()
+    output_addresses = tuple(address for _, address in cell_labels)
+
+    comparisons: list[Comparison] = []
+    for scenario in scenarios:
+        try:
+            excel_outputs = run_excel_oracle(
+                config.workbook_path,
+                scenario,
+                output_addresses,
+            )
+            mvp_outputs = run_mvp_oracle(api, scenario)
+        except Exception as exc:
+            logger.exception("Scenario %s crashed; recording as failure.", scenario.id)
+            comparisons.extend(crash_comparisons(scenario, cell_labels, exc))
+            continue
+        comparisons.extend(
+            compare_scenario(
+                scenario,
+                excel_outputs,
+                mvp_outputs,
+                cell_labels,
+                atol=config.atol,
+            )
+        )
+
+    config.report_dir.mkdir(parents=True, exist_ok=True)
+    write_csv_report(comparisons, config.report_dir / "parity_report.csv")
+    write_txt_summary(
+        comparisons,
+        config.report_dir / "parity_report.txt",
+        config=config,
+    )
+
+    failed = sum(1 for comparison in comparisons if not comparison.passed)
+    logger.info("Done. Failures: %d / %d", failed, len(comparisons))
+    return 0 if failed == 0 else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    try:
+        args = parse_args(argv)
+        config = config_from_args(Path(__file__).resolve(), args)
+        return run_differential_test(config)
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        return 2
+    except FileNotFoundError as exc:
+        logger.error("%s", exc)
+        return 2
+    except Exception:
+        logger.exception("Differential test failed with an unhandled exception.")
+        return 2
+
+
+# --------------------------------------------------------------------------
+# Workbook-specific hooks — replace these when configuring a new extraction.
+# --------------------------------------------------------------------------
+
+
+def build_scenarios() -> tuple[Scenario, ...]:
+    """Return the scenario sweep for this workbook."""
+    return ()
+
+
+def output_cell_labels() -> tuple[tuple[str, str], ...]:
+    """Return ``((cell_label, cell_address), ...)`` for every compared output cell."""
+    return ()
+
+
+def output_ranges() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Return ``((compute_entrypoint, (cell, ...)), ...)`` for MVP oracle reads."""
+    return ()
+
+
+def inputs_for_excel(scenario: Scenario) -> dict[str, Any]:
+    """Map one scenario to Excel cell writes for the golden-master oracle."""
+    raise NotImplementedError(
+        "Author inputs_for_excel() with cell mappings from bindings/*.bindings.yaml."
+    )
+
+
+def apply_inputs_to_mvp(api: ModuleType, ctx: Any, scenario: Scenario) -> None:
+    """Apply one scenario via the exported package's public set_* functions."""
+    raise NotImplementedError(
+        "Author apply_inputs_to_mvp() to drive the Records-shaped public API."
+    )
 
 
 if __name__ == "__main__":

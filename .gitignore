@@ -8,3 +8,6 @@ dist/
 docs/dependency-graph/
 docs/human-hypothesis-graph/
 .env
+
+# Generated synthetic smoke-test workbook (recreated by tests on demand)
+tests/fixtures/synthetic/workbook.xlsx

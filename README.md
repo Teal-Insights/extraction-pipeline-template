@@ -2,7 +2,7 @@
 
 Cookie-cutter template for turning an Excel financial model into a semantic, distributable Python library using [excel-grapher](https://github.com/Teal-Insights/excel-grapher). The pipeline combines target-driven graph extraction, explicit dynamic-reference constraints, series bindings, LLM-assisted naming and documentation, and Excel-backed parity tests.
 
-See [technical-standard.md](technical-standard.md) for the acceptance bar and [lessons-learned.md](lessons-learned.md) for design rationale.
+See [technical_standard.md](technical_standard.md) for the acceptance bar and [lessons-learned.md](lessons-learned.md) for design rationale.
 
 ## What you provide
 
@@ -16,13 +16,14 @@ Before running the pipeline, populate this repository with workbook-specific inp
 | Constraints | `workbook_config.py` → `CONSTRAINTS` | Dynamic-ref resolution and leaf input/constant classification |
 | Series bindings | `bindings/inputs.bindings.yaml`, `bindings/outputs.bindings.yaml` | Records-shaped public API surface |
 | Package metadata | `workbook_config.py` → `DIST_METADATA` | Generated `dist/` project name, docs URLs, README |
+| Projection layout | `workbook_config.py` → `PROJECTION_LAYOUT` | Optional Engine/Outputs column mapping for internals refactor (see below) |
 | Parity evidence | `data/differential/exported_library/` | Reference reports after a passing Excel sweep (optional until export) |
 
 Use [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.txt) with a coding agent to draft bindings from the guide, workbook, and extracted graph.
 
 ## Pipeline stages
 
-The end-to-end workflow follows the stage gates in `good-extraction-standard.md`:
+The end-to-end workflow follows the stage gates in [technical_standard.md](technical_standard.md):
 
 ```mermaid
 flowchart LR
@@ -37,7 +38,7 @@ flowchart LR
 ### 1. Configure
 
 1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `CONSTRAINTS`, and `DIST_METADATA`.
-2. Author `bindings/*.bindings.yaml` (schema version `1.2.0`, one logical series per public API function).
+2. Author `bindings/*.bindings.yaml` (schema version `1.5.0`, one logical series per public API function).
 3. Constrain cells that control `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` so dynamic refs resolve completely.
 4. Classify every leaf as `input` or `constant`; every mutable input leaf must appear in `inputs.bindings.yaml`.
 
@@ -46,6 +47,12 @@ Validation checks:
 - `validate_series_bindings(...)` reports `ok`
 - `derive_input_series` / `derive_output_series` resolve every binding
 - No unbound mutable input leaves
+
+#### Projection column layout (optional)
+
+Set `PROJECTION_LAYOUT` in [workbook_config.py](workbook_config.py) when the workbook has parallel time-series columns on an engine sheet and a related outputs sheet. The internals refactor uses this mapping to name helpers by economic time period instead of raw column letters. Leave it `None` when formulas do not follow that pattern.
+
+See the commented reference example at the bottom of `workbook_config.py` (Tiny DSA Engine columns C–G mapped to Outputs columns B–F).
 
 ### 2. Extract
 
@@ -193,5 +200,6 @@ Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (requires `OPEN
 | `data/` | Workbook, guide, differential reports |
 | `dist/` | Generated distributable package (gitignored) |
 | `templates/` | Binding prompt and canonical API usage reference |
-| `artifacts/` | Extraction standard and lessons learned |
+| `technical_standard.md` | Acceptance bar and stage gates |
+| `lessons-learned.md` | Design rationale from the Tiny DSA rehearsal |
 | `archive/` | Archived source notes (not maintained workflow docs) |
