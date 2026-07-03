@@ -964,7 +964,7 @@ def xl_range_rows(ctx: EvalContext, address: str) -> CellValue:
         return rng.rows_raw()
     return rng
 
-# Stubs for symbols referenced by ALLOWED_RUNTIME_SYMBOLS but absent from the
+# Stubs for xl_* helpers used by parity-gate test internals but absent from the
 # tiny-dsa runtime snapshot used as the parity-gate test fixture.
 import numpy as np
 

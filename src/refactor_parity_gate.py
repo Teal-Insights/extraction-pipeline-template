@@ -34,8 +34,8 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, get_args, get
 
 from excel_grapher.core.cell_types import Between, RealBetween
 
-from src.internals_refactor import ALLOWED_RUNTIME_SYMBOLS
 from src.pipeline_context import require_pipeline_config
+from src.runtime_symbols import allowed_runtime_symbols
 
 if TYPE_CHECKING:
     from src.internals_refactor import (
@@ -115,7 +115,7 @@ def exec_internals_module(source: str) -> dict[str, Any]:
     """Execute an ``internals.py`` source string with runtime symbols injected."""
     runtime = _runtime()
     namespace: dict[str, Any] = {
-        name: getattr(runtime, name) for name in ALLOWED_RUNTIME_SYMBOLS
+        name: getattr(runtime, name) for name in allowed_runtime_symbols()
     }
     namespace["__name__"] = "_exported_internals_parity"
     compiled = compile(_strip_runtime_import(source), "<internals-parity>", "exec")

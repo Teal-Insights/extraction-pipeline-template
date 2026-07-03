@@ -17,7 +17,6 @@ import pytest
 from excel_grapher.core.cell_types import Between, RealBetween
 
 from src.internals_refactor import (
-    ALLOWED_RUNTIME_SYMBOLS,
     ClusterRefactorResponse,
     HelperParameter,
     MemberKeys,
@@ -208,18 +207,21 @@ def _parity_gate_exported_package(tmp_path_factory: pytest.TempPathFactory) -> N
     )
 
     from src.refactor_parity_gate import _dist_data, _runtime
+    from src.runtime_symbols import allowed_runtime_symbols
 
     config = replace(load_pipeline_config(), dist_root=root)
     activate_pipeline_config(config)
     _runtime.cache_clear()
     _dist_data.cache_clear()
+    allowed_runtime_symbols.cache_clear()
 
 
 def test_allowed_runtime_symbols_exist_on_fixture_runtime() -> None:
     from src.refactor_parity_gate import _runtime
+    from src.runtime_symbols import allowed_runtime_symbols
 
     runtime = _runtime()
-    for symbol in ALLOWED_RUNTIME_SYMBOLS:
+    for symbol in allowed_runtime_symbols():
         assert hasattr(runtime, symbol), symbol
 
 
@@ -306,6 +308,8 @@ CORRECT_XLERROR_SINGLETON_SOURCE = f'''def initial_value(ctx):
 
 
 def _singleton_context() -> SingletonRefactorContext:
+    from src.runtime_symbols import allowed_runtime_symbols
+
     return SingletonRefactorContext(
         address="Inputs!B6",
         function_name="cell_inputs_b6",
@@ -315,7 +319,7 @@ def _singleton_context() -> SingletonRefactorContext:
         dependency_addresses=(),
         external_dependencies=(),
         call_sites=(),
-        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS,
+        allowed_runtime_symbols=allowed_runtime_symbols(),
         naming_hints={},
     )
 
