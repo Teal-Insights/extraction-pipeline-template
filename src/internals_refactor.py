@@ -4,6 +4,7 @@ import ast
 import builtins
 import hashlib
 import json
+import logging
 import os
 import re
 import textwrap
@@ -49,8 +50,10 @@ from src.semantic_naming import (
 
 repo_root = Path(__file__).resolve().parents[1]
 
+logger = logging.getLogger(__name__)
+
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 8
+REFACTOR_PROMPT_VERSION = 14
 
 
 def refactor_model() -> str:
@@ -955,6 +958,79 @@ def validate_no_cell_function_references(function_def: ast.FunctionDef) -> None:
         )
 
 
+def _suggested_param_name_by_concept(
+    key_vocabulary: tuple[KeyConceptSpec, ...],
+) -> dict[str, str]:
+    return {item.concept: item.suggested_param_name for item in key_vocabulary}
+
+
+def validate_parameter_names_match_vocabulary(
+    ctx: ClusterRefactorContext,
+    response: ClusterRefactorResponse,
+) -> None:
+    suggested = _suggested_param_name_by_concept(ctx.key_vocabulary)
+    mismatches = sorted(
+        {
+            f"{parameter.concept!r}: expected {suggested[parameter.concept]!r}, "
+            f"got {parameter.name!r}"
+            for parameter in response.parameters
+            if parameter.concept in suggested
+            and parameter.name != suggested[parameter.concept]
+        }
+    )
+    if mismatches:
+        raise ValueError(
+            "parameter names must match suggested_param_name from key_vocabulary: "
+            + "; ".join(mismatches)
+        )
+
+
+_FIRST_YEAR_BRANCH_PATTERN = re.compile(
+    r"(first_year_column|time_period\s*==\s*1|time_period\s*<=\s*1)"
+)
+
+
+def validate_uses_first_year_branch_flag(
+    response: ClusterRefactorResponse,
+) -> None:
+    references = _FIRST_YEAR_BRANCH_PATTERN.search(response.helper_source) is not None
+    if response.uses_first_year_branch and not references:
+        raise ValueError(
+            "uses_first_year_branch is True but helper_source does not reference "
+            "first-year branching (first_year_column or time_period == 1)"
+        )
+
+
+def validate_allowed_global_references(
+    function_def: ast.FunctionDef,
+    *,
+    allowed_names: set[str],
+) -> None:
+    parameter_names = {arg.arg for arg in function_def.args.args}
+    local_names = _local_binding_names(function_def) | parameter_names
+    builtin_names = set(dir(builtins))
+    disallowed: set[str] = set()
+    for node in ast.walk(function_def):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if (
+                node.id in local_names
+                or node.id in builtin_names
+                or node.id in allowed_names
+            ):
+                continue
+            disallowed.add(node.id)
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            root = node.value.id
+            if root in local_names or root in allowed_names or root in builtin_names:
+                continue
+            disallowed.add(root)
+    if disallowed:
+        raise ValueError(
+            "helper_source references disallowed global names "
+            f"{sorted(disallowed)}; allowed: {sorted(allowed_names)}"
+        )
+
+
 def validate_cluster_refactor_response(
     ctx: ClusterRefactorContext,
     response: ClusterRefactorResponse,
@@ -1076,6 +1152,8 @@ def validate_cluster_refactor_response(
 
     validate_semantic_local_names(helper_def)
     validate_no_cell_function_references(helper_def)
+    validate_parameter_names_match_vocabulary(ctx, response)
+    validate_uses_first_year_branch_flag(response)
 
     arg_names = [arg.arg for arg in helper_def.args.args]
     expected_args = ["ctx", *[parameter.name for parameter in response.parameters]]
@@ -1111,6 +1189,8 @@ def validate_cluster_refactor_response(
             f"helper_source calls disallowed function {name!r}; "
             f"allowed: {sorted(allowed_names)}"
         )
+
+    validate_allowed_global_references(helper_def, allowed_names=allowed_names)
 
 
 def singleton_refactor_cache_key(
@@ -1243,6 +1323,8 @@ def validate_singleton_refactor_response(
             f"symbol_source calls disallowed function {name!r}; "
             f"allowed: {sorted(allowed_names)}"
         )
+
+    validate_allowed_global_references(symbol_def, allowed_names=allowed_names)
 
 
 def _replace_function_definition(source: str, old_name: str, new_source: str) -> str:
@@ -2314,18 +2396,35 @@ def llm_refactor_singleton(
     cached_content = cache.get(cache_key)
     if cached_content is not None:
         try:
+            logger.info(
+                "singleton refactor cache hit address=%s key=%s",
+                ctx.address,
+                cache_key[:12],
+            )
             return _prepare_and_validate_singleton(
                 SingletonRefactorResponse.model_validate_json(cached_content)
             )
-        except (ValueError, ValidationError):
+        except (ValueError, ValidationError) as error:
             if not _refactor_provider_key_present():
                 raise
+            logger.warning(
+                "singleton refactor cache stale address=%s key=%s: %s",
+                ctx.address,
+                cache_key[:12],
+                error,
+            )
             del cache[cache_key]
             save_refactor_cache(cache)
 
     model = refactor_model()
     client, provider = build_client(model)
     payload = singleton_prompt_payload(ctx)
+    logger.info(
+        "singleton refactor LLM request address=%s model=%s prompt_version=%s",
+        ctx.address,
+        model,
+        REFACTOR_PROMPT_VERSION,
+    )
     parsed, _ = generate_validated_json(
         client=client,
         model=model,
@@ -2335,7 +2434,9 @@ def llm_refactor_singleton(
             "You rename and refactor one Excel-generated singleton helper "
             "into a semantic function. Return only JSON matching the schema. "
             "Preserve semantics exactly; do not algebraically simplify. "
-            "Write Google-style docstrings with Args and Returns sections."
+            "Write Google-style docstrings with Args and Returns sections. "
+            "Use only runtime symbols listed in constraints.allowed_runtime_symbols. "
+            "Choose domain-meaningful snake_case names for the symbol and locals."
         ),
         user_prompt=_prompt_for_singleton_refactor(payload, schema),
         response_model=SingletonRefactorResponse,
@@ -2385,20 +2486,38 @@ def llm_refactor_cluster(
     cached_content = cache.get(cache_key)
     if cached_content is not None:
         try:
+            logger.info(
+                "cluster refactor cache hit cluster_id=%s key=%s",
+                ctx.cluster_id,
+                cache_key[:12],
+            )
             return _prepare_and_validate_cluster(
                 ClusterRefactorResponse.model_validate_json(cached_content)
             )
-        except (ValueError, ValidationError):
+        except (ValueError, ValidationError) as error:
             # A cached response that no longer satisfies the gate is stale or
             # broken: drop it and regenerate (which re-prompts on failure).
             if not _refactor_provider_key_present():
                 raise
+            logger.warning(
+                "cluster refactor cache stale cluster_id=%s key=%s: %s",
+                ctx.cluster_id,
+                cache_key[:12],
+                error,
+            )
             del cache[cache_key]
             save_refactor_cache(cache)
 
     model = refactor_model()
     client, provider = build_client(model)
     payload = prompt_payload(ctx)
+    logger.info(
+        "cluster refactor LLM request cluster_id=%s members=%d model=%s prompt_version=%s",
+        ctx.cluster_id,
+        len(ctx.members),
+        model,
+        REFACTOR_PROMPT_VERSION,
+    )
     parsed, _ = generate_validated_json(
         client=client,
         model=model,
@@ -2408,7 +2527,10 @@ def llm_refactor_cluster(
             "You refactor parallel Excel-generated Python helpers into one "
             "parameterized function. Return only JSON matching the schema. "
             "Preserve semantics exactly; do not algebraically simplify. "
-            "Write Google-style docstrings with Args and Returns sections."
+            "Write Google-style docstrings with Args and Returns sections. "
+            "Use only runtime symbols listed in constraints.allowed_runtime_symbols. "
+            "Parameter names must match suggested_param_name from key_vocabulary. "
+            "Emit one helper function; do not nest helpers or import modules."
         ),
         user_prompt=_prompt_for_refactor(payload, schema),
         response_model=ClusterRefactorResponse,
@@ -2424,17 +2546,22 @@ def _prompt_for_singleton_refactor(
 ) -> str:
     payload_json = json.dumps(payload, indent=2, default=str)
     schema_json = json.dumps(response_schema, indent=2)
+    constraints = payload.get("constraints", {})
+    allowed_symbols = constraints.get("allowed_runtime_symbols", [])
+    allowed_symbols_json = json.dumps(list(allowed_symbols), indent=2)
     return f"""
 Rename and refactor one Excel-generated singleton helper into a semantic function.
 
 Rules:
-- Keep signature (ctx) exactly; do not add a col parameter.
+- Keep signature (ctx) exactly; do not add parameters.
 - Do not rename dependency functions.
 - Choose symbol_name as a clear snake_case semantic identifier informed by naming_hints.
 - Rename local temporaries to domain-meaningful snake_case informed by naming_hints.
 - Do not use excel-shaped locals such as _t1, t2, b21, col10, choose1, func_map, or input17.
 - Do not reference cell_* helpers; call semantic helpers already present in internals.py.
-- Emit one complete symbol_source function with signature (ctx).
+- Call only these runtime symbols (plus semantic helpers from external_dependencies):
+{allowed_symbols_json}
+- Emit one complete symbol_source function with signature (ctx); no nested helpers or imports.
 - symbol_source must include a Google-style docstring with Args and Returns sections.
 - symbol_docstring must match the docstring embedded in symbol_source exactly.
 - Include a Note section listing the workbook address and Excel formula.
@@ -2473,25 +2600,33 @@ def _prompt_for_refactor(
 ) -> str:
     payload_json = json.dumps(payload, indent=2, default=str)
     schema_json = json.dumps(response_schema, indent=2)
+    constraints = payload.get("constraints", {})
+    allowed_symbols = constraints.get("allowed_runtime_symbols", [])
+    allowed_symbols_json = json.dumps(list(allowed_symbols), indent=2)
     return f"""
 Refactor one parallel formula cluster into a single parameterized helper.
 
 Rules:
 - Declare parameters[] using binding key concepts from key_vocabulary; do not use column letters.
+- Use suggested_param_name from key_vocabulary as each parameter's Python name.
 - For each cluster member, emit member_keys[] with literal key values from expected_keys.
+- member_keys[].keys must use binding concept names (e.g. TIME_PERIOD), not parameter names.
 - Series-constant binding keys (scope: series) are not parameters; bake them into the helper.
-- Emit helper_source with signature (ctx, <parameters>) using semantic parameter names.
+- Emit helper_source with signature (ctx, <parameters>) using the suggested parameter names.
+- Set uses_first_year_branch true when the helper branches on first-year {{PRIOR_DEBT}} logic.
 - Choose helper_name as a clear snake_case semantic identifier informed by naming_hints.
-- Use time_period == 1 branch for first-year {{PRIOR_DEBT}} logic when needed.
+- Use time_period == 1 or engine_column == first_year_column for first-year branching when needed.
 - Map time_period to workbook columns internally when reading xl_cell addresses.
 - Keep xl_eval only for leaf inputs read with xl_cell; never for refactored cells.
 - Do not rename dependency functions.
 - Rename local temporaries to domain-meaningful snake_case informed by naming_hints.
 - Do not use excel-shaped locals such as _t1, t2, b21, col10, choose1, func_map, or input17.
 - Do not reference cell_* helpers anywhere in the body.
+- Call only these runtime symbols (plus semantic helpers from external_dependencies):
+{allowed_symbols_json}
 - For every entry in semantic_dependencies, replace reads with call_form using pass-through
   parameter names, e.g. shock_active(ctx, time_period=time_period).
-- Emit one complete helper_source function.
+- Emit one complete helper_source function; no nested helpers or imports.
 - helper_source must include a Google-style docstring with Args and Returns sections.
 - helper_docstring must match the docstring embedded in helper_source exactly.
 - Include a Note section listing covered workbook addresses and the Excel formula.
@@ -2499,11 +2634,11 @@ Rules:
 
 Example docstring shape:
 \"\"\"
-Return 1.0 when the shock is active for the given projection column.
+Return 1.0 when the shock is active for the given projection period.
 
 Args:
     ctx: Workbook evaluation context.
-    col: Engine column letter (C through G).
+    time_period: Projection period (1 for the first year).
 
 Returns:
     1.0 if the projection year is at or after the shock year, else 0.0.
