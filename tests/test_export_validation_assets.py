@@ -34,6 +34,15 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
         projection_layout=None,
         canonical_api_example_path=repo_root / "templates" / "canonical-api-usage.md",
         binding_authoring_prompt_path=repo_root / "templates" / "binding-authoring-prompt.txt",
+        section_rewrite_introduction_focus_path=(
+            repo_root / "templates" / "section-rewrite-introduction-focus.txt"
+        ),
+        section_rewrite_functional_overview_focus_path=(
+            repo_root / "templates" / "section-rewrite-functional-overview-focus.txt"
+        ),
+        section_rewrite_illustrative_example_focus_path=(
+            repo_root / "templates" / "section-rewrite-illustrative-example-focus.txt"
+        ),
         differential_workbook_rel=Path("data/workbook.xlsx"),
         differential_report_dir_rel=Path("data/differential/exported_library"),
         graph_output_dir=repo_root / "docs" / "dependency-graph",

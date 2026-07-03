@@ -45,6 +45,9 @@ class PipelineConfig:
     projection_layout: ProjectionColumnLayout | None
     canonical_api_example_path: Path
     binding_authoring_prompt_path: Path
+    section_rewrite_introduction_focus_path: Path
+    section_rewrite_functional_overview_focus_path: Path
+    section_rewrite_illustrative_example_focus_path: Path
     differential_workbook_rel: Path
     differential_report_dir_rel: Path
     graph_output_dir: Path
@@ -77,8 +80,30 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
     docstring_callback_name = str(user_config.DOCSTRING_CALLBACK_NAME)
     projection_layout = getattr(user_config, "PROJECTION_LAYOUT", None)
 
-    canonical_api_example_path = root / "templates" / "canonical-api-usage.md"
-    binding_authoring_prompt_path = root / "templates" / "binding-authoring-prompt.txt"
+    templates_root = root / "templates"
+    canonical_api_example_path = templates_root / "canonical-api-usage.md"
+    binding_authoring_prompt_path = templates_root / "binding-authoring-prompt.txt"
+    section_rewrite_introduction_focus_path = Path(
+        getattr(
+            user_config,
+            "SECTION_REWRITE_INTRODUCTION_FOCUS_PATH",
+            templates_root / "section-rewrite-introduction-focus.txt",
+        )
+    )
+    section_rewrite_functional_overview_focus_path = Path(
+        getattr(
+            user_config,
+            "SECTION_REWRITE_FUNCTIONAL_OVERVIEW_FOCUS_PATH",
+            templates_root / "section-rewrite-functional-overview-focus.txt",
+        )
+    )
+    section_rewrite_illustrative_example_focus_path = Path(
+        getattr(
+            user_config,
+            "SECTION_REWRITE_ILLUSTRATIVE_EXAMPLE_FOCUS_PATH",
+            templates_root / "section-rewrite-illustrative-example-focus.txt",
+        )
+    )
     differential_workbook_rel = Path(
         getattr(user_config, "DIFFERENTIAL_WORKBOOK_REL", "data/workbook.xlsx")
     )
@@ -107,6 +132,13 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
         projection_layout=projection_layout,
         canonical_api_example_path=canonical_api_example_path,
         binding_authoring_prompt_path=binding_authoring_prompt_path,
+        section_rewrite_introduction_focus_path=section_rewrite_introduction_focus_path,
+        section_rewrite_functional_overview_focus_path=(
+            section_rewrite_functional_overview_focus_path
+        ),
+        section_rewrite_illustrative_example_focus_path=(
+            section_rewrite_illustrative_example_focus_path
+        ),
         differential_workbook_rel=differential_workbook_rel,
         differential_report_dir_rel=differential_report_dir_rel,
         graph_output_dir=graph_output_dir,
