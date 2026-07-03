@@ -195,6 +195,26 @@ def test_render_dist_pyproject_toml_description_has_no_embedded_newline() -> Non
     assert "\\n" not in text
 
 
+def test_render_dist_pyproject_toml_excludes_multiline_attribution() -> None:
+    attribution = "Created by Example Corp.\n\n![Logo](README_files/logo.png)"
+    text = render_dist_pyproject_toml(
+        dev_dependencies=[],
+        metadata=DistProjectMetadata(
+            project_name="my-model",
+            package_name="my_model",
+            library_name="My Model",
+            description="Example library.",
+            attribution=attribution,
+            documentation_url="https://example.com/",
+        ),
+    )
+
+    assert 'description = "Example library."' in text
+    assert "Created by Example Corp." not in text
+    assert "![Logo]" not in text
+    assert "\\n" not in text
+
+
 def test_render_dist_readme_markdown_renders_attribution_block() -> None:
     metadata = DistProjectMetadata(
         project_name="forecast-kit",
