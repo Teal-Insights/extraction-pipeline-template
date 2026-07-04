@@ -64,3 +64,8 @@ PROJECTION_LAYOUT: ProjectionColumnLayout | None = None
 
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")
+
+# Optional hooks for ``uv run python -m src.workbook_audit`` (pre-extraction audit).
+AUDIT_TITLE = "Workbook Audit"
+AUDIT_PUBLIC_INPUTS: tuple[tuple[str, str, str], ...] = ()
+AUDIT_GUIDE_USE_CASES: tuple[tuple[str, str, str], ...] = ()
