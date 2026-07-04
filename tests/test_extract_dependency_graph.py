@@ -49,9 +49,9 @@ def test_extract_dependency_graph_writes_artifacts(
     on_disk = json.loads(summary_path.read_text(encoding="utf-8"))
     assert on_disk == summary
     assert summary["schema_version"] == "1.0.0"
-    assert summary["node_count"] == 5
-    assert summary["edge_count"] == 4
-    assert summary["leaf_count"] == 1
+    assert summary["node_count"] == 6
+    assert summary["edge_count"] == 6
+    assert summary["leaf_count"] == 2
     assert "provenance_edge_count" in summary
     assert summary["elapsed_seconds"] >= 0
     assert summary["stage_timings"]

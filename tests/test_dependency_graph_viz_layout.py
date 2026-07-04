@@ -16,8 +16,8 @@ from src.dependency_graph_viz import (
 def test_graph_topology_metrics_includes_per_sheet_breakdown(synthetic_graph) -> None:
     metrics = graph_topology_metrics(synthetic_graph)
 
-    assert metrics["node_count"] == 5
-    assert metrics["edge_count"] == 4
+    assert metrics["node_count"] == 6
+    assert metrics["edge_count"] == 6
     assert "sheets" in metrics
     assert metrics["sheets"]["Engine"]["node_count"] >= 1
     assert metrics["sheets"]["Engine"]["edge_count"] >= 0
@@ -119,4 +119,4 @@ def test_build_cytoscape_structure_payload_clusters_by_sheet(synthetic_graph) ->
     assert cell_nodes
     assert all("position" not in node for node in cell_nodes)
     assert payload["meta"]["layout"] == "structure_only"
-    assert payload["meta"]["node_count"] == 5
+    assert payload["meta"]["node_count"] == 6
