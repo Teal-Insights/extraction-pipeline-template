@@ -27,7 +27,6 @@ from src.llm_json import generate_validated_json, generate_validated_json_async
 from src.llm_providers import (
     ProviderConfig,
     build_async_client,
-    build_async_client_if_configured,
     build_client,
     model_from_env,
 )

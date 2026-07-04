@@ -6,7 +6,6 @@ import workbook_config
 from src.extraction_pipeline import build_pipeline_graph
 from src.graph_dependency_audit import (
     audit_parent_dependencies_batch_with_llm,
-    build_graph_audit_async_client,
     format_audit_failure,
     resolve_graph_audit_model,
     select_audit_cases,

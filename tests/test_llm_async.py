@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from typing import cast
 
 import pytest
@@ -106,7 +107,7 @@ def _make_async(
 
 
 @pytest.fixture(autouse=True)
-def _reset_semaphore() -> None:
+def _reset_semaphore() -> Iterator[None]:
     reset_llm_semaphore()
     yield
     reset_llm_semaphore()
@@ -188,7 +189,7 @@ def test_semaphore_limits_concurrent_requests(
     reset_llm_semaphore()
     delay = 0.05
     contents = ['{"title": "A", "body": "B"}'] * 6
-    client, fake = _make_async(contents, delay=delay)
+    client, fake = _make_async([*contents], delay=delay)
     semaphore = get_llm_semaphore()
 
     async def one_call(index: int) -> _Sample:

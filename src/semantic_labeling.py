@@ -485,9 +485,7 @@ def label_internal_graph_cells(
             for cell_labels in sheet_labels.cells:
                 set_cell_semantic_metadata(graph, cell_labels)
     else:
-        for sheet_name, candidate_addresses in sorted(
-            candidate_cells_by_sheet.items()
-        ):
+        for sheet_name, candidate_addresses in sorted(candidate_cells_by_sheet.items()):
             sheet_candidate_set = set(candidate_addresses)
             sheet_cells = sheet_cells_for_prompt(
                 formula_workbook,

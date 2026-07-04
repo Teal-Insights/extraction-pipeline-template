@@ -151,9 +151,7 @@ def llm_max_concurrent() -> int:
     """Return the configured in-flight async LLM request cap."""
     value = env_int(LLM_MAX_CONCURRENT_ENV, DEFAULT_LLM_MAX_CONCURRENT)
     if value < 1:
-        raise ValueError(
-            f"{LLM_MAX_CONCURRENT_ENV} must be at least 1, got {value!r}"
-        )
+        raise ValueError(f"{LLM_MAX_CONCURRENT_ENV} must be at least 1, got {value!r}")
     return value
 
 

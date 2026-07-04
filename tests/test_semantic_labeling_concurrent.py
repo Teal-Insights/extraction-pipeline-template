@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -139,7 +140,7 @@ def _minimal_concept_scheme() -> dict[str, object]:
 
 
 @pytest.fixture(autouse=True)
-def _reset_semaphore() -> None:
+def _reset_semaphore() -> Iterator[None]:
     reset_llm_semaphore()
     yield
     reset_llm_semaphore()
@@ -219,8 +220,8 @@ def test_label_internal_graph_cells_is_deterministic_under_concurrency(
     def fake_labels(
         sheet_name: str,
         candidate_addresses: list[NodeKey],
-        _sheet_cells: list[dict[str, object]],
-        _concept_scheme: dict[str, object],
+        _sheet_cells: list[dict[str, Any]],
+        _concept_scheme: Mapping[str, Any],
     ) -> SheetSemanticLabels:
         return SheetSemanticLabels(
             cells=[
@@ -265,5 +266,11 @@ def test_label_internal_graph_cells_is_deterministic_under_concurrency(
     )
 
     assert summary_a.labeled_cell_count == summary_b.labeled_cell_count
-    assert graph_a.get_node("Alpha!A1").metadata == graph_b.get_node("Alpha!A1").metadata
-    assert graph_a.get_node("Beta!A1").metadata == graph_b.get_node("Beta!A1").metadata
+    alpha_a = graph_a.get_node("Alpha!A1")
+    alpha_b = graph_b.get_node("Alpha!A1")
+    beta_a = graph_a.get_node("Beta!A1")
+    beta_b = graph_b.get_node("Beta!A1")
+    assert alpha_a is not None and alpha_b is not None
+    assert beta_a is not None and beta_b is not None
+    assert alpha_a.metadata == alpha_b.metadata
+    assert beta_a.metadata == beta_b.metadata
