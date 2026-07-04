@@ -31,8 +31,4 @@ def matched_error_values(golden: Any, mvp: Any) -> bool:
     """Return whether both sides are the same typed Excel error."""
     golden = coerce_excel_error(golden)
     mvp = coerce_excel_error(mvp)
-    return (
-        isinstance(golden, XlError)
-        and isinstance(mvp, XlError)
-        and golden == mvp
-    )
+    return isinstance(golden, XlError) and isinstance(mvp, XlError) and golden == mvp

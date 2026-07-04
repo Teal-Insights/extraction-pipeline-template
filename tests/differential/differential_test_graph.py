@@ -301,7 +301,8 @@ def _resolve_axes() -> tuple[Axis, ...]:
         Axis(
             name="scenarios",
             points=tuple(
-                AxisPoint(label=scenario.id, scenario=scenario) for scenario in scenarios
+                AxisPoint(label=scenario.id, scenario=scenario)
+                for scenario in scenarios
             ),
         ),
     )
@@ -480,7 +481,9 @@ def write_txt_summary(
     lines.append("-" * 78)
     for (axis_name, point_label), (point_passed, point_total) in by_point.items():
         flag = "[PASS]" if point_passed == point_total else "[FAIL]"
-        lines.append(f"{flag} {point_passed:3d}/{point_total:<3d}  {axis_name} :: {point_label}")
+        lines.append(
+            f"{flag} {point_passed:3d}/{point_total:<3d}  {axis_name} :: {point_label}"
+        )
 
     fails = [trial for trial in trials if not trial.match]
     if fails:
@@ -550,7 +553,12 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
                         mvp_value: Any = mvp.read(cell)
                     except Exception as exc:
                         mvp_value = f"<{type(exc).__name__}: {exc}>"
-                        match, abs_diff, rel_diff, note = False, None, None, "mvp raised"
+                        match, abs_diff, rel_diff, note = (
+                            False,
+                            None,
+                            None,
+                            "mvp raised",
+                        )
                         matched_error = False
                         flagged_matched_error = False
                     else:
@@ -561,8 +569,7 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
                         )
                         matched_error = matched_error_values(golden_value, mvp_value)
                         flagged_matched_error = (
-                            matched_error
-                            and not point.scenario.expects_error_values
+                            matched_error and not point.scenario.expects_error_values
                         )
                     trials.append(
                         Trial(
@@ -613,8 +620,7 @@ def run_differential_test(config: GraphDifferentialConfig) -> int:
     logger.info("Done. Failures: %d / %d", failed, len(trials))
     if config.warn_on_error_values and flagged:
         logger.warning(
-            "Matched error values in %d comparison(s); see MATCHED ERROR VALUES "
-            "in %s",
+            "Matched error values in %d comparison(s); see MATCHED ERROR VALUES in %s",
             flagged,
             config.report_dir / "differential_report.txt",
         )

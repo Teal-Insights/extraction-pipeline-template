@@ -221,7 +221,9 @@ def compare_cell(
     mvp = coerce_excel_error(mvp)
 
     if isinstance(excel, XlError) or isinstance(mvp, XlError):
-        passed = isinstance(excel, XlError) and isinstance(mvp, XlError) and excel == mvp
+        passed = (
+            isinstance(excel, XlError) and isinstance(mvp, XlError) and excel == mvp
+        )
         matched_error = passed
         return Comparison(
             scenario_id,

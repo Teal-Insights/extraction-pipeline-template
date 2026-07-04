@@ -9,7 +9,9 @@ import pytest
 
 
 def _load_harness_module():
-    return importlib.import_module("tests.differential.differential_test_exported_library")
+    return importlib.import_module(
+        "tests.differential.differential_test_exported_library"
+    )
 
 
 def test_compare_cell_passes_within_atol() -> None:
