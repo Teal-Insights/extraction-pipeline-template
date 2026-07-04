@@ -30,6 +30,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from .differential_excel import (
+    coerce_excel_error,
+    matched_error_values,
+    read_cell_value,
+)
 from .differential_types import ATOL, Axis, AxisPoint, Scenario
 
 from excel_grapher import XlError
@@ -56,6 +61,7 @@ class GraphDifferentialConfig:
     constraints: dict[str, object]
     library_name: str
     atol: float = ATOL
+    warn_on_error_values: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,8 @@ class Trial:
     abs_diff: float | None
     rel_diff: float | None
     note: str = ""
+    matched_error: bool = False
+    flagged_matched_error: bool = False
 
 
 CSV_COLUMNS: tuple[str, ...] = (
@@ -87,6 +95,7 @@ CSV_COLUMNS: tuple[str, ...] = (
     "abs_diff",
     "rel_diff",
     "note",
+    "matched_error",
 )
 
 
@@ -112,6 +121,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Directory for differential_report.{csv,txt} output.",
     )
+    parser.add_argument(
+        "--warn-on-error-values",
+        action="store_true",
+        help=(
+            "List passing comparisons where both sides are the same Excel error "
+            "code, for scenario-setup review."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -126,6 +143,7 @@ def resolve_config(
     layout: LayoutName,
     workbook_path: Path | None = None,
     report_dir: Path | None = None,
+    warn_on_error_values: bool = False,
 ) -> GraphDifferentialConfig:
     """Resolve paths from ``workbook_config.py`` and the selected layout."""
     module_path = module_path.resolve()
@@ -157,6 +175,7 @@ def resolve_config(
         constraints=defaults.constraints,
         library_name=defaults.library_name,
         atol=ATOL,
+        warn_on_error_values=warn_on_error_values,
     )
 
 
@@ -168,23 +187,16 @@ def config_from_args(
         layout=args.layout,
         workbook_path=args.workbook_path,
         report_dir=args.report_dir,
+        warn_on_error_values=args.warn_on_error_values,
     )
-
-
-def _coerce_excel_error(value: Any) -> Any:
-    if isinstance(value, str):
-        err = XlError.from_text(value)
-        if err is not None:
-            return err
-    return value
 
 
 def values_match(
     golden: Any, mvp: Any, *, atol: float
 ) -> tuple[bool, float | None, float | None, str]:
     """Compare golden vs graph oracle. Returns (match, abs_diff, rel_diff, note)."""
-    golden = _coerce_excel_error(golden)
-    mvp = _coerce_excel_error(mvp)
+    golden = coerce_excel_error(golden)
+    mvp = coerce_excel_error(mvp)
 
     if isinstance(golden, XlError) or isinstance(mvp, XlError):
         if isinstance(golden, XlError) and isinstance(mvp, XlError) and golden == mvp:
@@ -232,8 +244,7 @@ class GoldenDriver:
         self._app.calculate()
 
     def read(self, cell: str) -> Any:
-        sheet, addr = cell.split("!", 1)
-        return self._book.sheets[sheet].range(addr).value
+        return read_cell_value(self._book.sheets, cell)
 
     def close(self) -> None:
         try:
@@ -290,7 +301,8 @@ def _resolve_axes() -> tuple[Axis, ...]:
         Axis(
             name="scenarios",
             points=tuple(
-                AxisPoint(label=scenario.id, scenario=scenario) for scenario in scenarios
+                AxisPoint(label=scenario.id, scenario=scenario)
+                for scenario in scenarios
             ),
         ),
     )
@@ -358,6 +370,7 @@ def write_csv_report(trials: list[Trial], path: Path) -> None:
                     "" if trial.abs_diff is None else f"{trial.abs_diff:.3e}",
                     "" if trial.rel_diff is None else f"{trial.rel_diff:.3e}",
                     trial.note,
+                    trial.matched_error,
                 ]
             )
 
@@ -429,6 +442,24 @@ def write_txt_summary(
         if first.note:
             lines.append(f"  note:      {first.note}")
 
+    if config.warn_on_error_values:
+        flagged = [trial for trial in trials if trial.flagged_matched_error]
+        if flagged:
+            lines.append("")
+            lines.append(
+                "MATCHED ERROR VALUES (passed, but review scenario setup; "
+                "set Scenario.expects_error_values=True when intentional)"
+            )
+            lines.append("-" * 78)
+            for trial in flagged:
+                lines.append(
+                    f"  {trial.scenario_id} :: {trial.cell} ({trial.output_label})"
+                )
+                lines.append(f"    golden = {_format_value(trial.golden)}")
+                lines.append(f"    mvp    = {_format_value(trial.mvp)}")
+                if trial.note:
+                    lines.append(f"    note   = {trial.note}")
+
     if missing_inputs_in_graph:
         lines.append("")
         lines.append(
@@ -450,7 +481,9 @@ def write_txt_summary(
     lines.append("-" * 78)
     for (axis_name, point_label), (point_passed, point_total) in by_point.items():
         flag = "[PASS]" if point_passed == point_total else "[FAIL]"
-        lines.append(f"{flag} {point_passed:3d}/{point_total:<3d}  {axis_name} :: {point_label}")
+        lines.append(
+            f"{flag} {point_passed:3d}/{point_total:<3d}  {axis_name} :: {point_label}"
+        )
 
     fails = [trial for trial in trials if not trial.match]
     if fails:
@@ -520,12 +553,23 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
                         mvp_value: Any = mvp.read(cell)
                     except Exception as exc:
                         mvp_value = f"<{type(exc).__name__}: {exc}>"
-                        match, abs_diff, rel_diff, note = False, None, None, "mvp raised"
+                        match, abs_diff, rel_diff, note = (
+                            False,
+                            None,
+                            None,
+                            "mvp raised",
+                        )
+                        matched_error = False
+                        flagged_matched_error = False
                     else:
                         match, abs_diff, rel_diff, note = values_match(
                             golden_value,
                             mvp_value,
                             atol=config.atol,
+                        )
+                        matched_error = matched_error_values(golden_value, mvp_value)
+                        flagged_matched_error = (
+                            matched_error and not point.scenario.expects_error_values
                         )
                     trials.append(
                         Trial(
@@ -540,6 +584,8 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
                             abs_diff=abs_diff,
                             rel_diff=rel_diff,
                             note=note,
+                            matched_error=matched_error,
+                            flagged_matched_error=flagged_matched_error,
                         )
                     )
     finally:
@@ -570,7 +616,14 @@ def run_differential_test(config: GraphDifferentialConfig) -> int:
     )
 
     failed = sum(1 for trial in trials if not trial.match)
+    flagged = sum(1 for trial in trials if trial.flagged_matched_error)
     logger.info("Done. Failures: %d / %d", failed, len(trials))
+    if config.warn_on_error_values and flagged:
+        logger.warning(
+            "Matched error values in %d comparison(s); see MATCHED ERROR VALUES in %s",
+            flagged,
+            config.report_dir / "differential_report.txt",
+        )
     return 0 if failed == 0 else 1
 
 

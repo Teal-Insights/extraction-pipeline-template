@@ -14,6 +14,7 @@ class Scenario:
 
     id: str
     inputs: Mapping[str, Any]
+    expects_error_values: bool = False
 
 
 @dataclass(frozen=True)
