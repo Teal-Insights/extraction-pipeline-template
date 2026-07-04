@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Literal, Mapping, cast
+from typing import Any, Literal, cast
 
 from excel_grapher import XlError
 
