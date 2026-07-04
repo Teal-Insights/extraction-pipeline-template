@@ -188,6 +188,8 @@ uv run ruff format
 uv run ty check
 ```
 
+Pull requests run the same test suite on Ubuntu via `.github/workflows/test.yml`. The deploy workflow (`.github/workflows/deploy.yml`) is available from the Actions tab via `workflow_dispatch`.
+
 Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (requires `OPENAI_API_KEY`).
 
 ## Repository layout
@@ -200,6 +202,7 @@ Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (requires `OPEN
 | `data/` | Workbook, guide, differential reports |
 | `dist/` | Generated distributable package (gitignored) |
 | `templates/` | Binding prompt and canonical API usage reference |
+| `.github/workflows/` | Template CI (PR tests) and manual deploy workflow |
 | `technical_standard.md` | Acceptance bar and stage gates |
 | `lessons-learned.md` | Design rationale from the Tiny DSA rehearsal |
 | `archive/` | Archived source notes (not maintained workflow docs) |
