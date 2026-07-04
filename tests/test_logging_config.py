@@ -28,7 +28,9 @@ def test_configure_logging_uses_info_by_default() -> None:
     assert handler.formatter.datefmt == "%H:%M:%S"
 
 
-def test_configure_logging_respects_log_level_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_logging_respects_log_level_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
 
     configure_logging()
@@ -36,7 +38,9 @@ def test_configure_logging_respects_log_level_env(monkeypatch: pytest.MonkeyPatc
     assert logging.getLogger().level == logging.DEBUG
 
 
-def test_configure_logging_elevates_openai_and_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_logging_elevates_openai_and_httpx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
 
     configure_logging()

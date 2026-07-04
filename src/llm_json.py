@@ -19,25 +19,13 @@ from openai.types.shared import ReasoningEffort
 from openai.types.shared_params import ResponseFormatJSONObject
 from pydantic import BaseModel, ValidationError
 
-from src.llm_providers import ProviderConfig
+from src.llm_providers import ProviderConfig, provider_for_model
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_ATTEMPTS = 3
 
 T = TypeVar("T", bound=BaseModel)
-
-LEGACY_OPENAI_PROVIDER = ProviderConfig(
-    name="openai",
-    api_key_env="OPENAI_API_KEY",
-    base_url="https://api.openai.com/v1/",
-    supports_structured_outputs=False,
-    supports_reasoning_effort=True,
-)
-"""Default for callers that have not adopted provider-based model switching.
-
-Preserves the historical OpenAI JSON-object call shape so workflows that pass a
-client without a ``provider`` keep behaving exactly as before."""
 
 
 def _request_json(
@@ -123,8 +111,8 @@ def generate_validated_json(
         client: OpenAI-compatible client, e.g. from ``build_client``.
         model: Model name to call.
         provider: Provider metadata that selects the JSON call shape; pair it
-            with ``client`` via ``build_client``. Defaults to
-            ``LEGACY_OPENAI_PROVIDER`` (OpenAI JSON-object mode) when omitted.
+            with ``client`` via ``build_client``. When omitted, inferred from
+            ``model`` via :func:`src.llm_providers.provider_for_model`.
         system_prompt: System role content.
         user_prompt: User role content (the task prompt).
         response_model: Pydantic model the JSON response must satisfy.
@@ -146,7 +134,7 @@ def generate_validated_json(
         RuntimeError: If the model returns empty content, or if no attempt
             produces a valid response within ``max_attempts``.
     """
-    resolved_provider = provider if provider is not None else LEGACY_OPENAI_PROVIDER
+    resolved_provider = provider if provider is not None else provider_for_model(model)
     use_structured_outputs = (
         structured and resolved_provider.supports_structured_outputs
     )

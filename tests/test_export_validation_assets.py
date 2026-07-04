@@ -33,7 +33,9 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
         docstring_callback_name="series_docs",
         projection_layout=None,
         canonical_api_example_path=repo_root / "templates" / "canonical-api-usage.md",
-        binding_authoring_prompt_path=repo_root / "templates" / "binding-authoring-prompt.txt",
+        binding_authoring_prompt_path=repo_root
+        / "templates"
+        / "binding-authoring-prompt.txt",
         section_rewrite_introduction_focus_path=(
             repo_root / "templates" / "section-rewrite-introduction-focus.txt"
         ),

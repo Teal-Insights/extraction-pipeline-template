@@ -8,13 +8,12 @@ from unittest.mock import patch
 import pytest
 
 from src.internals_refactor import (
-    FORMULA_SECTION_MARKER,
     REFACTOR_PROMPT_VERSION,
-    RESOLVER_SECTION_MARKER,
     ClusterRefactorContext,
     ClusterRefactorResponse,
     HelperParameter,
     MemberContext,
+    MemberKeyEntry,
     MemberKeys,
     apply_cluster_collapse,
     apply_phase_c,
@@ -144,10 +143,14 @@ CLUSTER_PARAMETERS = (
 
 CLUSTER_MEMBER_KEYS = (
     MemberKeys(
-        address="Engine!C6", function_name="cell_engine_c6", keys={"TIME_PERIOD": 1}
+        address="Engine!C6",
+        function_name="cell_engine_c6",
+        keys=(MemberKeyEntry(concept="TIME_PERIOD", value=1),),
     ),
     MemberKeys(
-        address="Engine!D6", function_name="cell_engine_d6", keys={"TIME_PERIOD": 2}
+        address="Engine!D6",
+        function_name="cell_engine_d6",
+        keys=(MemberKeyEntry(concept="TIME_PERIOD", value=2),),
     ),
 )
 
@@ -186,7 +189,7 @@ def test_refactor_cache_key_includes_prompt_version(
     try:
         import src.internals_refactor as module
 
-        module.REFACTOR_PROMPT_VERSION = 99
+        module.REFACTOR_PROMPT_VERSION = 99  # ty: ignore[invalid-assignment]
         key_v99 = refactor_cache_key(CLUSTER_CONTEXT, internals_bytes, schema)
     finally:
         import src.internals_refactor as module
@@ -197,7 +200,10 @@ def test_refactor_cache_key_includes_prompt_version(
 
 def test_prompt_payload_includes_allowed_runtime_symbols() -> None:
     payload = prompt_payload(CLUSTER_CONTEXT)
-    allowed = payload["constraints"]["allowed_runtime_symbols"]
+    constraints = payload["constraints"]
+    assert isinstance(constraints, dict)
+    allowed = constraints.get("allowed_runtime_symbols")
+    assert isinstance(allowed, list)
     assert isinstance(allowed, list)
     assert "xl_cell" in allowed
 

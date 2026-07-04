@@ -44,9 +44,10 @@ def test_projected_codegen_preserves_public_series_api(
     assert "def compute_result_a" in modules["api.py"]
     assert "def compute_result_b" in modules["api.py"]
     assert "def set_input_rate" in modules["api.py"]
-    assert "def cell_engine_b2" in modules["internals.py"] or "Engine!B2" in modules[
-        "internals.py"
-    ]
+    assert (
+        "def cell_engine_b2" in modules["internals.py"]
+        or "Engine!B2" in modules["internals.py"]
+    )
 
     package_dir = tmp_path / "synthetic_model_projected"
     package_dir.mkdir()

@@ -11,8 +11,10 @@ from typing import Any, NoReturn, TypeAlias, cast
 
 import fastpyxl.utils.cell
 
+
 class CircularReferenceWarning(RuntimeWarning):
     """Warning emitted when a circular reference is encountered (default Excel mode)."""
+
 
 @dataclass(slots=True)
 class EvalContextBase:
@@ -26,6 +28,7 @@ class EvalContextBase:
     iterate_count: int = 100
     iterate_delta: float = 0.001
     iteration_values: dict[str, CellValue] = field(default_factory=dict)
+
 
 @dataclass(slots=True)
 class EvalContext(EvalContextBase):
@@ -74,6 +77,7 @@ class EvalContext(EvalContextBase):
         if changed:
             self.invalidate(changed)
 
+
 @dataclass(frozen=True, slots=True)
 class ExcelRange:
     """Rectangular worksheet reference geometry for exported code.
@@ -94,7 +98,9 @@ class ExcelRange:
         """The reference shape as `(rows, columns)`."""
         return (self.end_row - self.start_row + 1, self.end_col - self.start_col + 1)
 
+
 NormalizedAddress: TypeAlias = str
+
 
 class XlError(StrEnum):
     VALUE = "#VALUE!"
@@ -113,7 +119,9 @@ class XlError(StrEnum):
                 return err
         return None
 
+
 Scalar: TypeAlias = float | int | str | bool | XlError | None
+
 
 class XlErrorException(Exception):
     """Exception form of an Excel error code.
@@ -131,11 +139,14 @@ class XlErrorException(Exception):
         self.code = code
         super().__init__(code.value)
 
+
 _EXCEL_EPOCH = datetime(1899, 12, 30)
+
 
 def _escape_sheet_for_formula(sheet: str) -> str:
     """Escape apostrophes for use inside quoted sheet names."""
     return sheet.replace("'", "''")
+
 
 def _format_general_number(value: float | int) -> str:
     f = float(value)
@@ -143,9 +154,11 @@ def _format_general_number(value: float | int) -> str:
         return str(int(f))
     return str(f)
 
+
 def _raise_error(code: XlError) -> XlErrorException:
     """Build the exception for an Excel error code (callers raise the result)."""
     return XlErrorException(code)
+
 
 def _raise_if_error_value(value: CellValue) -> CellValue:
     """Surface Excel error values as raised exceptions at the cell boundary."""
@@ -153,11 +166,13 @@ def _raise_if_error_value(value: CellValue) -> CellValue:
         raise XlErrorException(value)
     return value
 
+
 def datetime_to_excel_serial(value: datetime) -> float:
     """Convert a naive datetime to an Excel day serial (1900 date system)."""
     naive = value.replace(tzinfo=None) if value.tzinfo is not None else value
     delta = naive - _EXCEL_EPOCH
     return delta.days + (delta.seconds + delta.microseconds / 1_000_000) / 86_400.0
+
 
 def _try_parse_iso_date_serial(text: str) -> float | None:
     stripped = text.strip()
@@ -174,12 +189,15 @@ def _try_parse_iso_date_serial(text: str) -> float | None:
     except ValueError:
         return None
 
+
 def excel_casefold(value: str) -> str:
     return value.casefold()
+
 
 def needs_quoting(sheet: str) -> bool:
     """Return True if a sheet name must be wrapped in single quotes in a formula."""
     return " " in sheet or "-" in sheet or "'" in sheet
+
 
 def quote_sheet_if_needed(sheet: str) -> str:
     """Return a sheet name quoted for formulas when quoting is required."""
@@ -187,9 +205,11 @@ def quote_sheet_if_needed(sheet: str) -> str:
         return sheet
     return "'" + _escape_sheet_for_formula(sheet) + "'"
 
+
 def format_cell_key(sheet: str, column: str, row: int) -> NormalizedAddress:
     """Format a (sheet, column_letters, row) triple into a canonical address."""
     return f"{quote_sheet_if_needed(sheet)}!{column}{row}"
+
 
 @dataclass(frozen=True, slots=True)
 class Range:
@@ -238,7 +258,9 @@ class Range:
             XlErrorException: If the resolved cell is an Excel error.
         """
         self._validate_relative_cell(row, col)
-        value = self._resolver(self._address(self.start_row + row - 1, self.start_col + col - 1))
+        value = self._resolver(
+            self._address(self.start_row + row - 1, self.start_col + col - 1)
+        )
         return self._raise_if_error(value)
 
     def row(self, row: int) -> Range:
@@ -320,7 +342,10 @@ class Range:
     def rows_raw(self) -> list[list[CellValue]]:
         """Materialize the range as nested row lists of raw values."""
         nrows, ncols = self.shape
-        return [[self.value_at(r, c) for c in range(1, ncols + 1)] for r in range(1, nrows + 1)]
+        return [
+            [self.value_at(r, c) for c in range(1, ncols + 1)]
+            for r in range(1, nrows + 1)
+        ]
 
     def iter_values(self) -> Iterator[CellValue]:
         """Yield values in deterministic row-major order."""
@@ -348,7 +373,9 @@ class Range:
             raise XlErrorException(value)
         return value
 
+
 CellValue: TypeAlias = Scalar | ExcelRange | Range | list["CellValue"]
+
 
 class Grid:
     """Positional raw-value access over a lazy `Range` or nested-list array."""
@@ -380,7 +407,9 @@ class Grid:
             ]
             if not rows:
                 rows = [[None]]
-            return Grid(len(rows), len(rows[0]), None, cast("list[list[CellValue]]", rows))
+            return Grid(
+                len(rows), len(rows[0]), None, cast("list[list[CellValue]]", rows)
+            )
         return None
 
     def at(self, row0: int, col0: int) -> Scalar:
@@ -420,8 +449,10 @@ class Grid:
         assert self._rows is not None
         return [[row[col0]] for row in self._rows]
 
+
 def _format_address(sheet: str, row: int, col: int) -> str:
     return format_cell_key(sheet, fastpyxl.utils.cell.get_column_letter(col), row)
+
 
 def as_scalar(value: CellValue) -> Scalar:
     """Collapse range/array values to `#VALUE!` for scalar coercion contexts."""
@@ -429,9 +460,11 @@ def as_scalar(value: CellValue) -> Scalar:
         return XlError.VALUE
     return value
 
+
 def coerce_inputs_dict(values: Mapping[str, object]) -> dict[str, CellValue]:
     """Widen inferred default-input dicts to `dict[str, CellValue]` for `EvalContext`."""
     return cast(dict[str, CellValue], dict(values))
+
 
 def split_sheet_qualified_address(address: str) -> tuple[str, str] | None:
     """Split `sheet!coord` into `(sheet_name, coord)`.
@@ -463,8 +496,10 @@ def split_sheet_qualified_address(address: str) -> tuple[str, str] | None:
     sheet, cell = address.rsplit("!", 1)
     return sheet, cell
 
+
 def _parse_sheet_address(address: str) -> tuple[str, str] | None:
     return split_sheet_qualified_address(address)
+
 
 def _parse_range_address(address: str) -> tuple[str, str, str] | XlError:
     if ":" not in address:
@@ -484,6 +519,7 @@ def _parse_range_address(address: str) -> tuple[str, str, str] | XlError:
     else:
         end_cell = end_text
     return sheet, start_cell, end_cell
+
 
 def to_bool(value: CellValue) -> bool | XlError:
     if value is None:
@@ -506,6 +542,7 @@ def to_bool(value: CellValue) -> bool | XlError:
     if isinstance(value, ExcelRange):
         return XlError.VALUE
     return XlError.VALUE
+
 
 def to_number(value: CellValue) -> float | XlError:
     if value is None:
@@ -531,6 +568,7 @@ def to_number(value: CellValue) -> float | XlError:
         return XlError.VALUE
     return XlError.VALUE
 
+
 def _compare_values(a: CellValue, b: CellValue) -> int:
     a = as_scalar(a)
     b = as_scalar(b)
@@ -544,6 +582,7 @@ def _compare_values(a: CellValue, b: CellValue) -> int:
         return -1 if af < bf else 1 if af > bf else 0
     return 0
 
+
 def _number_arg(value: CellValue) -> float:
     """Coerce a scalar function argument, raising on Excel coercion errors."""
     number = to_number(as_scalar(value))
@@ -551,12 +590,14 @@ def _number_arg(value: CellValue) -> float:
         raise XlErrorException(number)
     return number
 
+
 def _number_or_raise(value: CellValue) -> float:
     """Coerce a scalar argument to a number, raising on Excel coercion errors."""
     number = to_number(as_scalar(value))
     if isinstance(number, XlError):
         raise XlErrorException(number)
     return number
+
 
 def _values_match(a: CellValue, b: CellValue) -> bool:
     a = as_scalar(a)
@@ -568,6 +609,7 @@ def _values_match(a: CellValue, b: CellValue) -> bool:
     if not isinstance(an, XlError) and not isinstance(bn, XlError):
         return an == bn
     return a == b
+
 
 def index_excel_range(
     base: ExcelRange,
@@ -647,6 +689,7 @@ def index_excel_range(
         return XlError.REF
     return abs_cell(row - 1, col - 1)
 
+
 def to_int(value: CellValue) -> int | XlError:
     """Coerce a CellValue to an integer using Excel-style numeric coercion.
 
@@ -657,6 +700,7 @@ def to_int(value: CellValue) -> int | XlError:
     if isinstance(n, XlError):
         return n
     return int(n)
+
 
 def to_string(value: CellValue) -> str:
     if value is None:
@@ -670,6 +714,7 @@ def to_string(value: CellValue) -> str:
     if isinstance(value, ExcelRange):
         return XlError.VALUE.value
     return str(value)
+
 
 def compare_scalars(op: str, left: CellValue, right: CellValue) -> bool | XlError:
     """Compare two scalar cell values using Excel coercion rules."""
@@ -714,9 +759,12 @@ def compare_scalars(op: str, left: CellValue, right: CellValue) -> bool | XlErro
     ln = to_number(left)
     rn = to_number(right)
     if isinstance(ln, XlError) or isinstance(rn, XlError):
-        return _cmp_str(excel_casefold(to_string(left)), excel_casefold(to_string(right)))
+        return _cmp_str(
+            excel_casefold(to_string(left)), excel_casefold(to_string(right))
+        )
 
     return _cmp_float(float(ln), float(rn))
+
 
 def xl_circular_reference() -> CellValue:
     """Excel default behavior for circular references (non-iterative calculation)."""
@@ -726,6 +774,7 @@ def xl_circular_reference() -> CellValue:
         stacklevel=2,
     )
     return 0
+
 
 def _evaluate_address(
     ctx: EvalContext,
@@ -776,6 +825,7 @@ def _evaluate_address(
         if ctx.stack and ctx.stack[-1] == address:
             ctx.stack.pop()
 
+
 def xl_cell(ctx: EvalContext, address: str) -> CellValue:
     """Evaluate a single cell address under the given context.
 
@@ -794,11 +844,15 @@ def xl_cell(ctx: EvalContext, address: str) -> CellValue:
 
     return _evaluate_address(ctx, address, obtain_fn, preserve_structural_blank=True)
 
-def _ctx_range(ctx: EvalContext, sheet: str, r1: int, c1: int, r2: int, c2: int) -> Range:
+
+def _ctx_range(
+    ctx: EvalContext, sheet: str, r1: int, c1: int, r2: int, c2: int
+) -> Range:
     def resolve(address: str) -> Any:
         return xl_cell(ctx, address)
 
     return Range(sheet, r1, c1, r2, c2, resolve)
+
 
 def xl_compare(op: str, left: CellValue, right: CellValue) -> bool:
     """Compare two scalar operands with Excel ordering rules."""
@@ -807,6 +861,7 @@ def xl_compare(op: str, left: CellValue, right: CellValue) -> bool:
         raise _raise_error(result)
     return result
 
+
 def xl_eval(
     ctx: EvalContext,
     address: str,
@@ -814,6 +869,7 @@ def xl_eval(
 ) -> CellValue:
     """Evaluate a known formula implementation under the given context."""
     return _evaluate_address(ctx, address, lambda: fn, preserve_structural_blank=False)
+
 
 def xl_index_ref(
     ref: ExcelRange | tuple[str, int, int] | tuple[str, int, int, int, int],
@@ -826,9 +882,13 @@ def xl_index_ref(
     else:
         match ref:
             case (sheet, r1, c1):
-                base = ExcelRange(sheet=sheet, start_row=r1, start_col=c1, end_row=r1, end_col=c1)
+                base = ExcelRange(
+                    sheet=sheet, start_row=r1, start_col=c1, end_row=r1, end_col=c1
+                )
             case (sheet, r1, c1, r2, c2):
-                base = ExcelRange(sheet=sheet, start_row=r1, start_col=c1, end_row=r2, end_col=c2)
+                base = ExcelRange(
+                    sheet=sheet, start_row=r1, start_col=c1, end_row=r2, end_col=c2
+                )
             case _:
                 return XlError.VALUE
 
@@ -839,7 +899,10 @@ def xl_index_ref(
         return (out.sheet, out.start_row, out.start_col)
     return (out.sheet, out.start_row, out.start_col, out.end_row, out.end_col)
 
-def xl_match(lookup_value: CellValue, lookup_array: CellValue, match_type: CellValue = 1) -> int:
+
+def xl_match(
+    lookup_value: CellValue, lookup_array: CellValue, match_type: CellValue = 1
+) -> int:
     mt = _number_arg(match_type)
     match_type_int = int(mt)
     if isinstance(lookup_array, XlError):
@@ -876,6 +939,7 @@ def xl_match(lookup_value: CellValue, lookup_array: CellValue, match_type: CellV
         return last_match
     raise XlErrorException(XlError.VALUE)
 
+
 def xl_number(value: CellValue) -> float:
     """Coerce a scalar cell value to a number, raising on Excel errors."""
     scalar = as_scalar(value)
@@ -885,6 +949,7 @@ def xl_number(value: CellValue) -> float:
     if isinstance(number, XlError):
         raise _raise_error(number)
     return number
+
 
 def xl_offset(
     ctx: EvalContext,
@@ -926,11 +991,15 @@ def xl_offset(
         addr = _format_address(sheet, target_row, target_col)
         return cast("CellValue", xl_cell(ctx, addr))
 
-    return _ctx_range(ctx, sheet, target_row, target_col, target_row + h - 1, target_col + w - 1)
+    return _ctx_range(
+        ctx, sheet, target_row, target_col, target_row + h - 1, target_col + w - 1
+    )
+
 
 def xl_raise(code: XlError) -> NoReturn:
     """Raise an Excel error code from an expression position."""
     raise XlErrorException(code)
+
 
 def xl_range(ctx: EvalContext, address: str) -> CellValue:
     """Evaluate a sheet-qualified range address into a lazy `Range` value."""
@@ -953,6 +1022,7 @@ def xl_range(ctx: EvalContext, address: str) -> CellValue:
 
     return _ctx_range(ctx, sheet, start_row, start_col_idx, end_row, end_col_idx)
 
+
 def xl_range_rows(ctx: EvalContext, address: str) -> CellValue:
     """Evaluate a sheet-qualified range eagerly into nested row lists.
 
@@ -964,9 +1034,9 @@ def xl_range_rows(ctx: EvalContext, address: str) -> CellValue:
         return rng.rows_raw()
     return rng
 
+
 # Stubs for xl_* helpers used by parity-gate test internals but absent from the
 # tiny-dsa runtime snapshot used as the parity-gate test fixture.
-import numpy as np
 
 
 def xl_add(left, right):

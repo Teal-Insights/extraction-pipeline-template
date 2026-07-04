@@ -52,13 +52,19 @@ def test_small_graph_writes_graphviz_preset_layout(
     output_dir = tmp_path / "graph-site"
     meta = write_dependency_graph_site(synthetic_graph, output_dir)
 
-    payload = json.loads((output_dir / "dependency-graph.json").read_text(encoding="utf-8"))
-    cell_nodes = [node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"]
+    payload = json.loads(
+        (output_dir / "dependency-graph.json").read_text(encoding="utf-8")
+    )
+    cell_nodes = [
+        node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"
+    ]
     assert cell_nodes
     assert all("position" in node for node in cell_nodes)
     assert meta["layout_mode"] == "graphviz_preset"
 
-    topology = json.loads((output_dir / "graph-topology.json").read_text(encoding="utf-8"))
+    topology = json.loads(
+        (output_dir / "graph-topology.json").read_text(encoding="utf-8")
+    )
     assert topology["layout_mode"] == "graphviz_preset"
     assert topology["graphviz_layout_enabled"] is True
     assert topology["dot_byte_size"] > 0
@@ -77,8 +83,12 @@ def test_large_graph_skips_graphviz_layout(
     output_dir = tmp_path / "graph-site"
     meta = write_dependency_graph_site(synthetic_graph, output_dir)
 
-    payload = json.loads((output_dir / "dependency-graph.json").read_text(encoding="utf-8"))
-    cell_nodes = [node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"]
+    payload = json.loads(
+        (output_dir / "dependency-graph.json").read_text(encoding="utf-8")
+    )
+    cell_nodes = [
+        node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"
+    ]
     assert cell_nodes
     assert all("position" not in node for node in cell_nodes)
     assert payload["meta"]["layout"] == "structure_only"
@@ -87,7 +97,9 @@ def test_large_graph_skips_graphviz_layout(
     html = (output_dir / "index.html").read_text(encoding="utf-8")
     assert "Graphviz layout skipped" in html
 
-    topology = json.loads((output_dir / "graph-topology.json").read_text(encoding="utf-8"))
+    topology = json.loads(
+        (output_dir / "graph-topology.json").read_text(encoding="utf-8")
+    )
     assert topology["graphviz_layout_enabled"] is False
 
 
@@ -102,8 +114,12 @@ def test_graphviz_layout_always_forces_preset_layout(
     output_dir = tmp_path / "graph-site"
     meta = write_dependency_graph_site(synthetic_graph, output_dir)
 
-    payload = json.loads((output_dir / "dependency-graph.json").read_text(encoding="utf-8"))
-    cell_nodes = [node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"]
+    payload = json.loads(
+        (output_dir / "dependency-graph.json").read_text(encoding="utf-8")
+    )
+    cell_nodes = [
+        node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"
+    ]
     assert all("position" in node for node in cell_nodes)
     assert meta["layout_mode"] == "graphviz_preset"
 
@@ -112,9 +128,13 @@ def test_build_cytoscape_structure_payload_clusters_by_sheet(synthetic_graph) ->
     payload = build_cytoscape_structure_payload(synthetic_graph)
 
     cluster_nodes = [
-        node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cluster"
+        node
+        for node in payload["elements"]["nodes"]
+        if node["data"]["type"] == "cluster"
     ]
-    cell_nodes = [node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"]
+    cell_nodes = [
+        node for node in payload["elements"]["nodes"] if node["data"]["type"] == "cell"
+    ]
     assert cluster_nodes
     assert cell_nodes
     assert all("position" not in node for node in cell_nodes)

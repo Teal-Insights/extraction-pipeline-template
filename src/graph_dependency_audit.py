@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import random
 from dataclasses import dataclass
 from typing import Literal
@@ -14,6 +13,7 @@ from excel_grapher.grapher.node import NodeKey
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.env_utils import env_int
 from src.llm_json import generate_validated_json
 from src.llm_providers import ProviderConfig, build_client, model_from_env
 
@@ -108,13 +108,6 @@ def resolve_graph_audit_model(model: str | None = None) -> str:
     return model_from_env(LLM_GRAPH_AUDIT_MODEL_ENV, model)
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    return int(raw)
-
-
 def _sheet_name(address: str) -> str:
     return address.split("!", 1)[0].strip("'")
 
@@ -150,7 +143,9 @@ def _node_role(
     return "leaf"
 
 
-def case_difficulty_score(graph: DependencyGraph, parent_key: str) -> tuple[int, int, int]:
+def case_difficulty_score(
+    graph: DependencyGraph, parent_key: str
+) -> tuple[int, int, int]:
     normalized = normalize_key(parent_key)
     dependencies = list(graph.get_dependencies(normalized))
     dynamic_or_guarded = 0
@@ -176,7 +171,9 @@ def case_difficulty_score(graph: DependencyGraph, parent_key: str) -> tuple[int,
     return (len(dependencies), dynamic_or_guarded, len(cross_sheet))
 
 
-def validate_audit_cases(graph: DependencyGraph, cases: tuple[GraphAuditCase, ...]) -> None:
+def validate_audit_cases(
+    graph: DependencyGraph, cases: tuple[GraphAuditCase, ...]
+) -> None:
     missing: list[str] = []
     non_formula: list[str] = []
     for case in cases:
@@ -200,11 +197,15 @@ def select_audit_cases(
     case_count: int | None = None,
     seed: int | None = None,
 ) -> list[GraphAuditCase]:
-    count = case_count if case_count is not None else _env_int(
-        LLM_GRAPH_AUDIT_CASES_ENV, DEFAULT_CASE_COUNT
+    count = (
+        case_count
+        if case_count is not None
+        else env_int(LLM_GRAPH_AUDIT_CASES_ENV, DEFAULT_CASE_COUNT)
     )
-    rng_seed = seed if seed is not None else _env_int(
-        LLM_GRAPH_AUDIT_SEED_ENV, DEFAULT_CASE_SEED
+    rng_seed = (
+        seed
+        if seed is not None
+        else env_int(LLM_GRAPH_AUDIT_SEED_ENV, DEFAULT_CASE_SEED)
     )
     if count <= 0:
         raise ValueError("case_count must be positive")
@@ -250,7 +251,9 @@ def collect_parent_audit_evidence(
 ) -> ParentAuditEvidence:
     child_limit = max_children if max_children is not None else DEFAULT_MAX_CHILDREN
     formula_limit = (
-        max_formula_length if max_formula_length is not None else DEFAULT_MAX_FORMULA_LENGTH
+        max_formula_length
+        if max_formula_length is not None
+        else DEFAULT_MAX_FORMULA_LENGTH
     )
 
     parent_key = normalize_key(case.parent_key)
@@ -294,7 +297,9 @@ def collect_parent_audit_evidence(
         parent_value=parent.value,
         direct_dependencies=tuple(records),
         total_dependency_count=len(dependencies),
-        truncated_dependency_count=max(0, len(dependencies) - len(visible_dependencies)),
+        truncated_dependency_count=max(
+            0, len(dependencies) - len(visible_dependencies)
+        ),
     )
 
 

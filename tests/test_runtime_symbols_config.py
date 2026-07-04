@@ -6,7 +6,10 @@ from pathlib import Path
 
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
 from src.pipeline_context import activate_pipeline_config
-from src.runtime_symbols import allowed_runtime_symbols, discover_allowed_runtime_symbols
+from src.runtime_symbols import (
+    allowed_runtime_symbols,
+    discover_allowed_runtime_symbols,
+)
 
 
 def _write_runtime(path: Path) -> None:
@@ -50,7 +53,9 @@ def test_allowed_runtime_symbols_uses_package_root(tmp_path: Path) -> None:
         docstring_callback_name="series_docs",
         projection_layout=None,
         canonical_api_example_path=tmp_path / "templates" / "canonical-api-usage.md",
-        binding_authoring_prompt_path=tmp_path / "templates" / "binding-authoring-prompt.txt",
+        binding_authoring_prompt_path=tmp_path
+        / "templates"
+        / "binding-authoring-prompt.txt",
         section_rewrite_introduction_focus_path=(
             tmp_path / "templates" / "section-rewrite-introduction-focus.txt"
         ),
@@ -69,6 +74,8 @@ def test_allowed_runtime_symbols_uses_package_root(tmp_path: Path) -> None:
     allowed_runtime_symbols.cache_clear()
     symbols = allowed_runtime_symbols()
 
-    assert symbols == discover_allowed_runtime_symbols(config.package_root / "runtime.py")
+    assert symbols == discover_allowed_runtime_symbols(
+        config.package_root / "runtime.py"
+    )
     assert "to_bool" not in symbols
     assert symbols == ("XlError", "xl_eval")

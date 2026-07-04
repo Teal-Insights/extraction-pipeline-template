@@ -9,6 +9,7 @@ triggering an LLM re-prompt) when the values diverge.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, Literal
@@ -19,6 +20,7 @@ from excel_grapher.core.cell_types import Between, RealBetween
 from src.internals_refactor import (
     ClusterRefactorResponse,
     HelperParameter,
+    MemberKeyEntry,
     MemberKeys,
     SingletonRefactorContext,
     SingletonRefactorResponse,
@@ -139,10 +141,14 @@ CLUSTER_PARAMETERS = (
 )
 CLUSTER_MEMBER_KEYS = (
     MemberKeys(
-        address="Engine!C6", function_name="cell_engine_c6", keys={"TIME_PERIOD": 1}
+        address="Engine!C6",
+        function_name="cell_engine_c6",
+        keys=(MemberKeyEntry(concept="TIME_PERIOD", value=1),),
     ),
     MemberKeys(
-        address="Engine!D6", function_name="cell_engine_d6", keys={"TIME_PERIOD": 2}
+        address="Engine!D6",
+        function_name="cell_engine_d6",
+        keys=(MemberKeyEntry(concept="TIME_PERIOD", value=2),),
     ),
 )
 
@@ -209,7 +215,7 @@ def parity_gate_dist_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _parity_gate_active_config(parity_gate_dist_root: Path) -> None:
+def _parity_gate_active_config(parity_gate_dist_root: Path) -> Iterator[None]:
     config = replace(load_pipeline_config(), dist_root=parity_gate_dist_root)
     activate_pipeline_config(config)
     from tests.fixtures.test_state import clear_runtime_caches

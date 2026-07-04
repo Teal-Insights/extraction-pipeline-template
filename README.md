@@ -85,7 +85,7 @@ Build the dependency graph with provenance enabled and write review artifacts be
 uv run python -m src.extraction_pipeline --extract-graph
 ```
 
-This writes `artifacts/dependency-graph/index.html`, `dependency-graph.json`, and `extraction-summary.json`, then exits. Review graph completeness manually (step 5 in the [onboarding checklist](#clone-and-configure-onboarding-checklist)): expected sheets, no spurious nodes, shock/engine paths present. See [artifacts/README.md](artifacts/README.md) for commit policy and [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the summary schema.
+This writes `artifacts/dependency-graph/` (see [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md)), then exits. Review graph completeness manually (step 5 in the [onboarding checklist](#clone-and-configure-onboarding-checklist)): expected sheets, no spurious nodes, shock/engine paths present. See [artifacts/README.md](artifacts/README.md) for commit policy and [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the summary schema.
 
 You can also build the graph programmatically:
 
@@ -149,7 +149,8 @@ OPENAI_API_KEY=sk-...
 ZAI_API_KEY=...
 DEEPSEEK_API_KEY=...
 
-# Per-stage model selection (name prefix selects the provider: gpt-*, glm-*, deepseek-*)
+# Per-stage model selection (optional; default gpt-5.5 when unset)
+# Name prefix selects the provider: gpt-*, glm-*, deepseek-*
 SEMANTIC_LABEL_MODEL=gpt-5.5
 DOCSTRING_MODEL=gpt-5.5
 REFACTOR_MODEL=gpt-5.5

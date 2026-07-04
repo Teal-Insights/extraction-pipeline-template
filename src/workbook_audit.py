@@ -70,7 +70,6 @@ class AutomationAudit:
     dialog_sheets: tuple[str, ...]
     workbook_connections: tuple[str, ...]
     external_links: tuple[ExternalLinkRecord, ...]
-    query_tables: int
     form_controls: tuple[str, ...]
     calc_chain_present: bool
 
@@ -100,10 +99,14 @@ class WorkbookAuditReport:
 
 def count_function_call_sites(formula: str) -> Counter[str]:
     """Count every function invocation in a formula, including nested calls."""
-    return Counter(match.group(1) for match in FUNCTION_CALL_RE.finditer(formula.upper()))
+    return Counter(
+        match.group(1) for match in FUNCTION_CALL_RE.finditer(formula.upper())
+    )
 
 
-def load_audit_config() -> tuple[str, tuple[tuple[str, str, str], ...], tuple[tuple[str, str, str], ...]]:
+def load_audit_config() -> tuple[
+    str, tuple[tuple[str, str, str], ...], tuple[tuple[str, str, str], ...]
+]:
     """Load optional workbook-specific audit hooks from ``workbook_config``."""
     user_config = importlib.import_module("workbook_config")
     audit_title = str(getattr(user_config, "AUDIT_TITLE", DEFAULT_AUDIT_TITLE))
@@ -204,7 +207,6 @@ def _sheet_records(
         dialog_sheets=tuple(dialog_sheets),
         workbook_connections=tuple(connections),
         external_links=tuple(automation_links),
-        query_tables=0,
         form_controls=tuple(form_controls),
         calc_chain_present=calc_chain_present,
     )
@@ -633,7 +635,11 @@ def render_audit_markdown(report: WorkbookAuditReport) -> str:
             _markdown_table(
                 ("Feature", "Present", "Notes"),
                 (
-                    ("VBA project", "yes" if report.automation.vba_project else "no", ""),
+                    (
+                        "VBA project",
+                        "yes" if report.automation.vba_project else "no",
+                        "",
+                    ),
                     (
                         "Macro sheets",
                         "yes" if report.automation.macro_sheets else "no",
@@ -648,11 +654,6 @@ def render_audit_markdown(report: WorkbookAuditReport) -> str:
                         "Workbook connections",
                         "yes" if report.automation.workbook_connections else "no",
                         ", ".join(report.automation.workbook_connections) or "—",
-                    ),
-                    (
-                        "Query tables",
-                        "yes" if report.automation.query_tables else "no",
-                        "—",
                     ),
                     (
                         "Form controls / ActiveX",
@@ -720,7 +721,8 @@ def render_audit_markdown(report: WorkbookAuditReport) -> str:
 
     if report.guide_use_cases:
         use_case_rows = [
-            (name, surfaces, inputs) for name, surfaces, inputs in report.guide_use_cases
+            (name, surfaces, inputs)
+            for name, surfaces, inputs in report.guide_use_cases
         ]
         lines.extend(
             [

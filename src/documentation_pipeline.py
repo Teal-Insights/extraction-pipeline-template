@@ -20,6 +20,7 @@ from src.llm_providers import (
     model_from_env,
     provider_for_model,
 )
+from src.logging_config import configure_logging
 from src.pipeline_config import PipelineConfig, discover_public_api_symbols
 from src.qmd_python_validation import PublicApiPolicy, validate_qmd_files
 
@@ -454,7 +455,6 @@ def sync_validated_pages_to_rewrite_cache(
     response_schema = SectionRewriteResponse.model_json_schema()
     api_symbols = list(discover_public_api_symbols(config.api_module_path))
     api_context = canonical_api_context(config)
-    api_import_path = config.api_import_path
     user_guide_root = _user_guide_root(config)
     cache_path = _rewrite_cache_path(config)
 
@@ -688,7 +688,6 @@ def write_rewritten_guide_pages(config: PipelineConfig, client: OpenAI | None) -
     guide_text = config.guide_path.read_text(encoding="utf-8")
     api_symbols = list(discover_public_api_symbols(config.api_module_path))
     api_context = canonical_api_context(config)
-    api_import_path = config.api_import_path
 
     functional_overview_source = extract_markdown_section(
         guide_text,
@@ -810,6 +809,7 @@ jobs:
 
 
 def run_documentation_pipeline(config: PipelineConfig) -> None:
+    configure_logging()
     great_docs_yml = _great_docs_yml(config)
     if not great_docs_yml.exists():
         run_cmd(

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from src.llm_providers import (
@@ -24,10 +22,19 @@ def test_model_from_env_reads_environment(monkeypatch: pytest.MonkeyPatch) -> No
     assert model_from_env("TEST_MODEL") == "glm-5.2"
 
 
-def test_model_from_env_fails_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_from_env_uses_default_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEST_MODEL", raising=False)
+    assert model_from_env("TEST_MODEL") == "gpt-5.5"
+
+
+def test_model_from_env_requires_explicit_value_when_default_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("TEST_MODEL", raising=False)
     with pytest.raises(RuntimeError, match="TEST_MODEL must be set"):
-        model_from_env("TEST_MODEL")
+        model_from_env("TEST_MODEL", default=None)
 
 
 @pytest.mark.parametrize(

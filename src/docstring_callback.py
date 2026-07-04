@@ -137,9 +137,7 @@ def docstring_cache_path(repo_root: Path) -> Path:
     return repo_root / ".cache" / "series-docstrings.json"
 
 
-def docstring_cache_key(
-    ctx, response_schema: dict, guide_text: str, model: str
-) -> str:
+def docstring_cache_key(ctx, response_schema: dict, guide_text: str, model: str) -> str:
     payload = {
         "model": model,
         "prompt_version": DOCSTRING_PROMPT_VERSION,

@@ -17,24 +17,7 @@ from io import StringIO
 from pathlib import Path
 from typing import IO
 
-
-def _env_flag(name: str) -> bool:
-    value = os.environ.get(name, "")
-    return value not in ("", "0", "false", "False", "no", "No")
-
-
-def _env_float(name: str) -> float | None:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return None
-    return float(raw)
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    return int(raw)
+from src.env_utils import env_flag, env_float
 
 
 def dump_thread_stacks(
@@ -106,7 +89,9 @@ class StageTimer:
         total = sum(seconds for _, seconds in self.stages)
         print(f"  total: {total:.1f}s")
 
-    def log_stage(self, name: str, seconds: float, **metrics: int | float | str) -> None:
+    def log_stage(
+        self, name: str, seconds: float, **metrics: int | float | str
+    ) -> None:
         """Record a completed sub-stage and print one diagnostic line."""
         self.stages.append((name, seconds))
         metric_text = ", ".join(f"{key}={value}" for key, value in metrics.items())
@@ -130,7 +115,9 @@ class StallWatchdog:
     timer: StageTimer
     interval_seconds: float
     log_path: Path | None = None
-    _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
+    _stop: threading.Event = field(
+        default_factory=threading.Event, init=False, repr=False
+    )
     _thread: threading.Thread | None = field(default=None, init=False, repr=False)
     _log_handle: IO[str] | None = field(default=None, init=False, repr=False)
 
@@ -198,7 +185,7 @@ def profile_if_enabled(
 ) -> Iterator[cProfile.Profile | None]:
     """Optionally wrap work in cProfile and write binary + text summaries."""
     if enabled is None:
-        enabled = _env_flag("PIPELINE_PROFILE")
+        enabled = env_flag("PIPELINE_PROFILE")
     if not enabled:
         yield None
         return
@@ -230,8 +217,10 @@ def monitor_pipeline_stage(
     stall_log_path: Path | None = None,
 ) -> Iterator[None]:
     """Time one stage and optionally attach a stall watchdog for that stage."""
-    interval = stall_interval_seconds if stall_interval_seconds is not None else _env_float(
-        "PIPELINE_STALL_SECONDS"
+    interval = (
+        stall_interval_seconds
+        if stall_interval_seconds is not None
+        else env_float("PIPELINE_STALL_SECONDS")
     )
     watchdog: StallWatchdog | None = None
     with timer.stage(stage):

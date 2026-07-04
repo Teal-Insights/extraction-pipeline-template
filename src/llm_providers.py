@@ -26,12 +26,22 @@ from typing import Any
 
 from openai import OpenAI
 
+from src.env_utils import env_flag
+
 DEFAULT_REQUEST_TIMEOUT = 120.0
 """Per-request timeout (seconds) so a stalled call fails loudly instead of
 blocking on the SDK's 600s default."""
 
 DEFAULT_MAX_RETRIES = 2
 """Transport-level retries the SDK performs (with backoff) on 429/5xx errors."""
+
+DEFAULT_MODEL = "gpt-5.5"
+"""Default model for stage env vars when unset.
+
+Used for cache-key resolution and other paths that must pick a provider without
+calling the API. Uncached generation still fails fast via :func:`build_client`
+when the provider API key is missing.
+"""
 
 
 @dataclass(frozen=True)
@@ -49,13 +59,6 @@ class ProviderConfig:
 DEEPSEEK_THINKING_ENV = "DEEPSEEK_THINKING"
 """Environment variable that opts DeepSeek into thinking mode when truthy."""
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
-
-
-def _env_flag(env_var: str) -> bool:
-    """Return whether ``env_var`` is set to a recognised truthy value."""
-    return os.environ.get(env_var, "").strip().lower() in _TRUTHY
-
 
 def _deepseek_config() -> ProviderConfig:
     """Build the DeepSeek provider config, honouring the thinking-mode toggle.
@@ -64,7 +67,7 @@ def _deepseek_config() -> ProviderConfig:
     value enables it and lets ``reasoning_effort`` through, which DeepSeek only
     applies in thinking mode.
     """
-    thinking_enabled = _env_flag(DEEPSEEK_THINKING_ENV)
+    thinking_enabled = env_flag(DEEPSEEK_THINKING_ENV, strict=True)
     return ProviderConfig(
         name="deepseek",
         api_key_env="DEEPSEEK_API_KEY",
@@ -98,22 +101,29 @@ def _providers() -> dict[str, ProviderConfig]:
     }
 
 
-def model_from_env(env_var: str, override: str | None = None) -> str:
-    """Return ``override`` if given, else the model named by ``env_var``.
+def model_from_env(
+    env_var: str,
+    override: str | None = None,
+    *,
+    default: str | None = DEFAULT_MODEL,
+) -> str:
+    """Return ``override``, else the model named by ``env_var``, else ``default``.
 
-    Model switching is configured through the environment (loaded from
-    ``.env``). A missing variable with no explicit override is a hard error
-    rather than a silent fallback to a default provider.
+    Stage model env vars are optional: when unset, ``default`` (``gpt-5.5``) is
+    used so cache lookups and provider routing work without a configured ``.env``.
+    Pass ``default=None`` to require an explicit env value or override.
     """
     if override is not None:
         return override
     model = os.environ.get(env_var)
-    if not model:
-        raise RuntimeError(
-            f"{env_var} must be set (e.g. in .env) or a model passed explicitly "
-            "to select the provider"
-        )
-    return model
+    if model:
+        return model
+    if default is not None:
+        return default
+    raise RuntimeError(
+        f"{env_var} must be set (e.g. in .env) or a model passed explicitly "
+        "to select the provider"
+    )
 
 
 def provider_for_model(model: str) -> ProviderConfig:
