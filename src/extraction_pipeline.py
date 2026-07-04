@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence, cast, get_args, get_origin
 
 from excel_grapher.core.cell_types import normalize_cell_type_env_key
@@ -26,6 +28,12 @@ from src.pipeline_config import (
     validate_pipeline_config,
 )
 from src.pipeline_context import activate_pipeline_config
+from src.pipeline_monitor import (
+    StageTimer,
+    monitor_pipeline_stage,
+    profile_if_enabled,
+    resolve_stall_log_path,
+)
 from src.qmd_python_validation import (
     DOCUMENTATION_BASELINE_DEV_DEPS,
     VALIDATION_BASELINE_DEV_DEPS,
@@ -73,60 +81,97 @@ def classify_leaves_from_constraints(
 
 def build_pipeline_graph(
     config: PipelineConfig,
+    *,
+    timer: StageTimer | None = None,
+    stall_log_path: Path | None = None,
 ) -> tuple[
     DependencyGraph,
     WorkbookSeriesBindings,
     SeriesResolutionList,
     SeriesResolutionList,
 ]:
-    series_bindings: WorkbookSeriesBindings = load_series_bindings(config.bindings_path)
-    dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints, {})
-    graph = create_dependency_graph(
-        config.workbook_path,
-        list(config.targets),
-        load_values=True,
-        dynamic_refs=dynamic_ref_config,
-        capture_dependency_provenance=True,
-    )
-
-    binding_validation_report = validate_series_bindings(
-        graph,
-        series_bindings,
-        workbook=config.workbook_path,
-    )
-    if not binding_validation_report["ok"]:
-        raise ValueError(
-            f"Invalid series bindings: {binding_validation_report['issues']!r}"
+    def stage(name: str):
+        if timer is None:
+            return nullcontext()
+        return monitor_pipeline_stage(
+            timer,
+            name,
+            stall_log_path=stall_log_path,
         )
 
-    input_series = cast(
-        SeriesResolutionList,
-        derive_input_series(graph, series_bindings, workbook=config.workbook_path),
-    )
-    output_series = cast(
-        SeriesResolutionList,
-        derive_output_series(graph, series_bindings, workbook=config.workbook_path),
-    )
+    with stage("load_series_bindings"):
+        series_bindings: WorkbookSeriesBindings = load_series_bindings(
+            config.bindings_path
+        )
+        dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints, {})
 
-    label_internal_graph_cells(
-        graph=graph,
-        workbook_path=config.workbook_path,
-        input_cells=series_cell_keys(input_series),
-        target_cells=series_cell_keys(output_series),
-        concept_scheme=series_bindings["concept_scheme"],
-    )
+    with stage("create_dependency_graph"):
+        graph = create_dependency_graph(
+            config.workbook_path,
+            list(config.targets),
+            load_values=True,
+            dynamic_refs=dynamic_ref_config,
+            capture_dependency_provenance=True,
+        )
 
-    leaf_classification = classify_leaves_from_constraints(
-        config.constraints, graph.leaf_keys()
-    )
-    graph.leaf_classification = leaf_classification
+    with stage("validate_series_bindings"):
+        binding_validation_report = validate_series_bindings(
+            graph,
+            series_bindings,
+            workbook=config.workbook_path,
+        )
+        if not binding_validation_report["ok"]:
+            raise ValueError(
+                f"Invalid series bindings: {binding_validation_report['issues']!r}"
+            )
+
+    with stage("derive_input_series"):
+        input_series = cast(
+            SeriesResolutionList,
+            derive_input_series(
+                graph, series_bindings, workbook=config.workbook_path
+            ),
+        )
+
+    with stage("derive_output_series"):
+        output_series = cast(
+            SeriesResolutionList,
+            derive_output_series(
+                graph, series_bindings, workbook=config.workbook_path
+            ),
+        )
+
+    with stage("label_internal_graph_cells"):
+        label_internal_graph_cells(
+            graph=graph,
+            workbook_path=config.workbook_path,
+            input_cells=series_cell_keys(input_series),
+            target_cells=series_cell_keys(output_series),
+            concept_scheme=series_bindings["concept_scheme"],
+        )
+
+    with stage("classify_leaves"):
+        leaf_classification = classify_leaves_from_constraints(
+            config.constraints, graph.leaf_keys()
+        )
+        graph.leaf_classification = leaf_classification
 
     return graph, series_bindings, input_series, output_series
 
 
 def export_generated_package(config: PipelineConfig) -> None:
     """Write the generated package under dist/."""
-    graph, series_bindings, _input_series, _output_series = build_pipeline_graph(config)
+    timer = StageTimer()
+    stall_log_path = resolve_stall_log_path(config.graph_output_dir)
+    with profile_if_enabled(config.graph_output_dir):
+        graph, series_bindings, _input_series, _output_series = build_pipeline_graph(
+            config,
+            timer=timer,
+            stall_log_path=stall_log_path,
+        )
+    timer.print_summary()
+    if stall_log_path.is_file():
+        print(f"Stall diagnostics: {stall_log_path}")
     refactor_projection = build_refactor_projection(graph)
     callback_name = configure_docstring_callback(config)
 
