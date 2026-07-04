@@ -6,6 +6,7 @@ configure → extract → export → test → document → refactor workflow.
 
 from pathlib import Path
 
+from src.graph_dependency_audit import GraphAuditCase
 from src.pipeline_config import DistProjectMetadata
 from src.workbook_addresses import ProjectionColumnLayout
 
@@ -64,6 +65,9 @@ PROJECTION_LAYOUT: ProjectionColumnLayout | None = None
 
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")
+
+# Optional per-parent formula cells for LLM direct-dependency graph audits.
+GRAPH_AUDIT_CASES: tuple[GraphAuditCase, ...] = ()
 
 # Optional hooks for ``uv run python -m src.workbook_audit`` (pre-extraction audit).
 AUDIT_TITLE = "Workbook Audit"

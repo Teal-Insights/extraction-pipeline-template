@@ -12,6 +12,7 @@ from excel_grapher.grapher import DependencyGraph, DynamicRefConfig, create_depe
 from excel_grapher.series_bindings import WorkbookSeriesBindings, load_series_bindings
 
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
+from src.graph_dependency_audit import GraphAuditCase
 from src.subgraph_projection import build_refactor_projection
 from src.workbook_addresses import ProjectionColumnLayout
 
@@ -31,6 +32,20 @@ PROJECTION_LAYOUT = ProjectionColumnLayout(
     outputs_sheet="Outputs",
     outputs_column_to_engine={"B": "B", "C": "C"},
     time_period_to_engine_column={1: "B", 2: "C"},
+)
+
+GRAPH_AUDIT_CASES: tuple[GraphAuditCase, ...] = (
+    GraphAuditCase(
+        parent_key="Outputs!B1",
+        label="result_a_output",
+        focus="First output should depend on the Engine column B path.",
+        required=True,
+    ),
+    GraphAuditCase(
+        parent_key="Engine!B2",
+        label="engine_b2_formula",
+        focus="Engine B2 should depend on both scalar inputs.",
+    ),
 )
 
 
