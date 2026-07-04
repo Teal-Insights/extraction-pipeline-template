@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import argparse
+import json
+import time
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence, cast, get_args, get_origin
 
@@ -19,8 +23,13 @@ from excel_grapher.series_bindings import (
 )
 from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
+from src.dependency_graph_viz import (
+    constant_keys_from_leaf_classification,
+    semantic_node_labels,
+    series_cell_keys,
+    write_dependency_graph_site,
+)
 from src.docstring_callback import configure_docstring_callback
-from src.dependency_graph_viz import series_cell_keys
 from src.export_validation_assets import export_validation_assets
 from src.pipeline_config import (
     PipelineConfig,
@@ -44,6 +53,124 @@ from src.semantic_labeling import label_internal_graph_cells
 from src.subgraph_projection import build_refactor_projection
 
 SeriesResolutionList = Sequence[Mapping[str, Any]]
+
+EXTRACTION_SUMMARY_SCHEMA_VERSION = "1.0.0"
+
+
+@dataclass(frozen=True)
+class DependencyGraphExtraction:
+    """Graph build result plus timing diagnostics for the extract-only stage."""
+
+    graph: DependencyGraph
+    series_bindings: WorkbookSeriesBindings
+    input_series: SeriesResolutionList
+    output_series: SeriesResolutionList
+    timer: StageTimer
+    elapsed_seconds: float
+
+
+def count_provenance_edges(graph: DependencyGraph) -> int:
+    """Count dependency edges that carry extraction provenance metadata."""
+    count = 0
+    for key in graph:
+        for dependency in graph.get_dependencies(key):
+            if graph.get_edge_attrs(dependency, key).provenance is not None:
+                count += 1
+    return count
+
+
+def _graph_edge_count(graph: DependencyGraph) -> int:
+    return sum(len(graph.get_dependencies(key)) for key in graph)
+
+
+def extract_dependency_graph_result(
+    config: PipelineConfig,
+) -> DependencyGraphExtraction:
+    """Build the pipeline dependency graph and collect stage timings."""
+    timer = StageTimer()
+    stall_log_path = resolve_stall_log_path(config.graph_output_dir)
+    started = time.perf_counter()
+    with profile_if_enabled(config.graph_output_dir, basename="extract"):
+        graph, series_bindings, input_series, output_series = build_pipeline_graph(
+            config,
+            timer=timer,
+            stall_log_path=stall_log_path,
+        )
+    elapsed_seconds = time.perf_counter() - started
+    return DependencyGraphExtraction(
+        graph=graph,
+        series_bindings=series_bindings,
+        input_series=input_series,
+        output_series=output_series,
+        timer=timer,
+        elapsed_seconds=elapsed_seconds,
+    )
+
+
+def _artifact_output_path(config: PipelineConfig, path: Path) -> str:
+    resolved = path if path.is_absolute() else config.repo_root / path
+    try:
+        return resolved.relative_to(config.repo_root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def write_dependency_graph_artifacts(
+    extraction: DependencyGraphExtraction,
+    config: PipelineConfig,
+) -> dict[str, Any]:
+    """Write the interactive graph site and extraction summary JSON."""
+    graph = extraction.graph
+    leaf_classification = graph.leaf_classification or {}
+    output_dir = config.graph_output_dir
+    write_dependency_graph_site(
+        graph,
+        output_dir,
+        node_labels=semantic_node_labels(graph),
+        target_keys=set(config.targets),
+        input_keys=series_cell_keys(extraction.input_series),
+        output_keys=series_cell_keys(extraction.output_series),
+        constant_keys=constant_keys_from_leaf_classification(leaf_classification),
+    )
+
+    output_paths = {
+        "output_dir": _artifact_output_path(config, output_dir),
+        "index_html": _artifact_output_path(config, output_dir / "index.html"),
+        "dependency_graph_json": _artifact_output_path(
+            config, output_dir / "dependency-graph.json"
+        ),
+        "extraction_summary_json": _artifact_output_path(
+            config, output_dir / "extraction-summary.json"
+        ),
+    }
+    summary: dict[str, Any] = {
+        "schema_version": EXTRACTION_SUMMARY_SCHEMA_VERSION,
+        "node_count": len(graph),
+        "edge_count": _graph_edge_count(graph),
+        "leaf_count": len(graph.leaf_keys()),
+        "provenance_edge_count": count_provenance_edges(graph),
+        "elapsed_seconds": round(extraction.elapsed_seconds, 3),
+        "stage_timings": extraction.timer.as_dict(),
+        "output_paths": output_paths,
+    }
+    summary_path = output_dir / "extraction-summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
+def extract_dependency_graph(config: PipelineConfig) -> dict[str, Any]:
+    """Build the dependency graph, write review artifacts, and return the summary."""
+    extraction = extract_dependency_graph_result(config)
+    summary = write_dependency_graph_artifacts(extraction, config)
+    extraction.timer.print_summary(header="Extract stage timings")
+    stall_log_path = resolve_stall_log_path(config.graph_output_dir)
+    if stall_log_path.is_file():
+        print(f"Stall diagnostics: {stall_log_path}")
+    print(f"Wrote dependency graph artifacts to {config.graph_output_dir.resolve()}/")
+    return summary
 
 
 def is_constant_constraint(constraint: object) -> bool:
@@ -128,17 +255,13 @@ def build_pipeline_graph(
     with stage("derive_input_series"):
         input_series = cast(
             SeriesResolutionList,
-            derive_input_series(
-                graph, series_bindings, workbook=config.workbook_path
-            ),
+            derive_input_series(graph, series_bindings, workbook=config.workbook_path),
         )
 
     with stage("derive_output_series"):
         output_series = cast(
             SeriesResolutionList,
-            derive_output_series(
-                graph, series_bindings, workbook=config.workbook_path
-            ),
+            derive_output_series(graph, series_bindings, workbook=config.workbook_path),
         )
 
     with stage("label_internal_graph_cells"):
@@ -237,10 +360,21 @@ tests/results/local/
     )
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Run the extraction pipeline.")
+    parser.add_argument(
+        "--extract-graph",
+        action="store_true",
+        help="Build the dependency graph, write review artifacts, and exit.",
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
     config = load_pipeline_config()
     validate_pipeline_config(config)
     activate_pipeline_config(config)
+    if args.extract_graph:
+        extract_dependency_graph(config)
+        return
     export_generated_package(config)
     from src.documentation_pipeline import run_documentation_pipeline
 

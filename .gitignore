@@ -6,5 +6,6 @@ __pycache__/
 .cache/
 dist/
 docs/dependency-graph/
+artifacts/dependency-graph/
 docs/human-hypothesis-graph/
 .env

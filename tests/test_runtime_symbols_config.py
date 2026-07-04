@@ -62,7 +62,7 @@ def test_allowed_runtime_symbols_uses_package_root(tmp_path: Path) -> None:
         ),
         differential_workbook_rel=Path("data/workbook.xlsx"),
         differential_report_dir_rel=Path("data/differential/exported_library"),
-        graph_output_dir=tmp_path / "docs" / "dependency-graph",
+        graph_output_dir=tmp_path / "artifacts" / "dependency-graph",
     )
     activate_pipeline_config(config)
 

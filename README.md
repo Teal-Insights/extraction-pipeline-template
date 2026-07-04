@@ -56,7 +56,15 @@ See the commented reference example at the bottom of `workbook_config.py` (Tiny 
 
 ### 2. Extract
 
-Build the dependency graph with provenance enabled:
+Build the dependency graph with provenance enabled and write review artifacts before export:
+
+```bash
+uv run python -m src.extraction_pipeline --extract-graph
+```
+
+This writes `artifacts/dependency-graph/index.html`, `dependency-graph.json`, and `extraction-summary.json`, then exits. Review graph completeness manually: expected sheets, no spurious nodes, shock/engine paths present. See [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the summary schema.
+
+You can also build the graph programmatically:
 
 ```python
 from excel_grapher.grapher import DynamicRefConfig, create_dependency_graph
@@ -70,7 +78,7 @@ graph = create_dependency_graph(
 )
 ```
 
-Review graph completeness manually: expected sheets, no spurious nodes, shock/engine paths present. Optionally run semantic labeling and write an interactive graph site (see [Graph exploration](#graph-exploration)).
+After review, run the full pipeline (`uv run python -m src.extraction_pipeline`) to export.
 
 ### 3. Export
 
@@ -135,7 +143,7 @@ DEEPSEEK_THINKING=1
 
 ## Graph exploration
 
-After extraction, write an interactive Cytoscape site from the dependency graph:
+The `--extract-graph` stage writes an interactive Cytoscape site under `artifacts/dependency-graph/`. To regenerate it manually from an in-memory graph:
 
 ```python
 from pathlib import Path
@@ -146,7 +154,7 @@ from src.dependency_graph_viz import (
     write_dependency_graph_site,
 )
 
-output_dir = Path("docs/dependency-graph")
+output_dir = Path("artifacts/dependency-graph")
 write_dependency_graph_site(
     graph,
     output_dir,
@@ -160,7 +168,7 @@ write_dependency_graph_site(
 Serve locally (do not commit generated JSON/HTML):
 
 ```bash
-uv run python -m http.server 8000 --directory docs/dependency-graph
+uv run python -m http.server 8000 --directory artifacts/dependency-graph
 ```
 
 Open `http://localhost:8000/`.
@@ -205,4 +213,4 @@ Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (requires `OPEN
 | `.github/workflows/` | Template CI (PR tests) and manual deploy workflow |
 | `technical_standard.md` | Acceptance bar and stage gates |
 | `lessons-learned.md` | Design rationale from the Tiny DSA rehearsal |
-| `archive/` | Archived source notes (not maintained workflow docs) |
+| `artifacts/` | Generated exploration artifacts (dependency graph site) |
