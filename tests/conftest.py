@@ -1,5 +1,18 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Any
+from unittest.mock import patch
+
 import pytest
 
+from src.extraction_pipeline import (
+    DependencyGraphExtraction,
+    extract_dependency_graph_result,
+    write_dependency_graph_artifacts,
+)
+from src.pipeline_config import PipelineConfig
+from src.semantic_labeling import SemanticLabelingSummary
 from tests.fixtures.synthetic_pipeline import (
     build_synthetic_graph,
     build_synthetic_projection,
@@ -69,3 +82,38 @@ def synthetic_series_bindings():
 @pytest.fixture(scope="session")
 def synthetic_pipeline_config_fixture(synthetic_workbook_path):
     return synthetic_pipeline_config(workbook_path=synthetic_workbook_path)
+
+
+@dataclass(frozen=True)
+class SyntheticGraphExtractionArtifacts:
+    config: PipelineConfig
+    extraction: DependencyGraphExtraction
+    summary: dict[str, Any]
+
+
+@pytest.fixture(scope="session")
+def synthetic_graph_extraction_artifacts(
+    tmp_path_factory: pytest.TempPathFactory,
+    synthetic_pipeline_config_fixture: PipelineConfig,
+) -> SyntheticGraphExtractionArtifacts:
+    output_dir = tmp_path_factory.mktemp("synthetic_graph_extraction")
+    config = replace(
+        synthetic_pipeline_config_fixture,
+        graph_output_dir=output_dir,
+    )
+    stub_summary = SemanticLabelingSummary(
+        labeled_cell_count=0,
+        sheet_count=0,
+        candidate_cells_by_sheet={},
+    )
+    with patch(
+        "src.extraction_pipeline.label_internal_graph_cells",
+        return_value=stub_summary,
+    ):
+        extraction = extract_dependency_graph_result(config)
+        summary = write_dependency_graph_artifacts(extraction, config)
+    return SyntheticGraphExtractionArtifacts(
+        config=config,
+        extraction=extraction,
+        summary=summary,
+    )

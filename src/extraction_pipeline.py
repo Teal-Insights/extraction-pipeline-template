@@ -74,7 +74,7 @@ def count_provenance_edges(graph: DependencyGraph) -> int:
     count = 0
     for key in graph:
         for dependency in graph.get_dependencies(key):
-            if graph.get_edge_attrs(dependency, key).provenance is not None:
+            if graph.get_edge_attrs(key, dependency).provenance is not None:
                 count += 1
     return count
 
