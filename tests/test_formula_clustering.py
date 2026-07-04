@@ -19,4 +19,4 @@ def test_cluster_graph_formulas_groups_parallel_row_on_synthetic_projection(
         if set(cluster.members) == {"Engine!B2", "Engine!C2"}
     )
     assert engine_cluster.row == 2
-    assert engine_cluster.canonical_template == "=Inputs!A1+1"
+    assert engine_cluster.canonical_template == "=Inputs!A1+Inputs!B1+1"
