@@ -1,4 +1,11 @@
-"""Direct-dependency LLM audits for extracted workbook graphs."""
+"""Direct-dependency LLM audits for extracted workbook graphs.
+
+Model selection uses ``LLM_GRAPH_AUDIT_MODEL`` (default ``gpt-5.5`` when unset).
+The model name prefix routes through the same OpenAI-compatible providers as
+other pipeline stages: ``gpt-*`` (OpenAI), ``glm-*`` (Z.AI), and
+``deepseek-*`` (DeepSeek). One model—and therefore one provider—handles every
+audit case in a run.
+"""
 
 from __future__ import annotations
 
@@ -104,7 +111,10 @@ class ParentAuditEvidence:
 
 
 def resolve_graph_audit_model(model: str | None = None) -> str:
-    """Return the caller's model, else the ``LLM_GRAPH_AUDIT_MODEL`` env value."""
+    """Return the caller's model, else ``LLM_GRAPH_AUDIT_MODEL``, else ``gpt-5.5``.
+
+    The resolved name selects the provider via :func:`src.llm_providers.provider_for_model`.
+    """
     return model_from_env(LLM_GRAPH_AUDIT_MODEL_ENV, model)
 
 

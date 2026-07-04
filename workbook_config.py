@@ -66,7 +66,9 @@ PROJECTION_LAYOUT: ProjectionColumnLayout | None = None
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")
 
-# Optional per-parent formula cells for LLM direct-dependency graph audits.
+# Optional per-parent formula cells for LLM direct-dependency graph audits
+# (``pytest tests/test_extraction_graph_accuracy.py --run-skipped``). Provider
+# and model come from ``LLM_GRAPH_AUDIT_MODEL`` (see ``.env.example``).
 GRAPH_AUDIT_CASES: tuple[GraphAuditCase, ...] = ()
 
 # Optional hooks for ``uv run python -m src.workbook_audit`` (pre-extraction audit).

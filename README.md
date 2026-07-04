@@ -14,7 +14,7 @@ Follow this order when adapting the template to a new workbook. Each step has a 
 | 2. Audit | **Config author** | Run `uv run python -m src.workbook_audit --output artifacts/workbook-audit.md`. Resolve blocking automation (VBA, macros, external links) before graph work. |
 | 3. Configure | **Config author** | Declare extraction targets, author bindings, constrain every dynamic-ref controller, and classify all graph leaves. See [Configure](#1-configure) below. |
 | 4. Extract | **Config author** | Run `uv run python -m src.extraction_pipeline --extract-graph`. Confirm the graph builds without `DynamicRefError`. |
-| 5. Review graph | **Graph reviewer** | Inspect `artifacts/dependency-graph/` (see [artifacts/README.md](artifacts/README.md)). Confirm expected sheets, no spurious nodes, and complete shock/engine paths. Optionally run opt-in LLM dependency audits: `uv run pytest tests/test_extraction_graph_accuracy.py --run-skipped` (requires `OPENAI_API_KEY` and `GRAPH_AUDIT_CASES` in `workbook_config.py`). |
+| 5. Review graph | **Graph reviewer** | Inspect `artifacts/dependency-graph/` (see [artifacts/README.md](artifacts/README.md)). Confirm expected sheets, no spurious nodes, and complete shock/engine paths. Optionally run opt-in LLM dependency audits: `uv run pytest tests/test_extraction_graph_accuracy.py --run-skipped` (requires `GRAPH_AUDIT_CASES` in `workbook_config.py` and the provider API key for `LLM_GRAPH_AUDIT_MODEL`; defaults to `gpt-5.5`). |
 | 6. Export and test | **Parity owner** | Run the full pipeline (`uv run python -m src.extraction_pipeline`). Run differential parity; on Windows with Excel, re-run from the exported project (see [Test](#4-test)). |
 | 7. Document and refactor | **Config author** | Generate docs, refactor internals behind parity gates, and update committed parity evidence under `data/differential/`. |
 
@@ -155,9 +155,12 @@ SEMANTIC_LABEL_MODEL=gpt-5.5
 DOCSTRING_MODEL=gpt-5.5
 REFACTOR_MODEL=gpt-5.5
 SECTION_REWRITE_MODEL=gpt-5.5
+LLM_GRAPH_AUDIT_MODEL=gpt-5.5
 ```
 
 If an uncached LLM step is reached without the required API key, the pipeline fails fast with an `*_API_KEY is required ...` error.
+
+Opt-in graph dependency audits (`pytest --run-skipped`) use the same multi-provider routing: set `LLM_GRAPH_AUDIT_MODEL` to a `gpt-*`, `glm-*`, or `deepseek-*` model name and provide the matching API key (`OPENAI_API_KEY`, `ZAI_API_KEY`, or `DEEPSEEK_API_KEY`). One model drives every audit case in a run.
 
 DeepSeek runs with thinking mode disabled by default. To enable it (and pass reasoning effort through, which DeepSeek only honors in thinking mode), set `DEEPSEEK_THINKING` to a truthy value (`1`, `true`, `yes`, or `on`):
 
@@ -227,7 +230,7 @@ uv run ty check
 
 Pull requests run the same test suite on Ubuntu via `.github/workflows/test.yml`. The deploy workflow (`.github/workflows/deploy.yml`) is available from the Actions tab via `workflow_dispatch`.
 
-Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (requires `OPENAI_API_KEY`).
+Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (requires `GRAPH_AUDIT_CASES` in `workbook_config.py` and the provider API key for `LLM_GRAPH_AUDIT_MODEL`).
 
 ## Repository layout
 
