@@ -6,6 +6,8 @@ import pytest
 
 from src.llm_providers import (
     DEEPSEEK_THINKING_ENV,
+    build_async_client,
+    build_async_client_if_configured,
     build_client,
     build_client_if_configured,
     model_from_env,
@@ -58,6 +60,25 @@ def test_provider_for_model(
 def test_provider_for_model_rejects_unknown_prefix() -> None:
     with pytest.raises(ValueError, match="Unsupported model 'claude-3'"):
         provider_for_model("claude-3")
+
+
+def test_build_async_client_uses_provider_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    client, config = build_async_client("gpt-5.5")
+    assert config.api_key_env == "OPENAI_API_KEY"
+    assert client.api_key == "test-key"
+    assert client.base_url == "https://api.openai.com/v1/"
+
+
+def test_build_async_client_if_configured_returns_none_without_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    client, config = build_async_client_if_configured("deepseek-v4-pro")
+    assert client is None
+    assert config.api_key_env == "DEEPSEEK_API_KEY"
 
 
 def test_build_client_uses_provider_key(
