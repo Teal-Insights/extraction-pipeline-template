@@ -47,6 +47,13 @@ Validation checks:
 - `validate_series_bindings(...)` reports `ok`
 - `derive_input_series` / `derive_output_series` resolve every binding
 - No unbound mutable input leaves
+- Run the pre-extraction workbook audit and review blocking automation before graph work:
+
+```bash
+uv run python -m src.workbook_audit --output artifacts/workbook-audit.md
+```
+
+See [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the report sections. Optional hooks in [workbook_config.py](workbook_config.py) (`AUDIT_TITLE`, `AUDIT_PUBLIC_INPUTS`, `AUDIT_GUIDE_USE_CASES`) add workbook-specific inventory tables when populated.
 
 #### Projection column layout (optional)
 
@@ -175,6 +182,7 @@ Open `http://localhost:8000/`.
 
 ## Checklist for a new workbook
 
+- [ ] Pre-extraction workbook audit reviewed (`uv run python -m src.workbook_audit`)
 - [ ] Outputs declared as extraction targets in `workbook_config.py`
 - [ ] `bindings/inputs.bindings.yaml` + `outputs.bindings.yaml` validated
 - [ ] Dynamic-ref constraint candidates constrained

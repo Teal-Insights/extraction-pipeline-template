@@ -32,3 +32,19 @@ uv run python -m http.server 8000 --directory artifacts/dependency-graph
 ```
 
 Open `http://localhost:8000/`.
+
+## `workbook-audit.md`
+
+Written by the pre-extraction audit CLI (`uv run python -m src.workbook_audit`).
+
+| Section | Description |
+|---|---|
+| Executive summary | Proceed / do-not-proceed recommendation and blocking automation |
+| Quantitative surface | Cell totals, per-sheet formula counts, function and dynamic-ref call sites |
+| Automation and external dependencies | VBA, macro sheets, connections, external links, live `[book]` formula refs |
+| Named ranges | Defined names with external/broken flags and formula usage counts |
+| Public input inventory | Optional; rendered when `AUDIT_PUBLIC_INPUTS` is populated in `workbook_config.py` |
+| Guide-described workflows | Optional; rendered when `AUDIT_GUIDE_USE_CASES` is populated |
+| Charts and drawings | Embedded chart and drawing part counts |
+
+Default output path: `artifacts/workbook-audit.md`.
