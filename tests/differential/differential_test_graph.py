@@ -297,9 +297,10 @@ class MvpGraphDriver:
     def record_input_baselines(self, cells: frozenset[str]) -> None:
         """Snapshot baseline values for the union of all scenario input cells."""
         self._input_baselines = {
-            cell: self._graph.get_node(cell).value
+            cell: node.value
             for cell in cells
             if cell in self._known_keys
+            if (node := self._graph.get_node(cell)) is not None
         }
 
     def reset_inputs(self) -> None:

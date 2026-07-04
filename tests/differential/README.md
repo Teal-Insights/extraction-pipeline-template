@@ -82,6 +82,19 @@ indicate unintended scenario setup unless the scenario sets
 
 Exit codes: **`0`** all comparisons pass, **`1`** any failure, **`2`** prerequisite missing or scenarios not configured.
 
+## Golden-master conformance
+
+The comparison ladder, report schema, and acceptance bar are defined in
+[`technical_standard.md`](../../technical_standard.md) (§1–§3 and the conformance
+checklist at the end). Unit tests in
+[`tests/test_differential_harness.py`](../test_differential_harness.py) lock the
+exported-library harness helpers (`compare_cell`, `crash_comparisons`,
+`write_csv_report`, `write_txt_summary`) to that standard on every PR — no Excel
+required.
+
+CSV columns use `excel_value` / `mvp_value` as aliases for the standard's
+`golden_value` / `sut_value` terminology.
+
 ## Output locations
 
 | Harness | Reports |
