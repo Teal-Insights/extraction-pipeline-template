@@ -58,7 +58,9 @@ def _write_differential_package(repo_root: Path) -> None:
     differential_root.mkdir(parents=True)
     (tests_root / "__init__.py").write_text("", encoding="utf-8")
     (differential_root / "__init__.py").write_text("", encoding="utf-8")
-    (differential_root / "differential_types.py").write_text("# types\n", encoding="utf-8")
+    (differential_root / "differential_types.py").write_text(
+        "# types\n", encoding="utf-8"
+    )
     (differential_root / "differential_test_exported_library.py").write_text(
         "# harness\n",
         encoding="utf-8",
