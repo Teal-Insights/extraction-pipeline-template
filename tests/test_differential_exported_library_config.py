@@ -2,32 +2,23 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HARNESS_PATH = (
+MODULE_PATH = (
     REPO_ROOT / "tests" / "differential" / "differential_test_exported_library.py"
 )
 
 
 def _load_harness_module():
-    spec = importlib.util.spec_from_file_location(
-        "differential_test_exported_library",
-        HARNESS_PATH,
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module("tests.differential.differential_test_exported_library")
 
 
 def test_repo_layout_defaults() -> None:
     harness = _load_harness_module()
     config = harness.resolve_config(
-        script_path=HARNESS_PATH,
+        module_path=MODULE_PATH,
         layout="repo",
     )
     assert config.workbook_path == REPO_ROOT / "data" / "workbook.xlsx"
@@ -41,16 +32,19 @@ def test_repo_layout_defaults() -> None:
 def test_exported_layout_defaults() -> None:
     harness = _load_harness_module()
     dist_root = REPO_ROOT / "dist"
-    script_path = dist_root / "tests" / "differential_test_exported_library.py"
+    module_path = (
+        dist_root / "tests" / "differential" / "differential_test_exported_library.py"
+    )
     config = harness.resolve_config(
-        script_path=script_path,
+        module_path=module_path,
         layout="exported",
     )
-    assert config.workbook_path == script_path.parent / "fixtures" / "workbook.xlsx"
+    tests_root = dist_root / "tests"
+    assert config.workbook_path == tests_root / "fixtures" / "workbook.xlsx"
     assert config.package_dir == dist_root / "my_model"
     assert config.package_name == "my_model.api"
     assert config.import_root == dist_root
-    assert config.report_dir == script_path.parent / "results" / "local"
+    assert config.report_dir == tests_root / "results" / "local"
 
 
 def test_parse_args_defaults_to_repo_layout() -> None:

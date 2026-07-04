@@ -6,11 +6,11 @@ section at the bottom of this module.
 
 Run from the extraction repo after export::
 
-    uv run python tests/differential/differential_test_exported_library.py
+    uv run python -m tests.differential.differential_test_exported_library
 
 From the exported ``dist/`` project (Windows + Excel)::
 
-    uv run --project dist --group validation python tests/differential_test_exported_library.py --layout exported
+    uv run --project dist --group validation python -m tests.differential.differential_test_exported_library --layout exported
 """
 
 from __future__ import annotations
@@ -27,10 +27,11 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal, Mapping, cast
 
+from .differential_types import ATOL, Scenario
+
 logger = logging.getLogger(__name__)
 
 LayoutName = Literal["repo", "exported"]
-ATOL = 1e-6
 
 
 @dataclass(frozen=True)
@@ -44,14 +45,6 @@ class DifferentialConfig:
     report_dir: Path
     library_name: str
     atol: float = ATOL
-
-
-@dataclass(frozen=True)
-class Scenario:
-    """One identified input configuration plus a stable scenario id."""
-
-    id: str
-    inputs: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -114,15 +107,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _repo_root_from_script(script_path: Path, layout: LayoutName) -> Path:
-    if layout == "exported":
-        return script_path.parent.parent
-    return script_path.parents[2]
+def _project_root_from_module(module_path: Path) -> Path:
+    """Return repo or dist root from ``tests/differential/<module>.py``."""
+    return module_path.resolve().parents[2]
+
+
+def _tests_root_from_module(module_path: Path) -> Path:
+    return module_path.resolve().parents[1]
 
 
 def resolve_config(
     *,
-    script_path: Path,
+    module_path: Path,
     layout: LayoutName,
     workbook_path: Path | None = None,
     package_name: str | None = None,
@@ -130,22 +126,22 @@ def resolve_config(
     report_dir: Path | None = None,
 ) -> DifferentialConfig:
     """Resolve paths from ``workbook_config.py`` and the selected layout."""
-    script_path = script_path.resolve()
-    repo_root = _repo_root_from_script(script_path, layout)
+    module_path = module_path.resolve()
+    project_root = _project_root_from_module(module_path)
 
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
     from src.pipeline_config import load_pipeline_config
 
-    pipeline = load_pipeline_config(repo_root=repo_root)
+    pipeline = load_pipeline_config(repo_root=project_root)
     package_dir = pipeline.package_root
     package_slug = pipeline.dist_metadata.package_name
     library_name = pipeline.dist_metadata.library_name
 
     if layout == "exported":
-        tests_root = script_path.parent
-        dist_root = script_path.parent.parent
+        tests_root = _tests_root_from_module(module_path)
+        dist_root = project_root
         defaults = DifferentialConfig(
             workbook_path=tests_root / "fixtures" / pipeline.workbook_path.name,
             package_dir=dist_root / package_slug,
@@ -159,8 +155,8 @@ def resolve_config(
             workbook_path=pipeline.workbook_path,
             package_dir=package_dir,
             package_name=f"dist.{package_slug}.api",
-            import_root=repo_root,
-            report_dir=repo_root / pipeline.differential_report_dir_rel,
+            import_root=project_root,
+            report_dir=project_root / pipeline.differential_report_dir_rel,
             library_name=library_name,
         )
 
@@ -175,9 +171,9 @@ def resolve_config(
     )
 
 
-def config_from_args(script_path: Path, args: argparse.Namespace) -> DifferentialConfig:
+def config_from_args(module_path: Path, args: argparse.Namespace) -> DifferentialConfig:
     return resolve_config(
-        script_path=script_path,
+        module_path=module_path,
         layout=args.layout,
         workbook_path=args.workbook_path,
         package_name=args.package_name,

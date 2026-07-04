@@ -33,7 +33,7 @@ Before running the pipeline, populate this repository with workbook-specific inp
 | Series bindings | `bindings/inputs.bindings.yaml`, `bindings/outputs.bindings.yaml` | Records-shaped public API surface |
 | Package metadata | `workbook_config.py` → `DIST_METADATA` | Generated `dist/` project name, docs URLs, README |
 | Projection layout | `workbook_config.py` → `PROJECTION_LAYOUT` | Optional Engine/Outputs column mapping for internals refactor (see below) |
-| Parity evidence | `data/differential/exported_library/` | Reference reports after a passing Excel sweep (optional until export) |
+| Parity evidence | `data/differential/graph/`, `data/differential/exported_library/` | Reference reports after passing Excel sweeps (optional until configured) |
 
 Use [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.txt) with a coding agent to draft bindings from the guide, workbook, and extracted graph.
 
@@ -109,16 +109,17 @@ The pipeline applies `OptimalCompression` over the canonical graph, generates a 
 
 ### 4. Test
 
-Run a representative scenario through the semantic API, then Excel parity:
+Run graph parity against Excel before export, then exported-library parity after:
 
 ```bash
-uv run python tests/differential/differential_test_exported_library.py
+uv run python -m tests.differential.differential_test_graph
+uv run python -m tests.differential.differential_test_exported_library
 ```
 
 On Windows with Excel installed, re-run from the exported project:
 
 ```pwsh
-uv run --project dist --group validation python tests/differential_test_exported_library.py --layout exported
+uv run --project dist --group validation python -m tests.differential.differential_test_exported_library --layout exported
 ```
 
 ### 5. Document

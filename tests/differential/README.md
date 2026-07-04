@@ -11,46 +11,66 @@ library.
 | **MVP oracle** | Python reimplementation (graph evaluator or exported package) |
 | **Absolute tolerance (`atol`)** | Maximum allowed numeric difference; use `1e-6` unless the model needs looser bounds |
 
-## What to implement
+## Two harnesses
 
-The harness at [`differential_test_exported_library.py`](differential_test_exported_library.py)
-loads paths from `workbook_config.py`, compares Excel against the exported package,
-and writes parity reports. **Scenario definitions are workbook-specific** — implement
-the hooks at the bottom of that module:
+Run the **graph** differential before export to validate extraction fidelity.
+Run the **exported-library** differential after export to validate the artifact
+callers consume.
+
+| Harness | SUT | When |
+|---|---|---|
+| [`differential_test_graph.py`](differential_test_graph.py) | In-memory `FormulaEvaluator` over the extracted graph | Before / alongside extraction review |
+| [`differential_test_exported_library.py`](differential_test_exported_library.py) | Generated standalone package public API | After `uv run python -m src.extraction_pipeline` |
+
+Both harnesses import shared scenario types from
+[`differential_types.py`](differential_types.py) (`Scenario`, optional `Axis` /
+`AxisPoint`, and `ATOL`). Workbook-specific hooks live at the bottom of each harness
+module.
+
+### Graph harness hooks
+
+1. **`build_scenarios()`** or **`build_axes()`** — representative input combinations.
+2. **`output_cell_labels()`** — mirror output bindings as `(label, address)` pairs.
+3. **`inputs_for_excel()`** — map each scenario to Excel cell writes.
+
+The graph harness also reports input cells absent from the extracted graph —
+itself a differential signal about extraction coverage.
+
+### Exported-library harness hooks
 
 1. **`build_scenarios()`** — representative input combinations.
 2. **`output_cell_labels()`** and **`output_ranges()`** — mirror output bindings.
 3. **`inputs_for_excel()`** — map each scenario to Excel cell writes.
 4. **`apply_inputs_to_mvp()`** — map each scenario to Records-shaped `set_*` calls.
 
-Commit reference reports under `data/differential/exported_library/` after a passing Windows sweep. The export step copies harness, workbook fixture, and reports into `dist/tests/`.
+Commit reference reports under `data/differential/graph/` and
+`data/differential/exported_library/` after passing Windows sweeps. The export
+step copies the exported-library harness, workbook fixture, and reports into
+`dist/tests/`.
 
 ## Run
 
 Microsoft Excel must be installed locally — `xlwings` drives it through COM automation.
 
 ```bash
-# Extraction repo (after implementing the harness and exporting dist/)
-uv run python tests/differential/differential_test_exported_library.py
+# Graph oracle (extraction repo — run before export)
+uv run python -m tests.differential.differential_test_graph
+
+# Exported library (extraction repo, after export)
+uv run python -m tests.differential.differential_test_exported_library
 
 # Exported dist project (Windows + Excel)
-uv run --project dist --group validation python tests/differential_test_exported_library.py --layout exported
+uv run --project dist --group validation python -m tests.differential.differential_test_exported_library --layout exported
 ```
 
 Exit codes: **`0`** all comparisons pass, **`1`** any failure, **`2`** prerequisite missing or scenarios not configured.
 
-## Optional: graph-oracle harness
-
-You may also add a sibling script that compares Excel against an in-memory
-`FormulaEvaluator` over the extracted graph (same `constraints` as
-`workbook_config.py`). That validates extraction fidelity before codegen.
-The exported-library harness validates the artifact callers consume.
-
 ## Output locations
 
-| Run context | Reports |
+| Harness | Reports |
 |---|---|
-| Extraction repo | `data/differential/exported_library/parity_report.{csv,txt}` |
+| Graph (extraction repo) | `data/differential/graph/differential_report.{csv,txt}` |
+| Exported library (extraction repo) | `data/differential/exported_library/parity_report.{csv,txt}` |
 | Exported dist (local rerun) | `dist/tests/results/local/` |
 | Exported dist (shipped reference) | `dist/tests/results/reference/` |
 

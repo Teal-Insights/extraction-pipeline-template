@@ -224,12 +224,12 @@ reruns require Windows with Microsoft Excel installed.
 
 - Reference parity report: `tests/results/reference/parity_report.txt`
 - Validation bundle README: `tests/README.md`
-- Differential test harness: `tests/differential_test_exported_library.py`
+- Differential test harness: `tests/differential/differential_test_exported_library.py`
 
 To re-run the validation from the exported project:
 
 ```pwsh
-uv run --project . --group validation python tests/differential_test_exported_library.py --layout exported
+uv run --project . --group validation python -m tests.differential.differential_test_exported_library --layout exported
 ```
 """
 

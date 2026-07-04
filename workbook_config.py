@@ -65,6 +65,7 @@ PROJECTION_LAYOUT: ProjectionColumnLayout | None = None
 
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")
+DIFFERENTIAL_GRAPH_REPORT_DIR_REL = Path("data/differential/graph")
 
 # Optional per-parent formula cells for LLM direct-dependency graph audits
 # (``pytest tests/test_extraction_graph_accuracy.py --run-skipped``). Provider
