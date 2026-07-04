@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import fastpyxl
 from excel_grapher.core.cell_types import RealBetween
@@ -22,6 +22,7 @@ TARGETS: tuple[str, ...] = ("Outputs!B1", "Outputs!C1")
 
 CONSTRAINTS: dict[str, object] = {
     "Inputs!A1": Annotated[float, RealBetween(0.0, 100.0)],
+    "Inputs!B1": Literal[0],
 }
 
 PROJECTION_LAYOUT = ProjectionColumnLayout(
@@ -44,8 +45,9 @@ def write_synthetic_workbook(path: Path) -> Path:
     outputs = workbook.create_sheet("Outputs")
 
     inputs["A1"] = 10
-    engine["B2"] = "=Inputs!A1+1"
-    engine["C2"] = "=Inputs!A1+1"
+    inputs["B1"] = 0
+    engine["B2"] = "=Inputs!A1+Inputs!B1+1"
+    engine["C2"] = "=Inputs!A1+Inputs!B1+1"
     engine["B3"] = "=Engine!B2*2"
     outputs["B1"] = "=Engine!B2"
     outputs["C1"] = "=Engine!C2"

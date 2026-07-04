@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Mapping, Sequence
 from unittest.mock import patch
 
 import pytest
+from excel_grapher.grapher import DependencyGraph
+from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
 from src.extraction_pipeline import (
     DependencyGraphExtraction,
+    build_pipeline_graph,
     extract_dependency_graph_result,
     write_dependency_graph_artifacts,
 )
@@ -82,6 +85,40 @@ def synthetic_series_bindings():
 @pytest.fixture(scope="session")
 def synthetic_pipeline_config_fixture(synthetic_workbook_path):
     return synthetic_pipeline_config(workbook_path=synthetic_workbook_path)
+
+
+@dataclass(frozen=True)
+class SyntheticConfiguredPipeline:
+    config: PipelineConfig
+    graph: DependencyGraph
+    series_bindings: WorkbookSeriesBindings
+    input_series: Sequence[Mapping[str, Any]]
+    output_series: Sequence[Mapping[str, Any]]
+
+
+@pytest.fixture(scope="session")
+def synthetic_configured_pipeline(
+    synthetic_pipeline_config_fixture: PipelineConfig,
+) -> SyntheticConfiguredPipeline:
+    stub_summary = SemanticLabelingSummary(
+        labeled_cell_count=0,
+        sheet_count=0,
+        candidate_cells_by_sheet={},
+    )
+    with patch(
+        "src.extraction_pipeline.label_internal_graph_cells",
+        return_value=stub_summary,
+    ):
+        graph, series_bindings, input_series, output_series = build_pipeline_graph(
+            synthetic_pipeline_config_fixture
+        )
+    return SyntheticConfiguredPipeline(
+        config=synthetic_pipeline_config_fixture,
+        graph=graph,
+        series_bindings=series_bindings,
+        input_series=input_series,
+        output_series=output_series,
+    )
 
 
 @dataclass(frozen=True)

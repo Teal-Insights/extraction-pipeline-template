@@ -28,6 +28,8 @@ A good extraction produces a distributable Python library whose **public API is 
 | **Constants distinguished from inputs** | Single-value `Literal[...]` constraints mark lookup/structural data; range constraints mark user-editable inputs. |
 | **Constraints cover all leaves** | Every graph leaf has a typed constraint (`Literal`, `Between`, `RealBetween`, etc.) for codegen, testing, and documentation. |
 
+`tests/test_workbook_constraints.py` enforces the configure-stage binding and constraint invariants above against the synthetic workbook fixture in CI.
+
 #### 2. Extract
 
 | Criterion | Pass condition |
