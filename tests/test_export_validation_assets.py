@@ -45,7 +45,7 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
         ),
         differential_workbook_rel=Path("data/workbook.xlsx"),
         differential_report_dir_rel=Path("data/differential/exported_library"),
-        graph_output_dir=repo_root / "docs" / "dependency-graph",
+        graph_output_dir=repo_root / "artifacts" / "dependency-graph",
     )
 
 

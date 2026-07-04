@@ -118,5 +118,5 @@ def synthetic_pipeline_config(
         ),
         differential_workbook_rel=Path("data/workbook.xlsx"),
         differential_report_dir_rel=Path("data/differential/exported_library"),
-        graph_output_dir=root / "docs" / "dependency-graph",
+        graph_output_dir=root / "artifacts" / "dependency-graph",
     )

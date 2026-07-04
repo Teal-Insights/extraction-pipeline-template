@@ -118,7 +118,7 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
             "data/differential/exported_library",
         )
     )
-    graph_output_dir = root / "docs" / "dependency-graph"
+    graph_output_dir = root / "artifacts" / "dependency-graph"
 
     if not isinstance(dist_metadata, DistProjectMetadata):
         raise TypeError("workbook_config.DIST_METADATA must be a DistProjectMetadata")
