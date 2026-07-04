@@ -1,6 +1,6 @@
 # Artifacts catalog
 
-Generated pipeline artifacts live under `artifacts/`. Do not commit graph JSON/HTML snapshots.
+See [README.md](README.md) for git commit policy and stage timing. Generated pipeline artifacts live under `artifacts/`. Do not commit graph JSON/HTML snapshots.
 
 ## `dependency-graph/`
 

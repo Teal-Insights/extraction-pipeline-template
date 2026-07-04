@@ -16,6 +16,14 @@ A good extraction produces a distributable Python library whose **public API is 
 
 ### Stage gates
 
+Each gate has a default owner role. Adapt names to your team; the responsibilities stay the same.
+
+| Role | Signs off on |
+|---|---|
+| **Config author** | Ingest, configure, extract, document, and refactor stages — targets, bindings, constraints, and committed parity evidence |
+| **Graph reviewer** | Extract completeness — manual graph review and optional LLM dependency audits |
+| **Parity owner** | Export and test — full pipeline run and differential parity (including Windows Excel when available) |
+
 #### 1. Configure
 
 | Criterion | Pass condition |
@@ -38,7 +46,7 @@ A good extraction produces a distributable Python library whose **public API is 
 | **Graph is inspectable** | DAG from outputs to inputs; manual review confirms expected sheets, no spurious nodes, no missing shock/engine paths. |
 | **Provenance captured** | `capture_dependency_provenance=True` so later compression/refactor projections are safe and auditable. |
 | **Series derive cleanly** | `derive_input_series` / `derive_output_series` resolve every binding to concrete cell addresses. |
-| **Dependency chains pass AI-powered spot-checking** | `graph.dependency_chains` passes a series of LLM-powered spot-checks that confirm graph edges correctly capture formula dependencies. |
+| **Dependency chains pass AI-powered spot-checking** | Optional: declare `GRAPH_AUDIT_CASES` in `workbook_config.py` and run `pytest tests/test_extraction_graph_accuracy.py --run-skipped` with a configured LLM provider. Per-parent audits spot-check direct dependency sets; they do not exhaust every conditional path. |
 
 #### 3. Export
 
@@ -87,15 +95,22 @@ Golden-master parity (100% pass rate, precision policy, first-divergence reporti
 
 ### Checklist (copy for new workbook)
 
-[ ] Outputs declared as extraction targets
-[ ] bindings/inputs.bindings.yaml + outputs.bindings.yaml validated
-[ ] Dynamic-ref constraint candidates constrained
-[ ] All leaves classified; mutable leaves bound
-[ ] Graph extracts with provenance; manual completeness review done
-[ ] dist package builds; semantic API scenario runs
-[ ] Validation bundle exported
-[ ] Public API uses domain language; docstrings present
-[ ] Ready for golden-master sweep (D19)
+Ordered to match the onboarding checklist in [README.md](README.md#clone-and-configure-onboarding-checklist):
+
+[ ] Ingest: workbook and guide populated; stale bindings, dist/, and .cache/ cleared
+[ ] Audit: pre-extraction workbook audit reviewed; blocking automation resolved
+[ ] Configure: outputs declared as extraction targets
+[ ] Configure: bindings/inputs.bindings.yaml + outputs.bindings.yaml validated
+[ ] Configure: dynamic-ref constraint candidates constrained
+[ ] Configure: all leaves classified; mutable leaves bound
+[ ] Extract: graph extracts with provenance (--extract-graph)
+[ ] Review graph: manual completeness review done; optional LLM dependency audit passed
+[ ] Export: dist package builds; semantic API scenario runs
+[ ] Export: validation bundle exported; differential parity passes
+[ ] Document / refactor: public API uses domain language; docstrings present
+[ ] Document / refactor: internals refactored; parity re-confirmed
+
+Generated graph artifacts under `artifacts/dependency-graph/` are gitignored; workbook audit reports may be committed optionally. See [artifacts/README.md](artifacts/README.md).
 
 ---
 
