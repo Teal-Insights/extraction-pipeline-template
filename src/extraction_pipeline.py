@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Literal, Mapping, Sequence, cast, get_args, get_origin
 
+from excel_grapher.core.cell_types import normalize_cell_type_env_key
 from excel_grapher.grapher import (
     DependencyGraph,
     DynamicRefConfig,
@@ -47,12 +48,25 @@ def classify_leaves_from_constraints(
     leaf_keys: Iterable[str],
 ) -> dict[str, str]:
     """Classify graph leaves as inputs or constants from their constraints."""
+    normalized_constraints = {
+        normalize_cell_type_env_key(key): value for key, value in constraint_map.items()
+    }
     keys = list(leaf_keys)
-    missing = [key for key in keys if key not in constraint_map]
+    missing = [
+        key
+        for key in keys
+        if normalize_cell_type_env_key(key) not in normalized_constraints
+    ]
     if missing:
         raise KeyError(f"missing constraints for leaf cells: {missing}")
     return {
-        key: "constant" if is_constant_constraint(constraint_map[key]) else "input"
+        key: (
+            "constant"
+            if is_constant_constraint(
+                normalized_constraints[normalize_cell_type_env_key(key)]
+            )
+            else "input"
+        )
         for key in keys
     }
 
