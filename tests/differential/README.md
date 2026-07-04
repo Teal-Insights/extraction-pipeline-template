@@ -24,8 +24,11 @@ callers consume.
 
 Both harnesses import shared scenario types from
 [`differential_types.py`](differential_types.py) (`Scenario`, optional `Axis` /
-`AxisPoint`, and `ATOL`). Workbook-specific hooks live at the bottom of each harness
-module.
+`AxisPoint`, and `ATOL`). Golden-master cell reads go through
+[`differential_excel.py`](differential_excel.py), which sets xlwings
+`err_to_str=True` so Excel error cells (`#VALUE!`, `#N/A`, …) are returned as
+strings rather than `None`. Workbook-specific hooks live at the bottom of each
+harness module.
 
 ### Graph harness hooks
 
@@ -56,12 +59,20 @@ Microsoft Excel must be installed locally — `xlwings` drives it through COM au
 # Graph oracle (extraction repo — run before export)
 uv run python -m tests.differential.differential_test_graph
 
+# With matched-error audit (passing error cells listed for scenario review)
+uv run python -m tests.differential.differential_test_graph --warn-on-error-values
+
 # Exported library (extraction repo, after export)
 uv run python -m tests.differential.differential_test_exported_library
 
 # Exported dist project (Windows + Excel)
 uv run --project dist --group validation python -m tests.differential.differential_test_exported_library --layout exported
 ```
+
+Pass `--warn-on-error-values` on either harness to list comparisons where both
+oracles returned the same Excel error code. These still count as passes, but may
+indicate unintended scenario setup unless the scenario sets
+`expects_error_values=True`.
 
 Exit codes: **`0`** all comparisons pass, **`1`** any failure, **`2`** prerequisite missing or scenarios not configured.
 

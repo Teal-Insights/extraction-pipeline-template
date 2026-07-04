@@ -27,6 +27,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal, Mapping, cast
 
+from excel_grapher import XlError
+
+from .differential_excel import (
+    coerce_excel_error,
+    matched_error_values,
+    read_cell_value,
+)
 from .differential_types import ATOL, Scenario
 
 logger = logging.getLogger(__name__)
@@ -45,6 +52,7 @@ class DifferentialConfig:
     report_dir: Path
     library_name: str
     atol: float = ATOL
+    warn_on_error_values: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,8 @@ class Comparison:
     abs_diff: float | None
     rel_diff: float | None
     passed: bool
+    matched_error: bool = False
+    flagged_matched_error: bool = False
 
 
 CSV_COLUMNS: tuple[str, ...] = (
@@ -68,6 +78,8 @@ CSV_COLUMNS: tuple[str, ...] = (
     "abs_diff",
     "rel_diff",
     "passed",
+    "matched_error",
+    "flagged_matched_error",
 )
 
 
@@ -104,6 +116,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Directory for parity_report.{csv,txt} output.",
     )
+    parser.add_argument(
+        "--warn-on-error-values",
+        action="store_true",
+        help=(
+            "List passing comparisons where both sides are the same Excel error "
+            "code, for scenario-setup review."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -124,6 +144,7 @@ def resolve_config(
     package_name: str | None = None,
     import_root: Path | None = None,
     report_dir: Path | None = None,
+    warn_on_error_values: bool = False,
 ) -> DifferentialConfig:
     """Resolve paths from ``workbook_config.py`` and the selected layout."""
     module_path = module_path.resolve()
@@ -168,6 +189,7 @@ def resolve_config(
         report_dir=(report_dir or defaults.report_dir).resolve(),
         library_name=library_name,
         atol=ATOL,
+        warn_on_error_values=warn_on_error_values,
     )
 
 
@@ -179,6 +201,7 @@ def config_from_args(module_path: Path, args: argparse.Namespace) -> Differentia
         package_name=args.package_name,
         import_root=args.import_root,
         report_dir=args.report_dir,
+        warn_on_error_values=args.warn_on_error_values,
     )
 
 
@@ -190,7 +213,29 @@ def compare_cell(
     mvp: Any,
     *,
     atol: float,
+    expects_error_values: bool = False,
 ) -> Comparison:
+    raw_excel = excel
+    raw_mvp = mvp
+    excel = coerce_excel_error(excel)
+    mvp = coerce_excel_error(mvp)
+
+    if isinstance(excel, XlError) or isinstance(mvp, XlError):
+        passed = isinstance(excel, XlError) and isinstance(mvp, XlError) and excel == mvp
+        matched_error = passed
+        return Comparison(
+            scenario_id,
+            cell_address,
+            cell_label,
+            excel,
+            mvp,
+            None,
+            None,
+            passed,
+            matched_error=matched_error,
+            flagged_matched_error=matched_error and not expects_error_values,
+        )
+
     if excel is None and mvp is None:
         return Comparison(
             scenario_id, cell_address, cell_label, None, None, 0.0, 0.0, True
@@ -203,8 +248,19 @@ def compare_cell(
         excel_f = float(excel)  # type: ignore[arg-type]
         mvp_f = float(mvp)  # type: ignore[arg-type]
     except (TypeError, ValueError):
+        passed = excel == mvp
+        matched_error = matched_error_values(raw_excel, raw_mvp) and passed
         return Comparison(
-            scenario_id, cell_address, cell_label, excel, mvp, None, None, excel == mvp
+            scenario_id,
+            cell_address,
+            cell_label,
+            excel,
+            mvp,
+            None,
+            None,
+            passed,
+            matched_error=matched_error,
+            flagged_matched_error=matched_error and not expects_error_values,
         )
     if not (math.isfinite(excel_f) and math.isfinite(mvp_f)):
         passed = excel_f == mvp_f or (math.isnan(excel_f) and math.isnan(mvp_f))
@@ -213,6 +269,7 @@ def compare_cell(
         )
     abs_diff = abs(excel_f - mvp_f)
     rel_diff = abs_diff / abs(excel_f) if excel_f != 0 else math.inf
+    passed = abs_diff <= atol
     return Comparison(
         scenario_id,
         cell_address,
@@ -221,7 +278,7 @@ def compare_cell(
         mvp_f,
         abs_diff,
         rel_diff,
-        abs_diff <= atol,
+        passed,
     )
 
 
@@ -241,6 +298,7 @@ def compare_scenario(
             excel_outputs.get(cell_address),
             mvp_outputs.get(cell_address),
             atol=atol,
+            expects_error_values=scenario.expects_error_values,
         )
         for cell_label, cell_address in cell_labels
     ]
@@ -283,6 +341,8 @@ def write_csv_report(comparisons: list[Comparison], path: Path) -> None:
                     comparison.abs_diff,
                     comparison.rel_diff,
                     comparison.passed,
+                    comparison.matched_error,
+                    comparison.flagged_matched_error,
                 ]
             )
 
@@ -327,6 +387,24 @@ def write_txt_summary(
             handle.write(f"  mvp:       {first.mvp_value!r}\n")
             handle.write(f"  abs_diff:  {first.abs_diff!r}\n")
             handle.write(f"  rel_diff:  {first.rel_diff!r}\n")
+        if config.warn_on_error_values:
+            flagged = [
+                comparison
+                for comparison in comparisons
+                if comparison.flagged_matched_error
+            ]
+            if flagged:
+                handle.write(
+                    "\nMatched error values (passed, but review scenario setup; "
+                    "set Scenario.expects_error_values=True when intentional):\n"
+                )
+                for comparison in flagged:
+                    handle.write(f"  {comparison.scenario_id} :: ")
+                    handle.write(
+                        f"{comparison.cell_address} ({comparison.cell_label})\n"
+                    )
+                    handle.write(f"    excel: {comparison.excel_value!r}\n")
+                    handle.write(f"    mvp:   {comparison.mvp_value!r}\n")
 
 
 def load_exported_library(import_root: Path, package_name: str) -> ModuleType:
@@ -355,8 +433,7 @@ def run_excel_oracle(
             workbook.app.calculate()
 
             def read(address: str) -> Any:
-                sheet, cell = address.split("!", 1)
-                return workbook.sheets[sheet].range(cell).value
+                return read_cell_value(workbook.sheets, address)
 
             return {address: read(address) for address in output_addresses}
         finally:
@@ -490,7 +567,14 @@ def run_differential_test(config: DifferentialConfig) -> int:
     )
 
     failed = sum(1 for comparison in comparisons if not comparison.passed)
+    flagged = sum(1 for comparison in comparisons if comparison.flagged_matched_error)
     logger.info("Done. Failures: %d / %d", failed, len(comparisons))
+    if config.warn_on_error_values and flagged:
+        logger.warning(
+            "Matched error values in %d comparison(s); see report section in %s",
+            flagged,
+            config.report_dir / "parity_report.txt",
+        )
     return 0 if failed == 0 else 1
 
 
