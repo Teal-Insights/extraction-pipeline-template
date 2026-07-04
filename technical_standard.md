@@ -248,7 +248,7 @@ places, and all three MUST agree:
 - printed in the TXT (`Acceptance bar: 100.00%`);
 - the process **exit code** — `0` iff every comparison passes, `1` if any fail, `2` if a
   prerequisite is missing (no workbook, no Excel, package not generated);
-- CI / reviewer treats any non-`PASS` report as a blocking failure.
+- CI (`.github/workflows/test.yml` on pull requests) and reviewers treat any non-`PASS` report as a blocking failure.
 
 #### 2.4 Reports are versioned artifacts, not scratch output
 
