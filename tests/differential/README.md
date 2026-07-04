@@ -31,6 +31,25 @@ Both harnesses import shared scenario types from
 strings rather than `None`. Workbook-specific hooks live at the bottom of each
 harness module.
 
+### Address keys
+
+`excel-grapher` stores graph keys in **canonical** form. Sheets whose names
+contain spaces, hyphens, or apostrophes are quoted (e.g. `'Discrete Risks'!H2`).
+Human-authored config (`CONSTRAINTS`, scenario matrices, bindings) often uses
+unquoted spellings (`Discrete Risks!H2`). Both refer to the same cell, but naive
+string equality against graph keys fails.
+
+At harness boundaries, import from `excel_grapher.core.address_keys`:
+
+| Helper | Use when |
+|--------|----------|
+| `normalize_key(address)` | Comparing to `leaf_keys()` / `formula_keys()`, calling `graph.set_node_value()`, `graph.get_node()`, `FormulaEvaluator.evaluate()` |
+| `parse_address(normalize_key(address))` | Driving Excel via xlwings/COM (sheet name + A1 coordinate) |
+
+Do **not** re-implement quoting rules or use `split("!", 1)` on sheet-qualified
+addresses inside harness code. Config authors may keep unquoted addresses;
+normalization belongs at the boundary.
+
 ### Graph harness hooks
 
 1. **`build_scenarios()`** or **`build_axes()`** — representative input combinations.

@@ -6,6 +6,13 @@ graph is built from the same ``constraints`` and ``TARGETS`` declared in
 ``workbook_config.py``, so this differential stays in lockstep with extraction
 as the pipeline evolves.
 
+Address keys: ``excel-grapher`` stores sheet-qualified addresses in canonical
+form (e.g. ``'Discrete Risks'!H2``). Human-authored scenario matrices and
+bindings may use unquoted spellings (``Discrete Risks!H2``). Harness drivers
+normalize with ``normalize_key`` before graph lookup and use
+``parse_address(normalize_key(...))`` for xlwings/COM writes — never
+``split("!", 1)`` on sheet-qualified addresses.
+
 Workbook-specific scenario definitions live in the ``Workbook-specific hooks``
 section at the bottom of this module.
 
@@ -39,6 +46,7 @@ from .differential_scenario_inputs import collect_scenario_input_addresses
 from .differential_types import ATOL, Axis, AxisPoint, Scenario
 
 from excel_grapher import XlError
+from excel_grapher.core.address_keys import normalize_key, parse_address
 from excel_grapher.evaluator import FormulaEvaluator
 from excel_grapher.grapher import (
     DependencyGraph,
@@ -246,14 +254,14 @@ class GoldenDriver:
     def reset_inputs(self) -> None:
         """Restore scenario input cells to values captured at sweep start."""
         for key, value in self._input_baselines.items():
-            sheet, addr = key.split("!", 1)
+            sheet, addr = parse_address(normalize_key(key))
             self._book.sheets[sheet].range(addr).value = value
         if self._input_baselines:
             self._app.calculate()
 
     def set_inputs(self, inputs: dict[str, Any]) -> None:
         for key, value in inputs.items():
-            sheet, addr = key.split("!", 1)
+            sheet, addr = parse_address(normalize_key(key))
             self._book.sheets[sheet].range(addr).value = value
         self._app.calculate()
 
@@ -297,10 +305,10 @@ class MvpGraphDriver:
     def record_input_baselines(self, cells: frozenset[str]) -> None:
         """Snapshot baseline values for the union of all scenario input cells."""
         self._input_baselines = {
-            cell: node.value
+            normalize_key(cell): node.value
             for cell in cells
-            if cell in self._known_keys
-            if (node := self._graph.get_node(cell)) is not None
+            if normalize_key(cell) in self._known_keys
+            if (node := self._graph.get_node(normalize_key(cell))) is not None
         }
 
     def reset_inputs(self) -> None:
@@ -310,13 +318,14 @@ class MvpGraphDriver:
 
     def set_inputs(self, inputs: dict[str, Any]) -> None:
         for key, value in inputs.items():
-            if key in self._known_keys:
-                self._graph.set_node_value(key, value)
+            canonical = normalize_key(key)
+            if canonical in self._known_keys:
+                self._graph.set_node_value(canonical, value)
             else:
                 self.missing_cells.add(key)
 
     def read(self, cell: str) -> Any:
-        return self._evaluator.evaluate(cell)
+        return self._evaluator.evaluate(normalize_key(cell))
 
 
 def _resolve_axes() -> tuple[Axis, ...]:
@@ -558,7 +567,11 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
         constraints=config.constraints,
     )
     all_input_cells = collect_scenario_input_addresses(axes, inputs_for_excel)
-    missing_inputs_in_graph = sorted(all_input_cells - mvp._known_keys)  # noqa: SLF001
+    missing_inputs_in_graph = sorted(  # noqa: SLF001
+        cell
+        for cell in all_input_cells
+        if normalize_key(cell) not in mvp._known_keys
+    )
     if missing_inputs_in_graph:
         logger.warning(
             "MVP graph is missing these input cells (set_inputs will skip them): %s",
