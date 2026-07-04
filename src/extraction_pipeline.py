@@ -131,6 +131,7 @@ def write_dependency_graph_artifacts(
         input_keys=series_cell_keys(extraction.input_series),
         output_keys=series_cell_keys(extraction.output_series),
         constant_keys=constant_keys_from_leaf_classification(leaf_classification),
+        timer=extraction.timer,
     )
 
     output_paths = {
@@ -138,6 +139,12 @@ def write_dependency_graph_artifacts(
         "index_html": _artifact_output_path(config, output_dir / "index.html"),
         "dependency_graph_json": _artifact_output_path(
             config, output_dir / "dependency-graph.json"
+        ),
+        "dependencies_dot": _artifact_output_path(
+            config, output_dir / "dependencies.dot"
+        ),
+        "graph_topology_json": _artifact_output_path(
+            config, output_dir / "graph-topology.json"
         ),
         "extraction_summary_json": _artifact_output_path(
             config, output_dir / "extraction-summary.json"

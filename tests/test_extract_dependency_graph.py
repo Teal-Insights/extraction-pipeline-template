@@ -41,6 +41,8 @@ def test_extract_dependency_graph_writes_artifacts(
 
     assert (output_dir / "index.html").is_file()
     assert (output_dir / "dependency-graph.json").is_file()
+    assert (output_dir / "dependencies.dot").is_file()
+    assert (output_dir / "graph-topology.json").is_file()
     summary_path = output_dir / "extraction-summary.json"
     assert summary_path.is_file()
 
