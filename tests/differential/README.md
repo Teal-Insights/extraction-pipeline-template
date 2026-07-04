@@ -24,7 +24,8 @@ callers consume.
 
 Both harnesses import shared scenario types from
 [`differential_types.py`](differential_types.py) (`Scenario`, optional `Axis` /
-`AxisPoint`, and `ATOL`). Golden-master cell reads go through
+`AxisPoint`, and `ATOL`) and input-isolation helpers from
+[`differential_scenario_inputs.py`](differential_scenario_inputs.py). Golden-master cell reads go through
 [`differential_excel.py`](differential_excel.py), which sets xlwings
 `err_to_str=True` so Excel error cells (`#VALUE!`, `#N/A`, …) are returned as
 strings rather than `None`. Workbook-specific hooks live at the bottom of each
@@ -35,6 +36,11 @@ harness module.
 1. **`build_scenarios()`** or **`build_axes()`** — representative input combinations.
 2. **`output_cell_labels()`** — mirror output bindings as `(label, address)` pairs.
 3. **`inputs_for_excel()`** — map each scenario to Excel cell writes.
+
+Before each scenario the graph harness restores every input cell in the union of
+all scenario writes to its workbook baseline, then applies that scenario's
+declared overrides. Undeclared cells therefore do not inherit values from prior
+scenarios.
 
 The graph harness also reports input cells absent from the extracted graph —
 itself a differential signal about extraction coverage.
