@@ -35,6 +35,7 @@ from .differential_excel import (
     matched_error_values,
     read_cell_value,
 )
+from .differential_scenario_inputs import collect_scenario_input_addresses
 from .differential_types import ATOL, Axis, AxisPoint, Scenario
 
 from excel_grapher import XlError
@@ -236,6 +237,19 @@ class GoldenDriver:
         self._app.display_alerts = False
         self._app.screen_updating = False
         self._book = self._app.books.open(str(self._tmp_wb))
+        self._input_baselines: dict[str, Any] = {}
+
+    def record_input_baselines(self, cells: frozenset[str]) -> None:
+        """Snapshot baseline values for the union of all scenario input cells."""
+        self._input_baselines = {cell: self.read(cell) for cell in cells}
+
+    def reset_inputs(self) -> None:
+        """Restore scenario input cells to values captured at sweep start."""
+        for key, value in self._input_baselines.items():
+            sheet, addr = key.split("!", 1)
+            self._book.sheets[sheet].range(addr).value = value
+        if self._input_baselines:
+            self._app.calculate()
 
     def set_inputs(self, inputs: dict[str, Any]) -> None:
         for key, value in inputs.items():
@@ -278,6 +292,20 @@ class MvpGraphDriver:
             self._graph.formula_keys()
         )
         self.missing_cells: set[str] = set()
+        self._input_baselines: dict[str, Any] = {}
+
+    def record_input_baselines(self, cells: frozenset[str]) -> None:
+        """Snapshot baseline values for the union of all scenario input cells."""
+        self._input_baselines = {
+            cell: self._graph.get_node(cell).value
+            for cell in cells
+            if cell in self._known_keys
+        }
+
+    def reset_inputs(self) -> None:
+        """Restore scenario input cells to values captured at sweep start."""
+        for key, value in self._input_baselines.items():
+            self._graph.set_node_value(key, value)
 
     def set_inputs(self, inputs: dict[str, Any]) -> None:
         for key, value in inputs.items():
@@ -528,12 +556,7 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
         targets=config.targets,
         constraints=config.constraints,
     )
-    all_input_cells = {
-        cell
-        for axis in axes
-        for point in axis.points
-        for cell in inputs_for_excel(point.scenario)
-    }
+    all_input_cells = collect_scenario_input_addresses(axes, inputs_for_excel)
     missing_inputs_in_graph = sorted(all_input_cells - mvp._known_keys)  # noqa: SLF001
     if missing_inputs_in_graph:
         logger.warning(
@@ -541,9 +564,14 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
             missing_inputs_in_graph,
         )
 
+    golden.record_input_baselines(all_input_cells)
+    mvp.record_input_baselines(all_input_cells)
+
     try:
         for axis in axes:
             for point in axis.points:
+                golden.reset_inputs()
+                mvp.reset_inputs()
                 cells_in = inputs_for_excel(point.scenario)
                 golden.set_inputs(cells_in)
                 mvp.set_inputs(cells_in)
