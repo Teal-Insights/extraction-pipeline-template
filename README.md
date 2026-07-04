@@ -4,6 +4,22 @@ Cookie-cutter template for turning an Excel financial model into a semantic, dis
 
 See [technical_standard.md](technical_standard.md) for the acceptance bar and [lessons-learned.md](lessons-learned.md) for design rationale.
 
+## Clone and configure (onboarding checklist)
+
+Follow this order when adapting the template to a new workbook. Each step has a stage-gate owner who signs off before the next step begins.
+
+| Step | Owner | Action |
+|---|---|---|
+| 1. Ingest | **Config author** | Clone the repo. Replace `data/workbook.xlsx` and `data/guide.md`. Clear workbook-specific state: delete `bindings/*.bindings.yaml`, `dist/`, and `.cache/`. Point [workbook_config.py](workbook_config.py) paths at the new workbook. |
+| 2. Audit | **Config author** | Run `uv run python -m src.workbook_audit --output artifacts/workbook-audit.md`. Resolve blocking automation (VBA, macros, external links) before graph work. |
+| 3. Configure | **Config author** | Declare extraction targets, author bindings, constrain every dynamic-ref controller, and classify all graph leaves. See [Configure](#1-configure) below. |
+| 4. Extract | **Config author** | Run `uv run python -m src.extraction_pipeline --extract-graph`. Confirm the graph builds without `DynamicRefError`. |
+| 5. Review graph | **Graph reviewer** | Inspect `artifacts/dependency-graph/` (see [artifacts/README.md](artifacts/README.md)). Confirm expected sheets, no spurious nodes, and complete shock/engine paths. Optionally run opt-in LLM dependency audits: `uv run pytest tests/test_extraction_graph_accuracy.py --run-skipped` (requires `OPENAI_API_KEY` and `GRAPH_AUDIT_CASES` in `workbook_config.py`). |
+| 6. Export and test | **Parity owner** | Run the full pipeline (`uv run python -m src.extraction_pipeline`). Run differential parity; on Windows with Excel, re-run from the exported project (see [Test](#4-test)). |
+| 7. Document and refactor | **Config author** | Generate docs, refactor internals behind parity gates, and update committed parity evidence under `data/differential/`. |
+
+Copy the checkbox list in [Checklist for a new workbook](#checklist-for-a-new-workbook) into your extraction tracking issue and check items off as you go.
+
 ## What you provide
 
 Before running the pipeline, populate this repository with workbook-specific inputs:
@@ -53,7 +69,7 @@ Validation checks:
 uv run python -m src.workbook_audit --output artifacts/workbook-audit.md
 ```
 
-See [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the report sections. Optional hooks in [workbook_config.py](workbook_config.py) (`AUDIT_TITLE`, `AUDIT_PUBLIC_INPUTS`, `AUDIT_GUIDE_USE_CASES`) add workbook-specific inventory tables when populated.
+See [artifacts/README.md](artifacts/README.md) and [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for report sections and commit policy. Optional hooks in [workbook_config.py](workbook_config.py) (`AUDIT_TITLE`, `AUDIT_PUBLIC_INPUTS`, `AUDIT_GUIDE_USE_CASES`) add workbook-specific inventory tables when populated.
 
 #### Projection column layout (optional)
 
@@ -69,7 +85,7 @@ Build the dependency graph with provenance enabled and write review artifacts be
 uv run python -m src.extraction_pipeline --extract-graph
 ```
 
-This writes `artifacts/dependency-graph/index.html`, `dependency-graph.json`, and `extraction-summary.json`, then exits. Review graph completeness manually: expected sheets, no spurious nodes, shock/engine paths present. See [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the summary schema.
+This writes `artifacts/dependency-graph/index.html`, `dependency-graph.json`, and `extraction-summary.json`, then exits. Review graph completeness manually (step 5 in the [onboarding checklist](#clone-and-configure-onboarding-checklist)): expected sheets, no spurious nodes, shock/engine paths present. See [artifacts/README.md](artifacts/README.md) for commit policy and [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the summary schema.
 
 You can also build the graph programmatically:
 
@@ -182,16 +198,20 @@ Open `http://localhost:8000/`.
 
 ## Checklist for a new workbook
 
-- [ ] Pre-extraction workbook audit reviewed (`uv run python -m src.workbook_audit`)
-- [ ] Outputs declared as extraction targets in `workbook_config.py`
-- [ ] `bindings/inputs.bindings.yaml` + `outputs.bindings.yaml` validated
-- [ ] Dynamic-ref constraint candidates constrained
-- [ ] All leaves classified; mutable leaves bound
-- [ ] Graph extracts with provenance; manual completeness review done
-- [ ] `dist/` package builds; semantic API scenario runs
-- [ ] Validation bundle exported
-- [ ] Public API uses domain language; docstrings present
-- [ ] Internals refactored; differential parity passes
+Ordered to match the [onboarding checklist](#clone-and-configure-onboarding-checklist):
+
+- [ ] **Ingest:** `data/workbook.xlsx` and `data/guide.md` populated; stale bindings, `dist/`, and `.cache/` cleared
+- [ ] **Audit:** Pre-extraction workbook audit reviewed (`uv run python -m src.workbook_audit`); blocking automation resolved
+- [ ] **Configure:** Outputs declared as extraction targets in `workbook_config.py`
+- [ ] **Configure:** `bindings/inputs.bindings.yaml` + `outputs.bindings.yaml` validated
+- [ ] **Configure:** Dynamic-ref constraint candidates constrained
+- [ ] **Configure:** All leaves classified; mutable leaves bound
+- [ ] **Extract:** Graph extracts with provenance (`--extract-graph`)
+- [ ] **Review graph:** Manual completeness review done; optional LLM dependency audit passed (`pytest --run-skipped`)
+- [ ] **Export:** `dist/` package builds; semantic API scenario runs
+- [ ] **Export:** Validation bundle exported; differential parity passes (Windows Excel sweep when available)
+- [ ] **Document / refactor:** Public API uses domain language; docstrings present
+- [ ] **Document / refactor:** Internals refactored; parity re-confirmed after refactor passes
 
 ## Development
 
@@ -221,4 +241,4 @@ Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (requires `OPEN
 | `.github/workflows/` | Template CI (PR tests) and manual deploy workflow |
 | `technical_standard.md` | Acceptance bar and stage gates |
 | `lessons-learned.md` | Design rationale from the Tiny DSA rehearsal |
-| `artifacts/` | Generated exploration artifacts (dependency graph site) |
+| `artifacts/` | Generated exploration artifacts; see [artifacts/README.md](artifacts/README.md) |
