@@ -13,6 +13,7 @@ def test_load_pipeline_config_reads_workbook_config() -> None:
     assert config.dist_metadata.project_name == "my-model"
     assert config.dist_metadata.package_name == "my_model"
     assert config.docstring_callback_name == "series_docs"
+    assert config.graph_audit_cases == ()
     assert config.canonical_api_example_path.name == "canonical-api-usage.md"
     assert (
         config.repo_relative_posix_path(config.canonical_api_example_path)
