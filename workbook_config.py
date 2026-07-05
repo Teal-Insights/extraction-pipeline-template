@@ -24,6 +24,16 @@ TARGETS: list[str] = []
 # for user-editable inputs. Every graph leaf must appear here.
 CONSTRAINTS: dict[str, object] = {}
 
+# Optional: exact dropdown label literals for enum public inputs, keyed by the
+# public input cell address. Populate when the workbook uses IF/MATCH/CHOOSE
+# guards that compare against reference label cells. Used by configure tests and
+# differential harness label resolution (see tests/differential/workbook_labels.py).
+REFERENCE_LABEL_CELLS: dict[str, tuple[str, ...]] = {}
+
+# Optional: scenario logical values per enum public input, keyed by input cell.
+# Used by tests/test_workbook_labels.py when REFERENCE_LABEL_CELLS is populated.
+REFERENCE_LABEL_SCENARIO_VALUES: dict[str, tuple[str, ...]] = {}
+
 DIST_METADATA = DistProjectMetadata(
     project_name="my-model",
     package_name="my_model",
