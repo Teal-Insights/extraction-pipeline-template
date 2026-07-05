@@ -36,6 +36,8 @@ Each gate has a default owner role. Adapt names to your team; the responsibiliti
 | **Constants distinguished from inputs** | Single-value `Literal[...]` constraints mark lookup/structural data; range constraints mark user-editable inputs. |
 | **Constraints cover all leaves** | Every graph leaf has a typed constraint (`Literal`, `Between`, `RealBetween`, etc.) for codegen, testing, and documentation. |
 
+**Address keys:** `excel-grapher` stores sheet-qualified addresses in canonical form (e.g. `'Discrete Risks'!H2`). Human-authored `CONSTRAINTS` keys and graph `leaf_keys()` may differ in quoting but normalize to the same form via `normalize_cell_type_env_key()` (constraint matching) and `normalize_key()` (graph lookup). Harnesses and audits must normalize before comparing config addresses to graph keys.
+
 `tests/test_workbook_constraints.py` enforces the configure-stage binding and constraint invariants above against the synthetic workbook fixture in CI.
 
 #### 2. Extract
@@ -457,6 +459,9 @@ the section it enforces. Any unchecked box = not conformant.
 
 - [ ] All **three pre-flight checks** run before any scenario: path/package verification,
   staleness (content-hash **hard-fail**), and binding-cell verification (§4).
+- [ ] Sheet-qualified addresses are normalized with `normalize_key` / `parse_address` at harness
+  boundaries before graph lookup or xlwings writes — not compared or split with naive
+  `split("!", 1)` (Configure address-keys note).
 - [ ] The sweep includes the canonical, single-axis, full-factorial, and boundary groups (§5).
 - [ ] The sweep includes an **error/boundary group** that actually *exercises* error-class
   equality — reachable error-return paths and domain edges, not happy-path only (§5).
