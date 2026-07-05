@@ -50,6 +50,31 @@ Do **not** re-implement quoting rules or use `split("!", 1)` on sheet-qualified
 addresses inside harness code. Config authors may keep unquoted addresses;
 normalization belongs at the boundary.
 
+### Workbook-exact dropdown labels
+
+Scenario matrices and exported APIs naturally use clean logical values (`"High"`,
+`"Real interest rate"`). Many workbooks branch with **exact string equality** on
+reference label cells (e.g. `IF($B$2=$B$9, …)`). Writing logical strings to
+public input cells instead of the workbook's exact label literals can silently
+fall through to `""` and produce `#VALUE!` on later projection years — while
+parity still passes when both oracles error the same way.
+
+This is distinct from [address-key normalization](#address-keys) ([issue #51](https://github.com/Teal-Insights/extraction-pipeline-template/issues/51)): #51 covers sheet-qualified **addresses**; [issue #53](https://github.com/Teal-Insights/extraction-pipeline-template/issues/53) covers **cell values** for dropdown/enum inputs.
+
+At the harness boundary:
+
+1. Load reference label literals from project-configured cells (see
+   `REFERENCE_LABEL_CELLS` in `workbook_config.py`).
+2. Keep logical values in scenario definitions and API parameter names.
+3. Resolve logical → workbook-exact immediately before `inputs_for_excel()` /
+   graph `set_inputs()` using [`workbook_labels.py`](workbook_labels.py).
+4. Write the **raw workbook string** — do not strip trailing spaces or suffixes.
+
+Pass `--warn-on-error-values` to flag matched `#VALUE!` / `#N/A` comparisons.
+These still count as passes, but a matched error on a long-horizon output often
+signals a label mismatch rather than an intentional error-boundary scenario.
+Set `expects_error_values=True` on scenarios that deliberately exercise error paths.
+
 ### Graph harness hooks
 
 1. **`build_scenarios()`** or **`build_axes()`** — representative input combinations.
