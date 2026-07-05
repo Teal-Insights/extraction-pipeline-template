@@ -123,8 +123,9 @@ Ordered to match the onboarding checklist in [README.md](README.md#clone-and-con
 [ ] Configure: public enum input labels resolved to workbook reference literals
 [ ] Extract: graph extracts with provenance (--extract-graph)
 [ ] Review graph: manual completeness review done; optional LLM dependency audit passed
+[ ] Verify graph: scenario matrix defined in tests/differential/; graph-oracle parity passes (uv run python -m tests.differential.differential_test_graph)
 [ ] Export: dist package builds; semantic API scenario runs
-[ ] Export: validation bundle exported; differential parity passes
+[ ] Export: validation bundle exported; exported-library differential parity passes
 [ ] Document / refactor: public API uses domain language; docstrings present
 [ ] Document / refactor: internals refactored; parity re-confirmed
 
