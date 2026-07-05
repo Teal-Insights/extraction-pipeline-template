@@ -60,7 +60,10 @@ def test_run_differential_test_requires_scenarios(tmp_path: Path) -> None:
 
 def test_parse_address_after_normalize_key_handles_spaced_sheet_names() -> None:
     assert parse_address(normalize_key("Discrete Risks!H2")) == ("Discrete Risks", "H2")
-    assert parse_address(normalize_key("'Discrete Risks'!H2")) == ("Discrete Risks", "H2")
+    assert parse_address(normalize_key("'Discrete Risks'!H2")) == (
+        "Discrete Risks",
+        "H2",
+    )
 
 
 def test_mvp_graph_driver_normalizes_sheet_names_with_spaces(tmp_path: Path) -> None:

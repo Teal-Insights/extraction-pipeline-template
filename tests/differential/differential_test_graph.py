@@ -568,9 +568,7 @@ def run_sweep(config: GraphDifferentialConfig) -> tuple[list[Trial], list[str]]:
     )
     all_input_cells = collect_scenario_input_addresses(axes, inputs_for_excel)
     missing_inputs_in_graph = sorted(  # noqa: SLF001
-        cell
-        for cell in all_input_cells
-        if normalize_key(cell) not in mvp._known_keys
+        cell for cell in all_input_cells if normalize_key(cell) not in mvp._known_keys
     )
     if missing_inputs_in_graph:
         logger.warning(
