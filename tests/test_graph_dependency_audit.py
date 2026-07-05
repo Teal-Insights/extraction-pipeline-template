@@ -23,7 +23,7 @@ from src.graph_dependency_audit import (
     validate_audit_cases,
 )
 from src.llm_providers import provider_for_model
-from tests.fixtures.synthetic_pipeline import GRAPH_AUDIT_CASES
+from tests.conftest import SyntheticConfiguredPipeline
 
 
 def _formula_node(sheet: str, column: str, row: int, formula: str) -> Node:
@@ -276,9 +276,12 @@ def test_audit_parent_dependencies_batch_with_llm_runs_all_cases() -> None:
 
 
 def test_synthetic_catalog_parents_exist_in_extracted_graph(
-    synthetic_graph,
+    synthetic_configured_pipeline: SyntheticConfiguredPipeline,
 ) -> None:
-    validate_audit_cases(synthetic_graph, GRAPH_AUDIT_CASES)
+    validate_audit_cases(
+        synthetic_configured_pipeline.graph,
+        synthetic_configured_pipeline.config.graph_audit_cases,
+    )
 
 
 def _parent_with_many_children_graph() -> DependencyGraph:
