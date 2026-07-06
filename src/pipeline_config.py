@@ -79,8 +79,7 @@ class PipelineConfig:
 def _load_semantic_label_validation_mode(value: object) -> SemanticLabelValidationMode:
     if value not in ("off", "warn", "error"):
         raise ValueError(
-            "SEMANTIC_LABEL_VALIDATION_MODE must be off, warn, or error; "
-            f"got {value!r}"
+            f"SEMANTIC_LABEL_VALIDATION_MODE must be off, warn, or error; got {value!r}"
         )
     return cast(SemanticLabelValidationMode, value)
 

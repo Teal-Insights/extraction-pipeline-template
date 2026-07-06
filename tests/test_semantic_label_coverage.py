@@ -212,7 +212,9 @@ def test_synthetic_pipeline_config_defaults_validation_to_off(
     synthetic_configured_pipeline: SyntheticConfiguredPipeline,
 ) -> None:
     assert synthetic_configured_pipeline.config.semantic_label_validation_mode == "off"
-    assert synthetic_configured_pipeline.config.semantic_label_exempt_cells == frozenset()
+    assert (
+        synthetic_configured_pipeline.config.semantic_label_exempt_cells == frozenset()
+    )
 
 
 def test_workbook_config_defaults_validation_to_warn() -> None:
