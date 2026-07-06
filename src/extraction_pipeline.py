@@ -50,7 +50,10 @@ from src.qmd_python_validation import (
     render_dist_pyproject_toml,
     write_dist_readme,
 )
-from src.semantic_labeling import label_internal_graph_cells
+from src.semantic_labeling import (
+    enforce_semantic_label_coverage,
+    label_internal_graph_cells,
+)
 from src.subgraph_projection import build_refactor_projection
 
 SeriesResolutionList = Sequence[Mapping[str, Any]]
@@ -276,20 +279,33 @@ def build_pipeline_graph(
             derive_output_series(graph, series_bindings, workbook=config.workbook_path),
         )
 
-    with stage("label_internal_graph_cells"):
-        label_internal_graph_cells(
-            graph=graph,
-            workbook_path=config.workbook_path,
-            input_cells=series_cell_keys(input_series),
-            target_cells=series_cell_keys(output_series),
-            concept_scheme=series_bindings["concept_scheme"],
-        )
-
     with stage("classify_leaves"):
         leaf_classification = classify_leaves_from_constraints(
             config.constraints, graph.leaf_keys()
         )
         graph.leaf_classification = leaf_classification
+
+    input_cell_keys = series_cell_keys(input_series)
+    output_cell_keys = series_cell_keys(output_series)
+
+    with stage("label_internal_graph_cells"):
+        label_internal_graph_cells(
+            graph=graph,
+            workbook_path=config.workbook_path,
+            input_cells=input_cell_keys,
+            target_cells=output_cell_keys,
+            concept_scheme=series_bindings["concept_scheme"],
+        )
+
+    with stage("validate_semantic_label_coverage"):
+        enforce_semantic_label_coverage(
+            graph=graph,
+            input_cells=input_cell_keys,
+            target_cells=output_cell_keys,
+            exempt_cells=config.semantic_label_exempt_cells,
+            mode=config.semantic_label_validation_mode,
+            context="pipeline",
+        )
 
     return graph, series_bindings, input_series, output_series
 
