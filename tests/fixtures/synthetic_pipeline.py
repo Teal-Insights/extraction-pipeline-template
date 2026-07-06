@@ -160,4 +160,6 @@ def synthetic_pipeline_config(
         differential_graph_report_dir_rel=Path("data/differential/graph"),
         graph_output_dir=root / "artifacts" / "dependency-graph",
         graph_audit_cases=GRAPH_AUDIT_CASES,
+        semantic_label_validation_mode="off",
+        semantic_label_exempt_cells=frozenset(),
     )
