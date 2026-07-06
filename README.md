@@ -160,7 +160,7 @@ uv run python -m src.extraction_pipeline
 
 ### Prerequisites
 
-LLM steps (semantic labeling, docstrings, internals refactor, guide rewrites) cache results under `.cache/`. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
+LLM steps (semantic labeling, docstrings, internals refactor, guide rewrites) cache results under `.cache/`. Dependency graph extraction and `OptimalCompression` projection also cache gzipped pickle payloads under `.cache/dependency-graph/` and `.cache/projection/` (keyed by workbook bytes, targets, constraints, bindings, and `excel-grapher` version). Pass `--no-cache` to bypass graph and projection caches for a single run. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
 
 ```bash
 # .env — logging verbosity for pipeline entry points (default: INFO)

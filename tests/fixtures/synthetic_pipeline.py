@@ -80,7 +80,10 @@ def build_synthetic_pipeline_graph(
 ]:
     """Build the dependency graph through the same path as production export."""
     with stub_semantic_labeling():
-        return build_pipeline_graph(config)
+        graph, series_bindings, input_series, output_series, _graph_cache_key = (
+            build_pipeline_graph(config)
+        )
+        return graph, series_bindings, input_series, output_series
 
 
 def write_synthetic_workbook(path: Path) -> Path:
