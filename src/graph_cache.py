@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 
-from excel_grapher.grapher import DependencyGraph, DynamicRefConfig, create_dependency_graph
+from excel_grapher.grapher import (
+    DependencyGraph,
+    DynamicRefConfig,
+    create_dependency_graph,
+)
 
 GRAPH_CACHE_SCHEMA_VERSION = "1.0.0"
 DEFAULT_GRAPH_CACHE_DIR = (
@@ -93,7 +97,9 @@ def _write_graph_meta(
         "node_count": node_count,
         "excel_grapher_version": version("excel-grapher"),
     }
-    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def save_dependency_graph(

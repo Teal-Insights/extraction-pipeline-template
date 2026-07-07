@@ -17,7 +17,6 @@ from src.graph_cache import (
     dependency_graph_cache_key,
     get_or_build_dependency_graph,
     load_dependency_graph,
-    save_dependency_graph,
 )
 from src.projection_cache import (
     clear_projection_cache,
@@ -170,9 +169,7 @@ def test_dependency_graph_cache_key_changes_when_workbook_changes(
     )
     other_workbook = tmp_path / "other-workbook.xlsx"
     write_synthetic_workbook(other_workbook)
-    other_workbook.write_bytes(
-        synthetic_config.workbook_path.read_bytes() + b"padding"
-    )
+    other_workbook.write_bytes(synthetic_config.workbook_path.read_bytes() + b"padding")
     changed_key = dependency_graph_cache_key(
         workbook_path=other_workbook,
         targets=synthetic_config.targets,
@@ -359,7 +356,9 @@ def test_clear_dependency_graph_cache_removes_entries(
     graph_cache_dir: Path,
 ) -> None:
     result = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
-    assert load_dependency_graph(result.cache_key, cache_dir=graph_cache_dir) is not None
+    assert (
+        load_dependency_graph(result.cache_key, cache_dir=graph_cache_dir) is not None
+    )
     clear_dependency_graph_cache(cache_dir=graph_cache_dir)
     assert load_dependency_graph(result.cache_key, cache_dir=graph_cache_dir) is None
 
@@ -386,10 +385,14 @@ def test_extract_graph_cli_supports_no_cache(
 ) -> None:
     from src.extraction_pipeline import main
 
-    with patch("src.extraction_pipeline.load_pipeline_config", return_value=synthetic_config):
+    with patch(
+        "src.extraction_pipeline.load_pipeline_config", return_value=synthetic_config
+    ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
             with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch("src.extraction_pipeline.extract_dependency_graph") as extract:
+                with patch(
+                    "src.extraction_pipeline.extract_dependency_graph"
+                ) as extract:
                     main(["--extract-graph", "--no-cache"])
 
     extract.assert_called_once_with(synthetic_config, no_cache=True)
