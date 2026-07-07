@@ -10,20 +10,29 @@ import time
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
+from typing import cast
 
-from excel_grapher.exporter import OptimalCompression, ProjectionResult
+from excel_grapher.exporter import (
+    OptimalCompression,
+    ProjectionManifest,
+    ProjectionResult,
+)
 from excel_grapher.grapher.graph import DependencyGraph
 
 PROJECTION_CACHE_SCHEMA_VERSION = "1.0.0"
 PROJECTION_STRATEGY = "optimal_compression"
-DEFAULT_PROJECTION_CACHE_DIR = Path(__file__).resolve().parents[1] / ".cache" / "projection"
+DEFAULT_PROJECTION_CACHE_DIR = (
+    Path(__file__).resolve().parents[1] / ".cache" / "projection"
+)
 
 
 def stable_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def projection_cache_key(*, graph_cache_key: str, strategy: str = PROJECTION_STRATEGY) -> str:
+def projection_cache_key(
+    *, graph_cache_key: str, strategy: str = PROJECTION_STRATEGY
+) -> str:
     payload = {
         "cache_schema_version": PROJECTION_CACHE_SCHEMA_VERSION,
         "graph_cache_key": graph_cache_key,
@@ -56,7 +65,9 @@ def _write_projection_meta(
         "projected_node_count": projected_node_count,
         "excel_grapher_version": version("excel-grapher"),
     }
-    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def save_projection_payload(
@@ -69,7 +80,9 @@ def save_projection_payload(
 ) -> None:
     payload_path, meta_path = _cache_paths(cache_dir, cache_key)
     with gzip.open(payload_path, "wb", compresslevel=1) as handle:
-        pickle.dump((projected_graph, manifest), handle, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(
+            (projected_graph, manifest), handle, protocol=pickle.HIGHEST_PROTOCOL
+        )
     _write_projection_meta(
         meta_path,
         cache_key=cache_key,
@@ -82,7 +95,7 @@ def load_projection_payload(
     cache_key: str,
     *,
     cache_dir: Path = DEFAULT_PROJECTION_CACHE_DIR,
-) -> tuple[DependencyGraph, object] | None:
+) -> tuple[DependencyGraph, ProjectionManifest] | None:
     payload_path, _meta_path = _cache_paths(cache_dir, cache_key)
     if not payload_path.is_file():
         return None
@@ -99,14 +112,14 @@ def load_projection_payload(
     if not isinstance(projected_graph, DependencyGraph):
         payload_path.unlink(missing_ok=True)
         return None
-    return projected_graph, manifest
+    return projected_graph, cast(ProjectionManifest, manifest)
 
 
 def rehydrate_projection_result(
     *,
     original_graph: DependencyGraph,
     projected_graph: DependencyGraph,
-    manifest: object,
+    manifest: ProjectionManifest,
 ) -> ProjectionResult:
     return ProjectionResult(
         original_graph=original_graph,
@@ -144,8 +157,7 @@ def get_or_build_refactor_projection(
             )
             elapsed = time.perf_counter() - started
             print(
-                "optimal_compression: cache hit "
-                f"({elapsed:.1f}s, key={cache_key[:12]})"
+                f"optimal_compression: cache hit ({elapsed:.1f}s, key={cache_key[:12]})"
             )
             return ProjectionCacheResult(
                 projection=projection,
