@@ -18,7 +18,6 @@ from tests.fixtures.synthetic_pipeline import (
     build_synthetic_pipeline_graph,
     build_synthetic_projection,
     load_synthetic_series_bindings,
-    stub_semantic_labeling,
     synthetic_pipeline_config,
     write_synthetic_workbook,
 )
@@ -78,13 +77,14 @@ class SyntheticConfiguredPipeline:
     series_bindings: WorkbookSeriesBindings
     input_series: Sequence[Mapping[str, Any]]
     output_series: Sequence[Mapping[str, Any]]
+    internal_series: Sequence[Mapping[str, Any]]
 
 
 @pytest.fixture(scope="session")
 def synthetic_configured_pipeline(
     synthetic_pipeline_config_fixture: PipelineConfig,
 ) -> SyntheticConfiguredPipeline:
-    graph, series_bindings, input_series, output_series = (
+    graph, series_bindings, input_series, output_series, internal_series = (
         build_synthetic_pipeline_graph(synthetic_pipeline_config_fixture)
     )
     return SyntheticConfiguredPipeline(
@@ -93,6 +93,7 @@ def synthetic_configured_pipeline(
         series_bindings=series_bindings,
         input_series=input_series,
         output_series=output_series,
+        internal_series=internal_series,
     )
 
 
@@ -128,9 +129,8 @@ def synthetic_graph_extraction_artifacts(
         synthetic_pipeline_config_fixture,
         graph_output_dir=output_dir,
     )
-    with stub_semantic_labeling():
-        extraction = extract_dependency_graph_result(config)
-        summary = write_dependency_graph_artifacts(extraction, config)
+    extraction = extract_dependency_graph_result(config)
+    summary = write_dependency_graph_artifacts(extraction, config)
     return SyntheticGraphExtractionArtifacts(
         config=config,
         extraction=extraction,
