@@ -33,6 +33,7 @@ from src.formula_clustering import (
     BoundAddressKeys,
     ClusterableGraph,
     FormulaCluster,
+    _require_bound_address_keys,
     cluster_graph_formulas,
     cluster_has_independent_operand_variation,
     formula_nodes_for_clustering,
@@ -229,9 +230,10 @@ def record_refactor_buckets(
     bound_address_keys: BoundAddressKeys,
 ) -> tuple[RefactorBucketRecord, ...]:
     """Classify formula clusters into singleton and cluster refactor target buckets."""
+    resolved_bound_keys = _require_bound_address_keys(bound_address_keys)
     clusters = cluster_graph_formulas(
         graph,
-        bound_address_keys=bound_address_keys,
+        bound_address_keys=resolved_bound_keys,
         variation_mode=config.variation_mode,
         workbook_path=config.workbook_path,
         layout=layout,
@@ -271,7 +273,7 @@ def record_refactor_buckets(
                 cluster,
                 internals_source,
                 layout=layout,
-                bound_address_keys=bound_address_keys,
+                bound_address_keys=resolved_bound_keys,
                 workbook_path=config.workbook_path,
             )
             ctx = (

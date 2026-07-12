@@ -42,7 +42,9 @@ def _require_bound_address_keys(
     if bound_address_keys is None:
         raise ValueError(
             "bound_address_keys is required for formula clustering; "
-            "build it with build_bound_address_keys() from series bindings"
+            "configure series bindings in bindings/*.bindings.yaml, then build "
+            "keys with build_bound_address_keys() from the loaded input, "
+            "output, and internal series"
         )
     return bound_address_keys
 
@@ -61,7 +63,7 @@ class _ClusteringKeyCache:
 
     def warm_from_formulas(self, formulas: Mapping[str, str]) -> None:
         for formula in formulas.values():
-            structural_fingerprint(
+            _structural_fingerprint(
                 formula,
                 bound_address_keys=self.bound_address_keys,
                 workbook_path=self.workbook_path,
@@ -166,11 +168,63 @@ def _binding_key_concepts_for_address(
     return tuple(sorted(keys))
 
 
+def _address_only_structural_tuple(node: AstNode, refs: list[str]) -> tuple:
+    """Build a binding-agnostic skeleton for tests and diagnostics."""
+    if isinstance(node, NumberNode):
+        return ("num",)
+    if isinstance(node, StringNode):
+        return ("str",)
+    if isinstance(node, BoolNode):
+        return ("bool",)
+    if isinstance(node, ErrorNode):
+        return ("err", str(node.error))
+    if isinstance(node, CellRefNode):
+        if node.address not in refs:
+            refs.append(node.address)
+        ref_index = refs.index(node.address)
+        return ("ref", ref_index)
+    if isinstance(node, RangeNode):
+        for address in (node.start, node.end):
+            if address not in refs:
+                refs.append(address)
+        start_index = refs.index(node.start)
+        end_index = refs.index(node.end)
+        return ("range", start_index, end_index)
+    if isinstance(node, WholeColumnNode):
+        return ("wcol", node.sheet, node.column)
+    if isinstance(node, WholeRowNode):
+        return ("wrow", node.sheet, node.row)
+    if isinstance(node, EmptyArgNode):
+        return ("empty",)
+    if isinstance(node, UnaryOpNode):
+        return (
+            "unary",
+            node.op,
+            _address_only_structural_tuple(node.operand, refs),
+        )
+    if isinstance(node, BinaryOpNode):
+        return (
+            "bin",
+            node.op,
+            _address_only_structural_tuple(node.left, refs),
+            _address_only_structural_tuple(node.right, refs),
+        )
+    if isinstance(node, FunctionCallNode):
+        return (
+            "fn",
+            node.name,
+            tuple(
+                _address_only_structural_tuple(arg, refs) for arg in node.args
+            ),
+        )
+    raise TypeError(type(node))
+
+
 def _structural_tuple(
     node: AstNode,
     refs: list[str],
     *,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
@@ -187,8 +241,6 @@ def _structural_tuple(
         if node.address not in refs:
             refs.append(node.address)
         ref_index = refs.index(node.address)
-        if bound_address_keys is None:
-            return ("ref", ref_index)
         key_concepts = _binding_key_concepts_for_address(
             node.address,
             bound_address_keys,
@@ -205,8 +257,6 @@ def _structural_tuple(
                 refs.append(address)
         start_index = refs.index(node.start)
         end_index = refs.index(node.end)
-        if bound_address_keys is None:
-            return ("range", start_index, end_index)
         start_keys = _binding_key_concepts_for_address(
             node.start,
             bound_address_keys,
@@ -283,15 +333,14 @@ def _structural_tuple(
     raise TypeError(type(node))
 
 
-def structural_fingerprint(
+def _structural_fingerprint(
     normalized_formula: str,
     *,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> StructuralFingerprint | None:
-    """Return ``(skeleton, refs)`` with refs in deterministic AST visit order."""
     try:
         ast = parse(_formula_body(normalized_formula))
     except FormulaParseError:
@@ -307,6 +356,37 @@ def structural_fingerprint(
             key_cache=key_cache,
         ),
         tuple(refs),
+    )
+
+
+def address_only_structural_fingerprint(
+    normalized_formula: str,
+) -> StructuralFingerprint | None:
+    """Return a binding-agnostic ``(skeleton, refs)`` for tests and diagnostics."""
+    try:
+        ast = parse(_formula_body(normalized_formula))
+    except FormulaParseError:
+        return None
+    refs: list[str] = []
+    return (_address_only_structural_tuple(ast, refs), tuple(refs))
+
+
+def structural_fingerprint(
+    normalized_formula: str,
+    *,
+    bound_address_keys: BoundAddressKeys,
+    workbook_path: Path | None = None,
+    layout: ProjectionColumnLayout | None = None,
+    key_cache: _ClusteringKeyCache | None = None,
+) -> StructuralFingerprint | None:
+    """Return ``(skeleton, refs)`` with binding-aware ref placeholders."""
+    resolved_bound_keys = _require_bound_address_keys(bound_address_keys)
+    return _structural_fingerprint(
+        normalized_formula,
+        bound_address_keys=resolved_bound_keys,
+        workbook_path=workbook_path,
+        layout=layout,
+        key_cache=key_cache,
     )
 
 
@@ -340,7 +420,7 @@ def _binding_aware_fingerprint_complete(
     return walk(skeleton)
 
 
-def formulas_are_parameterizable(
+def _formulas_are_parameterizable(
     left_formula: str,
     right_formula: str,
     *,
@@ -350,15 +430,14 @@ def formulas_are_parameterizable(
     key_cache: _ClusteringKeyCache | None = None,
 ) -> bool:
     """Return whether two normalized formulas belong in the same parameterizable bucket."""
-    _require_bound_address_keys(bound_address_keys)
-    left_fingerprint = structural_fingerprint(
+    left_fingerprint = _structural_fingerprint(
         left_formula,
         bound_address_keys=bound_address_keys,
         workbook_path=workbook_path,
         layout=layout,
         key_cache=key_cache,
     )
-    right_fingerprint = structural_fingerprint(
+    right_fingerprint = _structural_fingerprint(
         right_formula,
         bound_address_keys=bound_address_keys,
         workbook_path=workbook_path,
@@ -381,6 +460,27 @@ def formulas_are_parameterizable(
     return True
 
 
+def formulas_are_parameterizable(
+    left_formula: str,
+    right_formula: str,
+    *,
+    bound_address_keys: BoundAddressKeys,
+    workbook_path: Path | None = None,
+    layout: ProjectionColumnLayout | None = None,
+    key_cache: _ClusteringKeyCache | None = None,
+) -> bool:
+    """Return whether two normalized formulas belong in the same parameterizable bucket."""
+    _require_bound_address_keys(bound_address_keys)
+    return _formulas_are_parameterizable(
+        left_formula,
+        right_formula,
+        bound_address_keys=bound_address_keys,
+        workbook_path=workbook_path,
+        layout=layout,
+        key_cache=key_cache,
+    )
+
+
 def _should_cluster(
     left_formula: str,
     right_formula: str,
@@ -390,7 +490,7 @@ def _should_cluster(
     layout: ProjectionColumnLayout | None,
     key_cache: _ClusteringKeyCache | None,
 ) -> bool:
-    return formulas_are_parameterizable(
+    return _formulas_are_parameterizable(
         left_formula,
         right_formula,
         bound_address_keys=bound_address_keys,
@@ -409,7 +509,7 @@ def _ref_position_key_values(
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> list[dict[str, BindingKeyValue]] | None:
-    fingerprint = structural_fingerprint(
+    fingerprint = _structural_fingerprint(
         formula,
         bound_address_keys=bound_address_keys,
         workbook_path=workbook_path,
@@ -551,7 +651,7 @@ def _split_cluster_by_dominant_keys(
         return (members,)
 
     canonical_formula = formula_nodes[members[0]]
-    fingerprint = structural_fingerprint(
+    fingerprint = _structural_fingerprint(
         canonical_formula,
         bound_address_keys=bound_address_keys,
         workbook_path=workbook_path,
@@ -710,7 +810,7 @@ def cluster_graph_formulas(
             if _should_cluster(
                 formula_nodes[left_address],
                 formula_nodes[right_address],
-                bound_address_keys=bound_address_keys,
+                bound_address_keys=resolved_bound_keys,
                 workbook_path=workbook_path,
                 layout=layout,
                 key_cache=key_cache,
@@ -729,7 +829,7 @@ def cluster_graph_formulas(
                 _split_cluster_by_dominant_keys(
                     ordered_members,
                     formula_nodes,
-                    bound_address_keys,
+                    resolved_bound_keys,
                     workbook_path=workbook_path,
                     layout=layout,
                     key_cache=key_cache,

@@ -7,6 +7,7 @@ from excel_grapher.grapher.node import Node
 
 from src.formula_clustering import (
     FormulaCluster,
+    address_only_structural_fingerprint,
     cluster_graph_formulas,
     cluster_has_independent_operand_variation,
     formulas_are_parameterizable,
@@ -30,7 +31,11 @@ def _formula_node(sheet: str, column: str, row: int, formula: str) -> Node:
 
 
 def _debt_to_gdp_anchor_recurrence_graph() -> DependencyGraph:
-    """Graph where period-1 anchor differs structurally from the recurrence chain."""
+    """Graph where the period-1 anchor uses different cell refs than the recurrence chain.
+
+    Under binding-aware fingerprints the formulas still share the same skeleton
+    because every operand varies only on ``TIME_PERIOD``.
+    """
     graph = DependencyGraph()
     formulas = {
         "Engine!C20": ("=Inputs!B6*(1+Inputs!C17/100)/(1+Inputs!C16/100)-Engine!C16"),
@@ -43,6 +48,20 @@ def _debt_to_gdp_anchor_recurrence_graph() -> DependencyGraph:
         sheet, column, row = parse_workbook_address(address)
         graph.add_node(_formula_node(sheet, column, row, formula))
     return graph
+
+
+def _debt_to_gdp_bindings() -> dict[str, dict[str, int]]:
+    bindings: dict[str, dict[str, int]] = {}
+    for col, time_period in zip("BCDEFG", range(1, 7), strict=True):
+        bindings[f"Inputs!{col}6"] = {"TIME_PERIOD": time_period}
+        bindings[f"Inputs!{col}16"] = {"TIME_PERIOD": time_period}
+        bindings[f"Inputs!{col}17"] = {"TIME_PERIOD": time_period}
+    for col, time_period in zip("CDEFG", range(2, 7), strict=True):
+        bindings[f"Engine!{col}16"] = {"TIME_PERIOD": time_period}
+        bindings[f"Engine!{col}20"] = {"TIME_PERIOD": time_period}
+    bindings["Engine!C16"] = {"TIME_PERIOD": 1}
+    bindings["Engine!C20"] = {"TIME_PERIOD": 1}
+    return bindings
 
 
 def _trade_balance_graph() -> DependencyGraph:
@@ -88,17 +107,6 @@ MISMATCHED_KEY_SET_BINDINGS = {
     "Inputs!D16": {"REF_AREA": "DE"},
 }
 
-DEBT_TO_GDP_BINDINGS: dict[str, dict[str, int]] = {}
-for col, time_period in zip("BCDEFG", range(1, 7), strict=True):
-    DEBT_TO_GDP_BINDINGS[f"Inputs!{col}6"] = {"TIME_PERIOD": time_period}
-    DEBT_TO_GDP_BINDINGS[f"Inputs!{col}16"] = {"TIME_PERIOD": time_period}
-    DEBT_TO_GDP_BINDINGS[f"Inputs!{col}17"] = {"TIME_PERIOD": time_period}
-for col, time_period in zip("CDEFG", range(2, 7), strict=True):
-    DEBT_TO_GDP_BINDINGS[f"Engine!{col}16"] = {"TIME_PERIOD": time_period}
-    DEBT_TO_GDP_BINDINGS[f"Engine!{col}20"] = {"TIME_PERIOD": time_period}
-DEBT_TO_GDP_BINDINGS["Engine!C16"] = {"TIME_PERIOD": 1}
-DEBT_TO_GDP_BINDINGS["Engine!C20"] = {"TIME_PERIOD": 1}
-
 VARIABLE_COUNTRY_PAIR_BINDINGS = {
     "Inputs!B10": {"REF_AREA": "US", "TIME_PERIOD": 1},
     "Inputs!C10": {"REF_AREA": "CN", "TIME_PERIOD": 1},
@@ -118,12 +126,20 @@ ENGINE_REF_LAYOUT = ProjectionColumnLayout(
 
 
 def test_structural_fingerprint_abstracts_cell_addresses_and_scalars() -> None:
-    left = structural_fingerprint("=Paris!B13+1")
-    right_address = structural_fingerprint("=Paris!B14+2")
+    left = address_only_structural_fingerprint("=Paris!B13+1")
+    right_address = address_only_structural_fingerprint("=Paris!B14+2")
     assert left is not None
     assert right_address is not None
     assert left[0] == right_address[0]
     assert left[1] != right_address[1]
+
+
+def test_structural_fingerprint_requires_bound_address_keys() -> None:
+    with pytest.raises(ValueError, match="bound_address_keys is required"):
+        structural_fingerprint(
+            "=Paris!B13+1",
+            bound_address_keys=None,  # type: ignore[arg-type]
+        )
 
 
 def test_binding_aware_fingerprint_includes_sorted_key_concepts() -> None:
@@ -353,7 +369,7 @@ def test_dominant_key_only_variation_mode_splits_cluster() -> None:
 def test_cluster_graph_formulas_groups_debt_recurrence_chain_with_binding_keys() -> None:
     clusters = cluster_graph_formulas(
         _debt_to_gdp_anchor_recurrence_graph(),
-        bound_address_keys=DEBT_TO_GDP_BINDINGS,
+        bound_address_keys=_debt_to_gdp_bindings(),
     )
     debt_clusters = [
         cluster
