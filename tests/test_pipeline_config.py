@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from src.pipeline_config import (
@@ -40,6 +42,13 @@ def test_load_pipeline_config_rejects_invalid_variation_mode(
     monkeypatch.setattr(workbook_config, "VARIATION_MODE", "all_keys")
     with pytest.raises(ValueError, match="VARIATION_MODE"):
         load_pipeline_config()
+
+
+def test_repo_relative_posix_path_falls_back_outside_repo(tmp_path: Path) -> None:
+    config = load_pipeline_config()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x", encoding="utf-8")
+    assert config.repo_relative_posix_path(outside) == outside.resolve().as_posix()
 
 
 def test_validate_pipeline_config_reports_missing_inputs() -> None:
