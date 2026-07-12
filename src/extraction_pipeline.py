@@ -4,7 +4,7 @@ import argparse
 import json
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence, cast, get_args, get_origin
 
@@ -52,6 +52,7 @@ from src.qmd_python_validation import (
     render_dist_pyproject_toml,
     write_dist_readme,
 )
+from src.formula_clustering import VariationMode
 from src.graph_cache import get_or_build_dependency_graph
 from src.subgraph_projection import build_refactor_projection
 
@@ -448,6 +449,7 @@ tests/results/local/
     formula_clusters = cluster_graph_formulas(
         refactor_projection,
         bound_address_keys=bound_address_keys,
+        variation_mode=config.variation_mode,
         workbook_path=config.workbook_path,
         layout=config.projection_layout,
     )
@@ -475,9 +477,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Bypass on-disk graph and projection caches for this run.",
     )
+    parser.add_argument(
+        "--variation-mode",
+        choices=cast(tuple[str, ...], get_args(VariationMode)),
+        help=(
+            "Formula-cluster variation mode for internals refactor "
+            '(default: workbook_config.VARIATION_MODE or "independent").'
+        ),
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     config = load_pipeline_config()
+    if args.variation_mode is not None:
+        config = replace(
+            config, variation_mode=cast(VariationMode, args.variation_mode)
+        )
     validate_pipeline_config(config)
     activate_pipeline_config(config)
     if args.extract_graph:

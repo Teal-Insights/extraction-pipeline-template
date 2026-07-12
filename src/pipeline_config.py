@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from src.formula_clustering import VariationMode
 from src.graph_dependency_audit import GraphAuditCase
 from src.internal_binding_coverage import InternalBindingValidationMode
 from src.workbook_addresses import ProjectionColumnLayout
@@ -57,6 +58,7 @@ class PipelineConfig:
     graph_audit_cases: tuple[GraphAuditCase, ...] = ()
     internal_binding_validation_mode: InternalBindingValidationMode = "warn"
     internal_binding_exempt_cells: frozenset[str] = frozenset()
+    variation_mode: VariationMode = "independent"
 
     @property
     def package_root(self) -> Path:
@@ -97,6 +99,14 @@ def _load_internal_binding_exempt_cells(value: object) -> frozenset[str]:
         "INTERNAL_BINDING_EXEMPT_CELLS must be a frozenset, set, list, or tuple "
         f"of sheet-qualified addresses; got {type(value).__name__}"
     )
+
+
+def _load_variation_mode(value: object) -> VariationMode:
+    if value not in ("independent", "dominant_key_only"):
+        raise ValueError(
+            f"VARIATION_MODE must be independent or dominant_key_only; got {value!r}"
+        )
+    return cast(VariationMode, value)
 
 
 def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
@@ -163,6 +173,9 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
     internal_binding_exempt_cells = _load_internal_binding_exempt_cells(
         getattr(user_config, "INTERNAL_BINDING_EXEMPT_CELLS", frozenset())
     )
+    variation_mode = _load_variation_mode(
+        getattr(user_config, "VARIATION_MODE", "independent")
+    )
 
     if not isinstance(dist_metadata, DistProjectMetadata):
         raise TypeError("workbook_config.DIST_METADATA must be a DistProjectMetadata")
@@ -194,6 +207,7 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
         graph_audit_cases=graph_audit_cases,
         internal_binding_validation_mode=internal_binding_validation_mode,
         internal_binding_exempt_cells=internal_binding_exempt_cells,
+        variation_mode=variation_mode,
     )
 
 

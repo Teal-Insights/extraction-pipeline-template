@@ -96,6 +96,10 @@ INTERNAL_BINDING_VALIDATION_MODE: InternalBindingValidationMode = "warn"
 # Sheet-qualified formula addresses reviewed and intentionally allowed to remain unbound.
 INTERNAL_BINDING_EXEMPT_CELLS: frozenset[str] = frozenset()
 
+# Formula-cluster variation mode for internals refactor (independent or dominant_key_only).
+# Override per run with ``--variation-mode`` on ``src.extraction_pipeline``.
+VARIATION_MODE = "independent"
+
 # Optional hooks for ``uv run python -m src.workbook_audit`` (pre-extraction audit).
 AUDIT_TITLE = "Workbook Audit"
 AUDIT_PUBLIC_INPUTS: tuple[tuple[str, str, str], ...] = ()
