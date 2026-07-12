@@ -112,6 +112,10 @@ def test_run_record_refactor_buckets_writes_codegen_outside_dist(
         "src.record_refactor_buckets.configure_docstring_callback",
         _stub_configure_docstring_callback,
     )
+    monkeypatch.setattr(
+        "src.internals_refactor.allowed_runtime_symbols",
+        lambda: ("XlError", "xl_cell", "xl_eval"),
+    )
     activate_pipeline_config(config)
     report = run_record_refactor_buckets(
         config,
