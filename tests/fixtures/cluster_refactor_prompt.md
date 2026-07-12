@@ -1,5 +1,9 @@
 You will be provided mechanical Python translations of a cluster of Excel formula cells. Your task is to refactor them into a single domain-aware parameterized Python function.
 
+## When this contract applies
+
+This is the member-sweep cluster contract. It applies when the cluster varies only along the sweep keys of its member cells: one parameter per varying binding dimension, with derivable lags and offsets kept inside the helper body. Clusters whose formula operands vary independently along one concept are refactored under a separate dimension-aware contract and never reach this prompt; if the provided cluster appears to need per-operand parameterization anyway, declare an error instead of inventing parameters.
+
 ## Output format
 
 Return only JSON matching the response schema:
@@ -162,7 +166,7 @@ Return only JSON matching the response schema:
 - `parameters[].name` must match `suggested_param_name` from `key_vocabulary`.
 - Parameters represent varying keys of the cluster member cells. Do not introduce additional parameters; this is not supported.
 - Derive a reference period inside the helper when it follows from a member parameter.
-- Independently varying operand values for the same dimension are currently unsupported; distinct dimension ids prevent identity collisions for member keys and parameters but do not lift the operand-level variation restriction.
+- Independently varying operand values for the same dimension are unsupported under this contract; such clusters are handled by the dimension-aware contract instead. Distinct dimension ids prevent identity collisions for member keys and parameters but do not lift the operand-level variation restriction here.
 
 ## Member keys
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -30,10 +30,12 @@ from src.internals_refactor import (
     apply_cluster_collapse,
     apply_phase_c,
     apply_singleton_refactor_plan,
+    build_cluster_refactor_context,
     build_singleton_refactor_context,
     collapse_bindings_for_response,
     llm_refactor_cluster,
     llm_refactor_singleton,
+    load_cluster_refactor_prompt_fixed_portion,
     prompt_payload,
     raise_if_llm_declared_error,
     refactor_cache_key,
@@ -51,7 +53,7 @@ from src.internals_refactor import (
 from src.llm_json import DEFAULT_MAX_ATTEMPTS
 from src.refactor_parity_gate import ParityError
 from excel_grapher.exporter import ProjectionResult
-from src.refactor_bindings import KeyConceptSpec
+from src.refactor_bindings import BindingKeyValue, KeyConceptSpec
 from src.workbook_addresses import ProjectionColumnLayout
 
 ALLOWED_RUNTIME_SYMBOLS = (
@@ -1232,3 +1234,433 @@ def test_llm_refactor_singleton_declared_error_writes_diagnostic_dump(
     )
     assert llm_response["error"] is True
     assert llm_response["error_reason"] == "Ambiguous naming hints; aborting."
+
+
+# --- Dual cluster-refactor contracts (issue #74) ---
+
+DUAL_PERIOD_LAYOUT = ProjectionColumnLayout(
+    engine_sheet="Engine",
+    engine_columns=("C", "D"),
+    outputs_sheet="Outputs",
+    outputs_column_to_engine={},
+    time_period_to_engine_column={1: "C", 2: "D"},
+    projection_dimension_id="PROJECTION_PERIOD",
+)
+
+DUAL_PERIOD_VOCABULARY = (
+    KeyConceptSpec(
+        dimension_id="PROJECTION_PERIOD",
+        concept="TIME_PERIOD",
+        dtype="int",
+        suggested_param_name="projection_period",
+    ),
+    KeyConceptSpec(
+        dimension_id="REFERENCE_PERIOD",
+        concept="TIME_PERIOD",
+        dtype="int",
+        suggested_param_name="reference_period",
+    ),
+)
+
+DUAL_PERIOD_CONTEXT = replace(
+    CLUSTER_CONTEXT,
+    key_vocabulary=DUAL_PERIOD_VOCABULARY,
+    expected_member_keys={
+        "Engine!C6": {"PROJECTION_PERIOD": 1, "REFERENCE_PERIOD": 0},
+        "Engine!D6": {"PROJECTION_PERIOD": 2, "REFERENCE_PERIOD": 0},
+    },
+    contract="dimension_aware",
+)
+
+DUAL_PERIOD_DOCSTRING = (
+    "Return the indicator change relative to its reference period.\n\n"
+    "Args:\n    ctx: Workbook evaluation context.\n"
+    "    projection_period: Projection period index.\n"
+    "    reference_period: Reference period index.\n\n"
+    "Returns:\n    Current value minus the reference-period value.\n"
+)
+
+DUAL_PERIOD_SOURCE = f'''def indicator_change_from_reference(ctx, projection_period, reference_period):
+    """{DUAL_PERIOD_DOCSTRING}"""
+    column_by_period = {{0: 'B', 1: 'C', 2: 'D'}}
+    current_value = xl_cell(ctx, f'Inputs!{{column_by_period[projection_period]}}1')
+    reference_value = xl_cell(ctx, f'Inputs!{{column_by_period[reference_period]}}1')
+    return current_value - reference_value
+'''
+
+DUAL_PERIOD_PARAMETERS = (
+    HelperParameter(
+        name="projection_period", dimension_id="PROJECTION_PERIOD", dtype="int"
+    ),
+    HelperParameter(
+        name="reference_period", dimension_id="REFERENCE_PERIOD", dtype="int"
+    ),
+)
+
+DUAL_PERIOD_MEMBER_KEYS = (
+    MemberKeys(
+        address="Engine!C6",
+        function_name="cell_engine_c6",
+        keys=(
+            MemberKeyEntry(dimension_id="PROJECTION_PERIOD", value=1),
+            MemberKeyEntry(dimension_id="REFERENCE_PERIOD", value=0),
+        ),
+    ),
+    MemberKeys(
+        address="Engine!D6",
+        function_name="cell_engine_d6",
+        keys=(
+            MemberKeyEntry(dimension_id="PROJECTION_PERIOD", value=2),
+            MemberKeyEntry(dimension_id="REFERENCE_PERIOD", value=0),
+        ),
+    ),
+)
+
+
+def _dimension_aware_response(
+    *,
+    parameters: tuple[HelperParameter, ...] = DUAL_PERIOD_PARAMETERS,
+    member_keys: tuple[MemberKeys, ...] = DUAL_PERIOD_MEMBER_KEYS,
+) -> ClusterRefactorResponse:
+    return ClusterRefactorResponse(
+        helper_name="indicator_change_from_reference",
+        helper_docstring=DUAL_PERIOD_DOCSTRING,
+        parameters=parameters,
+        helper_source=DUAL_PERIOD_SOURCE,
+        member_keys=member_keys,
+    )
+
+
+def test_validate_dimension_aware_accepts_counterpart_parameters() -> None:
+    """Contract B accepts two parameters sharing one concept via distinct ids."""
+    with patch(
+        "src.internals_refactor._resolved_projection_layout",
+        return_value=DUAL_PERIOD_LAYOUT,
+    ):
+        validate_cluster_refactor_response(
+            DUAL_PERIOD_CONTEXT,
+            _dimension_aware_response(),
+            existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+            internals_source=PRISTINE_CLUSTER,
+        )
+
+
+def test_validate_dimension_aware_rejects_collapsed_concept_parameter() -> None:
+    """Contract B rejects one concept parameter standing in for two dimensions."""
+    collapsed_member_keys = (
+        MemberKeys(
+            address="Engine!C6",
+            function_name="cell_engine_c6",
+            keys=(MemberKeyEntry(dimension_id="PROJECTION_PERIOD", value=1),),
+        ),
+        MemberKeys(
+            address="Engine!D6",
+            function_name="cell_engine_d6",
+            keys=(MemberKeyEntry(dimension_id="PROJECTION_PERIOD", value=2),),
+        ),
+    )
+    with patch(
+        "src.internals_refactor._resolved_projection_layout",
+        return_value=DUAL_PERIOD_LAYOUT,
+    ):
+        with pytest.raises(ValueError, match="collapses distinct dimensions"):
+            validate_cluster_refactor_response(
+                DUAL_PERIOD_CONTEXT,
+                _dimension_aware_response(
+                    parameters=(DUAL_PERIOD_PARAMETERS[0],),
+                    member_keys=collapsed_member_keys,
+                ),
+                existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+                internals_source=PRISTINE_CLUSTER,
+            )
+
+
+def test_prepare_dimension_aware_rejects_bare_concept_dimension_id() -> None:
+    """A parameter keyed by the shared concept name cannot pick a dimension."""
+    ambiguous_parameters = (
+        HelperParameter(
+            name="projection_period", dimension_id="TIME_PERIOD", dtype="int"
+        ),
+        DUAL_PERIOD_PARAMETERS[1],
+    )
+    with pytest.raises(ValueError, match="ambiguous binding key"):
+        _prepare_cluster_refactor_response(
+            _dimension_aware_response(parameters=ambiguous_parameters),
+            DUAL_PERIOD_CONTEXT,
+        )
+
+
+COUNTERPART_REF_AREA_SPEC = KeyConceptSpec(
+    dimension_id="COUNTERPART_REF_AREA",
+    concept="REF_AREA",
+    dtype="str",
+    suggested_param_name="counterpart_ref_area",
+)
+
+REF_AREA_SPEC = KeyConceptSpec(
+    dimension_id="REF_AREA",
+    concept="REF_AREA",
+    dtype="str",
+    suggested_param_name="ref_area",
+)
+
+
+def test_validate_member_sweep_rejects_invented_counterpart_parameter() -> None:
+    """Contract A rejects parameters beyond the member cells' varying keys."""
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        key_vocabulary=KEY_VOCABULARY + (COUNTERPART_REF_AREA_SPEC,),
+    )
+    invented_parameters = CLUSTER_PARAMETERS + (
+        HelperParameter(
+            name="counterpart_ref_area",
+            dimension_id="COUNTERPART_REF_AREA",
+            dtype="str",
+        ),
+    )
+    with patch(
+        "src.internals_refactor._resolved_projection_layout",
+        return_value=TEST_LAYOUT,
+    ):
+        with pytest.raises(
+            ValueError, match="parameters must match varying binding key dimensions"
+        ):
+            validate_cluster_refactor_response(
+                ctx,
+                _cluster_response(parameters=invented_parameters),
+                existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+                internals_source=PRISTINE_CLUSTER,
+            )
+
+
+TRADE_BALANCE_CLUSTER = FormulaCluster(
+    cluster_id=7,
+    members=("Engine!B5", "Engine!C5", "Engine!D5"),
+    canonical_template="=Inputs!B10-Inputs!C10",
+    row=5,
+)
+
+TRADE_BALANCE_FORMULAS = {
+    "Engine!B5": "=Inputs!B10-Inputs!C10",
+    "Engine!C5": "=Inputs!B11-Inputs!C11",
+    "Engine!D5": "=Inputs!B12-Inputs!C12",
+}
+
+TRADE_BALANCE_INTERNALS = (
+    RUNTIME_IMPORT
+    + """
+# --- Formula cell functions ---
+
+def cell_engine_b5(ctx):
+    return xl_cell(ctx, 'Inputs!B10') - xl_cell(ctx, 'Inputs!C10')
+
+def cell_engine_c5(ctx):
+    return xl_cell(ctx, 'Inputs!B11') - xl_cell(ctx, 'Inputs!C11')
+
+def cell_engine_d5(ctx):
+    return xl_cell(ctx, 'Inputs!B12') - xl_cell(ctx, 'Inputs!C12')
+"""
+)
+
+VARIABLE_PAIR_OPERAND_KEYS: dict[str, dict[str, BindingKeyValue]] = {
+    "Inputs!B10": {"REF_AREA": "US", "TIME_PERIOD": 1},
+    "Inputs!C10": {"REF_AREA": "CN", "TIME_PERIOD": 1},
+    "Inputs!B11": {"REF_AREA": "DE", "TIME_PERIOD": 1},
+    "Inputs!C11": {"REF_AREA": "FR", "TIME_PERIOD": 1},
+    "Inputs!B12": {"REF_AREA": "JP", "TIME_PERIOD": 1},
+    "Inputs!C12": {"REF_AREA": "KR", "TIME_PERIOD": 1},
+}
+
+
+class _ClusterProjectionStub:
+    def __init__(
+        self,
+        formulas: dict[str, str],
+        dependencies: dict[str, tuple[str, ...]],
+    ) -> None:
+        self._formulas = formulas
+        self._dependencies = dependencies
+
+    def get_node(self, address: str) -> _ProjectionNode | None:
+        formula = self._formulas.get(address)
+        if formula is None:
+            return None
+        return _ProjectionNode(normalized_formula=formula)
+
+    def get_dependencies(self, address: str) -> tuple[str, ...]:
+        return self._dependencies.get(address, ())
+
+
+def _trade_balance_projection() -> ProjectionResult:
+    dependencies = {
+        "Engine!B5": ("Inputs!B10", "Inputs!C10"),
+        "Engine!C5": ("Inputs!B11", "Inputs!C11"),
+        "Engine!D5": ("Inputs!B12", "Inputs!C12"),
+    }
+    return cast(
+        ProjectionResult,
+        _ClusterProjectionStub(TRADE_BALANCE_FORMULAS, dependencies),
+    )
+
+
+def _write_trade_balance_internals(tmp_path: Path) -> Path:
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(TRADE_BALANCE_INTERNALS, encoding="utf-8")
+    return internals_path
+
+
+def test_build_cluster_refactor_context_skips_unroutable_operand_variation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without counterpart dimension ids the cluster keeps today's skip."""
+    monkeypatch.setattr(
+        "src.internals_refactor.allowed_runtime_symbols",
+        lambda: ALLOWED_RUNTIME_SYMBOLS,
+    )
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
+        **VARIABLE_PAIR_OPERAND_KEYS,
+        "Engine!B5": {"REF_AREA": "US"},
+        "Engine!C5": {"REF_AREA": "DE"},
+        "Engine!D5": {"REF_AREA": "JP"},
+    }
+    ctx = build_cluster_refactor_context(
+        _trade_balance_projection(),
+        TRADE_BALANCE_CLUSTER,
+        _write_trade_balance_internals(tmp_path),
+        bound_address_keys=bound_address_keys,
+        key_vocabulary=(KEY_VOCABULARY[0], REF_AREA_SPEC),
+        workbook_path=tmp_path / "workbook.xlsx",
+        bindings_path=tmp_path / "bindings",
+    )
+    assert ctx is None
+
+
+def test_build_cluster_refactor_context_selects_dimension_aware_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct dimension ids on the member cells unlock Contract B."""
+    monkeypatch.setattr(
+        "src.internals_refactor.allowed_runtime_symbols",
+        lambda: ALLOWED_RUNTIME_SYMBOLS,
+    )
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
+        **VARIABLE_PAIR_OPERAND_KEYS,
+        "Engine!B5": {"REF_AREA": "US", "COUNTERPART_REF_AREA": "CN"},
+        "Engine!C5": {"REF_AREA": "DE", "COUNTERPART_REF_AREA": "FR"},
+        "Engine!D5": {"REF_AREA": "JP", "COUNTERPART_REF_AREA": "KR"},
+    }
+    ctx = build_cluster_refactor_context(
+        _trade_balance_projection(),
+        TRADE_BALANCE_CLUSTER,
+        _write_trade_balance_internals(tmp_path),
+        bound_address_keys=bound_address_keys,
+        key_vocabulary=(KEY_VOCABULARY[0], REF_AREA_SPEC, COUNTERPART_REF_AREA_SPEC),
+        workbook_path=tmp_path / "workbook.xlsx",
+        bindings_path=tmp_path / "bindings",
+    )
+    assert ctx is not None
+    assert ctx.contract == "dimension_aware"
+    assert ctx.expected_member_keys["Engine!B5"] == {
+        "REF_AREA": "US",
+        "COUNTERPART_REF_AREA": "CN",
+    }
+
+
+def test_build_cluster_refactor_context_defaults_to_member_sweep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain sweep cluster keeps Contract A."""
+    monkeypatch.setattr(
+        "src.internals_refactor.allowed_runtime_symbols",
+        lambda: ALLOWED_RUNTIME_SYMBOLS,
+    )
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
+        "Inputs!B10": {"TIME_PERIOD": 1},
+        "Inputs!C10": {"TIME_PERIOD": 1},
+        "Inputs!B11": {"TIME_PERIOD": 2},
+        "Inputs!C11": {"TIME_PERIOD": 2},
+        "Inputs!B12": {"TIME_PERIOD": 3},
+        "Inputs!C12": {"TIME_PERIOD": 3},
+        "Engine!B5": {"TIME_PERIOD": 1},
+        "Engine!C5": {"TIME_PERIOD": 2},
+        "Engine!D5": {"TIME_PERIOD": 3},
+    }
+    ctx = build_cluster_refactor_context(
+        _trade_balance_projection(),
+        TRADE_BALANCE_CLUSTER,
+        _write_trade_balance_internals(tmp_path),
+        bound_address_keys=bound_address_keys,
+        key_vocabulary=(KEY_VOCABULARY[0],),
+        workbook_path=tmp_path / "workbook.xlsx",
+        bindings_path=tmp_path / "bindings",
+    )
+    assert ctx is not None
+    assert ctx.contract == "member_sweep"
+
+
+def test_llm_refactor_cluster_uses_dimension_aware_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(PRISTINE_CLUSTER, encoding="utf-8")
+    recorded: dict[str, object] = {}
+    llm_response = ClusterRefactorLLMResponse(
+        symbol_signature=(
+            "def indicator_change_from_reference(ctx: EvalContext, "
+            "projection_period: int, reference_period: int) -> float:"
+        ),
+        symbol_docstring=DUAL_PERIOD_DOCSTRING,
+        symbol_body=(
+            "column_by_period = {0: 'B', 1: 'C', 2: 'D'}\n"
+            "current_value = xl_cell(ctx, f'Inputs!{column_by_period[projection_period]}1')\n"
+            "reference_value = xl_cell(ctx, f'Inputs!{column_by_period[reference_period]}1')\n"
+            "return current_value - reference_value"
+        ),
+        parameters=DUAL_PERIOD_PARAMETERS,
+        member_keys=DUAL_PERIOD_MEMBER_KEYS,
+        error=None,
+        error_reason=None,
+    )
+
+    def fake_generate_validated_json(
+        **kwargs: object,
+    ) -> tuple[ClusterRefactorLLMResponse, str]:
+        recorded["user_prompt"] = kwargs["user_prompt"]
+        post_validate = cast(
+            Callable[[ClusterRefactorLLMResponse], ClusterRefactorLLMResponse],
+            kwargs["post_validate"],
+        )
+        validated = post_validate(llm_response)
+        return validated, llm_response.model_dump_json()
+
+    monkeypatch.setattr(module, "generate_validated_json", fake_generate_validated_json)
+    monkeypatch.setattr(module, "load_refactor_cache", lambda: {})
+    monkeypatch.setattr(module, "save_refactor_cache", lambda _cache: None)
+    monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
+    monkeypatch.setattr(module, "refactor_model", lambda: "test-model")
+    monkeypatch.setattr(module, "build_client", lambda _model: (object(), object()))
+    monkeypatch.setattr(
+        module,
+        "build_cluster_refactor_prompt_context",
+        lambda *_args, **_kwargs: "context",
+    )
+    monkeypatch.setattr(
+        module,
+        "_resolved_projection_layout",
+        lambda layout=None: DUAL_PERIOD_LAYOUT,
+    )
+
+    response = llm_refactor_cluster(DUAL_PERIOD_CONTEXT, internals_path=internals_path)
+
+    assert response.helper_name == "indicator_change_from_reference"
+    user_prompt = cast(str, recorded["user_prompt"])
+    assert user_prompt.startswith(
+        load_cluster_refactor_prompt_fixed_portion("dimension_aware").strip()
+    )
+    assert "member-sweep cluster contract" not in user_prompt
