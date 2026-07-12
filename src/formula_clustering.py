@@ -60,16 +60,26 @@ class _ClusteringKeyCache:
     _value_cache: dict[str, dict[str, BindingKeyValue] | None] = field(
         default_factory=dict, repr=False
     )
+    _fingerprint_cache: dict[str, StructuralFingerprint | None] = field(
+        default_factory=dict, repr=False
+    )
 
-    def warm_from_formulas(self, formulas: Mapping[str, str]) -> None:
-        for formula in formulas.values():
-            _structural_fingerprint(
+    def warm_from_formula_nodes(self, formula_nodes: Mapping[str, str]) -> None:
+        for address, formula in formula_nodes.items():
+            self.fingerprint_for_formula(address, formula)
+
+    def fingerprint_for_formula(
+        self, address: str, formula: str
+    ) -> StructuralFingerprint | None:
+        if address not in self._fingerprint_cache:
+            self._fingerprint_cache[address] = _structural_fingerprint(
                 formula,
                 bound_address_keys=self.bound_address_keys,
                 workbook_path=self.workbook_path,
                 layout=self.layout,
                 key_cache=self,
             )
+        return self._fingerprint_cache[address]
 
     def concepts_for_address(self, address: str) -> tuple[str, ...] | None:
         if address not in self._concept_cache:
@@ -498,6 +508,20 @@ def _should_cluster(
     )
 
 
+def _clustering_bucket_key(
+    fingerprint: StructuralFingerprint | None,
+    *,
+    address: str,
+) -> tuple[object, ...]:
+    """Return the bucket key for one formula's structural fingerprint."""
+    if fingerprint is None:
+        return ("singleton", address)
+    if not _binding_aware_fingerprint_complete(fingerprint):
+        return ("singleton", address)
+    skeleton, refs = fingerprint
+    return ("cluster", skeleton, len(refs))
+
+
 def _ref_position_key_values(
     member_address: str,
     formula: str,
@@ -787,40 +811,16 @@ def cluster_graph_formulas(
         workbook_path=workbook_path,
         layout=layout,
     )
-    key_cache.warm_from_formulas(formula_nodes)
+    key_cache.warm_from_formula_nodes(formula_nodes)
 
-    parent = {address: address for address in addresses}
-
-    def find(address: str) -> str:
-        while parent[address] != address:
-            parent[address] = parent[parent[address]]
-            address = parent[address]
-        return address
-
-    def union(left: str, right: str) -> None:
-        left_root = find(left)
-        right_root = find(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
-    for left_index, left_address in enumerate(addresses):
-        for right_address in addresses[left_index + 1 :]:
-            if _should_cluster(
-                formula_nodes[left_address],
-                formula_nodes[right_address],
-                bound_address_keys=resolved_bound_keys,
-                workbook_path=workbook_path,
-                layout=layout,
-                key_cache=key_cache,
-            ):
-                union(left_address, right_address)
-
-    grouped: dict[str, list[str]] = {}
+    grouped: dict[tuple[object, ...], list[str]] = {}
     for address in addresses:
-        grouped.setdefault(find(address), []).append(address)
+        fingerprint = key_cache.fingerprint_for_formula(address, formula_nodes[address])
+        bucket_key = _clustering_bucket_key(fingerprint, address=address)
+        grouped.setdefault(bucket_key, []).append(address)
 
     raw_clusters: list[tuple[str, ...]] = []
-    for _root, members in sorted(grouped.items(), key=lambda item: item[1]):
+    for _bucket_key, members in sorted(grouped.items(), key=lambda item: item[1]):
         ordered_members = tuple(sorted(members))
         if variation_mode == "dominant_key_only" and len(ordered_members) >= 2:
             raw_clusters.extend(
