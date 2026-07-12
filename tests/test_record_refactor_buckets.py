@@ -24,6 +24,7 @@ from src.pipeline_context import activate_pipeline_config
 from src.record_refactor_buckets import (
     DEFAULT_CODEGEN_DIST_ROOT,
     main,
+    record_refactor_buckets,
     run_record_refactor_buckets,
 )
 from tests.fixtures.synthetic_pipeline import synthetic_pipeline_config
@@ -284,3 +285,19 @@ def test_main_passes_cli_variation_mode_to_bucket_recording(
 
     run_buckets.assert_called_once()
     assert run_buckets.call_args.args[0].variation_mode == "dominant_key_only"
+
+
+def test_record_refactor_buckets_requires_bound_address_keys(
+    synthetic_pipeline_config_fixture,
+    synthetic_projection,
+) -> None:
+    with pytest.raises(ValueError, match="bound_address_keys is required"):
+        record_refactor_buckets(
+            synthetic_pipeline_config_fixture,
+            graph=synthetic_projection,
+            internals_path=None,
+            internal_binding_index=None,
+            layout=None,
+            compression="none",
+            bound_address_keys=None,
+        )

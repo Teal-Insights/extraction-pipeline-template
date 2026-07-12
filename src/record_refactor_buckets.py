@@ -33,6 +33,7 @@ from src.formula_clustering import (
     BoundAddressKeys,
     ClusterableGraph,
     FormulaCluster,
+    _require_bound_address_keys,
     cluster_graph_formulas,
     cluster_has_independent_operand_variation,
     formula_nodes_for_clustering,
@@ -134,7 +135,7 @@ def _cluster_skip_reason(
     internals_source: str,
     *,
     layout: ProjectionColumnLayout | None,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
 ) -> str | None:
     if len(cluster.members) < 2:
@@ -156,11 +157,7 @@ def _cluster_skip_reason(
     if eligible_members < 2:
         return "cluster_has_fewer_than_two_graph_formula_members"
 
-    if (
-        bound_address_keys is not None
-        and workbook_path is not None
-        and layout is not None
-    ):
+    if workbook_path is not None and layout is not None:
         varying = varying_key_concepts(
             cluster.members,
             bound_address_keys=bound_address_keys,
@@ -231,12 +228,13 @@ def record_refactor_buckets(
     layout: ProjectionColumnLayout | None,
     compression: CompressionMode = "optimal",
     refactor_graph: ProjectionResult | None = None,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys | None,
 ) -> tuple[RefactorBucketRecord, ...]:
     """Classify formula clusters into singleton and cluster refactor target buckets."""
+    resolved_bound_keys = _require_bound_address_keys(bound_address_keys)
     clusters = cluster_graph_formulas(
         graph,
-        bound_address_keys=bound_address_keys,
+        bound_address_keys=resolved_bound_keys,
         variation_mode=config.variation_mode,
         workbook_path=config.workbook_path,
         layout=layout,
@@ -276,7 +274,7 @@ def record_refactor_buckets(
                 cluster,
                 internals_source,
                 layout=layout,
-                bound_address_keys=bound_address_keys,
+                bound_address_keys=resolved_bound_keys,
                 workbook_path=config.workbook_path,
             )
             ctx = (
