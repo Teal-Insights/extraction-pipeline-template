@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from src.pipeline_config import load_pipeline_config, validate_pipeline_config
 from src.pipeline_context import activate_pipeline_config
-from src.record_refactor_buckets import run_record_refactor_buckets
+from src.record_refactor_buckets import main, run_record_refactor_buckets
 
 
 @pytest.fixture(scope="module")
@@ -87,3 +88,37 @@ def test_uncompressed_refactor_buckets_include_shocked_parameter_rows(
     members = {address for bucket in report["buckets"] for address in bucket["members"]}
     assert "Engine!C14" in members
     assert "Engine!C15" in members
+
+
+def test_main_passes_cli_variation_mode_to_bucket_recording(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    with patch(
+        "src.record_refactor_buckets.load_pipeline_config",
+        return_value=synthetic_pipeline_config_fixture,
+    ):
+        with patch("src.record_refactor_buckets.validate_pipeline_config"):
+            with patch("src.record_refactor_buckets.activate_pipeline_config"):
+                with patch(
+                    "src.record_refactor_buckets.run_record_refactor_buckets"
+                ) as run_buckets:
+                    run_buckets.return_value = {
+                        "cluster_count": 0,
+                        "refactor_target_count": 0,
+                        "skipped_target_count": 0,
+                        "buckets": [],
+                    }
+                    main(
+                        [
+                            "--variation-mode",
+                            "dominant_key_only",
+                            "--json-output",
+                            str(tmp_path / "buckets.json"),
+                            "--markdown-output",
+                            str(tmp_path / "buckets.md"),
+                        ]
+                    )
+
+    run_buckets.assert_called_once()
+    assert run_buckets.call_args.args[0].variation_mode == "dominant_key_only"
