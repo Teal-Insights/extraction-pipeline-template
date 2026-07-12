@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.formula_clustering import FormulaCluster
 from src.refactor_bindings import KeyConceptSpec
 from src.refactor_contracts import (
@@ -202,6 +204,54 @@ def test_selects_member_sweep_for_derivable_fixed_lag() -> None:
         frozenset({"TIME_PERIOD"}),
         key_vocabulary=(TIME_PERIOD_SPEC,),
     )
+    assert contract == "member_sweep"
+
+
+@pytest.mark.xfail(
+    reason="Contract selection does not yet derive numeric offsets by another key.",
+    strict=True,
+)
+def test_selects_member_sweep_for_lags_grouped_by_reference_area() -> None:
+    """Area-specific constant lags should remain Contract A derivations."""
+    cluster = FormulaCluster(
+        cluster_id=5,
+        members=("Engine!B5", "Engine!C5", "Engine!D5", "Engine!E5"),
+        canonical_template="=Inputs!A1-Inputs!B1-Inputs!C1",
+        row=5,
+    )
+    formula_nodes = {
+        "Engine!B5": "=Inputs!A1-Inputs!B1-Inputs!C1",
+        "Engine!C5": "=Inputs!D1-Inputs!E1-Inputs!F1",
+        "Engine!D5": "=Inputs!G1-Inputs!H1-Inputs!I1",
+        "Engine!E5": "=Inputs!J1-Inputs!K1-Inputs!L1",
+    }
+    bindings = {
+        "Engine!B5": {"TIME_PERIOD": 4, "REF_AREA": "US"},
+        "Engine!C5": {"TIME_PERIOD": 5, "REF_AREA": "US"},
+        "Engine!D5": {"TIME_PERIOD": 4, "REF_AREA": "FR"},
+        "Engine!E5": {"TIME_PERIOD": 5, "REF_AREA": "FR"},
+        "Inputs!A1": {"TIME_PERIOD": 4},
+        "Inputs!B1": {"TIME_PERIOD": 3},
+        "Inputs!C1": {"TIME_PERIOD": 2},
+        "Inputs!D1": {"TIME_PERIOD": 5},
+        "Inputs!E1": {"TIME_PERIOD": 4},
+        "Inputs!F1": {"TIME_PERIOD": 3},
+        "Inputs!G1": {"TIME_PERIOD": 4},
+        "Inputs!H1": {"TIME_PERIOD": 1},
+        "Inputs!I1": {"TIME_PERIOD": 0},
+        "Inputs!J1": {"TIME_PERIOD": 5},
+        "Inputs!K1": {"TIME_PERIOD": 2},
+        "Inputs!L1": {"TIME_PERIOD": 1},
+    }
+
+    contract = select_cluster_refactor_contract(
+        cluster,
+        formula_nodes,
+        bindings,
+        frozenset({"TIME_PERIOD", "REF_AREA"}),
+        key_vocabulary=(TIME_PERIOD_SPEC, REF_AREA_SPEC),
+    )
+
     assert contract == "member_sweep"
 
 
