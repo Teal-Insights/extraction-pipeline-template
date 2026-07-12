@@ -9,81 +9,103 @@ Return only JSON matching the response schema:
   "additionalProperties": false,
   "properties": {
     "symbol_signature": {
-      "description": "Python function signature, including `def` keyword, `snake_case` semantic name, `ctx: EvalContext`, typed economic parameters from `key_vocabulary`, and a scalar return type hint: `bool`, `float`, `int`, `str`, or a `|` union of those types.",
-      "title": "Helper Signature",
-      "type": "string"
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Python function signature, including `def` keyword, `snake_case` semantic name, `ctx: EvalContext`, typed economic parameters from `key_vocabulary`, and a scalar return type hint: `bool`, `float`, `int`, `str`, or a `|` union of those types. Null when error is true.",
+      "title": "Helper Signature"
     },
     "symbol_docstring": {
-      "description": "Google-style docstring. Include Args and Returns sections.",
-      "title": "Helper Docstring",
-      "type": "string"
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Google-style docstring. Include Args and Returns sections. Null when error is true.",
+      "title": "Helper Docstring"
     },
     "symbol_body": {
-      "description": "Python function body.",
-      "title": "Helper Body",
-      "type": "string"
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Python function body. Null when error is true.",
+      "title": "Helper Body"
     },
     "parameters": {
-      "description": "Economic parameters the helper varies along, tied to binding dimension ids.",
-      "items": {
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "description": "Python parameter name, e.g. projection_period or time_period.",
-            "type": "string"
+      "anyOf": [
+        {
+          "description": "Economic parameters the helper varies along, tied to binding dimension ids.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Python parameter name, e.g. projection_period or time_period.",
+                "type": "string"
+              },
+              "dimension_id": {
+                "description": "Effective binding dimension id, e.g. PROJECTION_PERIOD or TIME_PERIOD.",
+                "type": "string"
+              },
+              "dtype": {
+                "description": "Expected Python dtype for the parameter.",
+                "type": "string"
+              },
+              "concept": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "Optional SDMX-style concept referenced by the dimension, e.g. TIME_PERIOD."
+              }
+            },
+            "required": ["name", "dimension_id", "dtype"],
+            "type": "object"
           },
-          "dimension_id": {
-            "description": "Effective binding dimension id, e.g. PROJECTION_PERIOD or TIME_PERIOD.",
-            "type": "string"
-          },
-          "dtype": {
-            "description": "Expected Python dtype for the parameter.",
-            "type": "string"
-          },
-          "concept": {
-            "description": "Optional SDMX-style concept referenced by the dimension, e.g. TIME_PERIOD.",
-            "type": "string"
-          }
+          "type": "array"
         },
-        "required": ["name", "dimension_id", "dtype"],
-        "type": "object"
-      },
-      "type": "array"
+        {"type": "null"}
+      ],
+      "description": "Economic parameters the helper varies along, tied to binding dimension ids. Null when error is true."
     },
     "member_keys": {
-      "description": "One entry per cluster member with the unique combination of varying binding key values used to route that address to the parameterized helper.",
-      "items": {
-        "additionalProperties": false,
-        "properties": {
-          "address": {
-            "description": "Workbook address this entry covers.",
-            "type": "string"
-          },
-          "function_name": {
-            "description": "Existing cell_* function being replaced.",
-            "type": "string"
-          },
-          "keys": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "dimension_id": {
-                  "description": "Effective binding dimension id, e.g. PROJECTION_PERIOD or TIME_PERIOD."
-                },
-                "value": {
-                  "description": "Literal binding key value for this dimension."
-                }
+      "anyOf": [
+        {
+          "description": "One entry per cluster member with the unique combination of varying binding key values used to route that address to the parameterized helper.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "description": "Workbook address this entry covers.",
+                "type": "string"
               },
-              "required": ["dimension_id", "value"],
-              "type": "object"
+              "function_name": {
+                "description": "Existing cell_* function being replaced.",
+                "type": "string"
+              },
+              "keys": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dimension_id": {
+                      "description": "Effective binding dimension id, e.g. PROJECTION_PERIOD or TIME_PERIOD."
+                    },
+                    "value": {
+                      "description": "Literal binding key value for this dimension."
+                    }
+                  },
+                  "required": ["dimension_id", "value"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
             },
-            "type": "array"
-          }
+            "required": ["address", "function_name", "keys"],
+            "type": "object"
+          },
+          "type": "array"
         },
-        "required": ["address", "function_name", "keys"],
-        "type": "object"
-      },
-      "type": "array"
+        {"type": "null"}
+      ],
+      "description": "One entry per cluster member with the unique combination of varying binding key values used to route that address to the parameterized helper. Null when error is true."
+    },
+    "error": {
+      "anyOf": [{"type": "boolean"}, {"type": "null"}],
+      "description": "Set to true to abort this refactor and stop the pipeline when the cluster cannot be safely refactored. Null or false on success.",
+      "title": "Error"
+    },
+    "error_reason": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Human-readable explanation of why refactoring must abort. Non-empty when error is true; null otherwise.",
+      "title": "Error Reason"
     }
   },
   "required": [
@@ -91,12 +113,21 @@ Return only JSON matching the response schema:
     "symbol_docstring",
     "symbol_body",
     "parameters",
-    "member_keys"
+    "member_keys",
+    "error",
+    "error_reason"
   ],
   "title": "ClusterRefactorLLMResponse",
   "type": "object"
 }
 ```
+
+## Aborting
+
+- If the cluster cannot be safely refactored (for example, unsupported independent operand variation, missing binding keys, or contradictory membership), set `error` to `true` and provide a concise non-empty `error_reason`.
+- When `error` is `true`, set every success field (`symbol_signature`, `symbol_docstring`, `symbol_body`, `parameters`, `member_keys`) to `null`. Do not omit keys.
+- Do not invent a best-effort refactor when the correct outcome is to stop. Declaring an error ends the pipeline for human review.
+- On success, set `error` to `null` or `false`, set `error_reason` to `null`, and populate every success field.
 
 ## Signature
 
@@ -184,7 +215,9 @@ In this case, you could map `reporting_period` to workbook columns with a lookup
       "function_name": "cell_forecast_f12",
       "keys": [{"dimension_id": "REPORTING_PERIOD", "value": 5}]
     }
-  ]
+  ],
+  "error": null,
+  "error_reason": null
 }
 ```
 
@@ -256,7 +289,9 @@ For example, suppose you are assigned a cluster covering `Data!E20:H20` and `Dat
       "function_name": "cell_data_h24",
       "keys": [{"dimension_id": "TIME_PERIOD", "value": 7}, {"dimension_id": "REF_AREA", "value": "FRA"}]
     }
-  ]
+  ],
+  "error": null,
+  "error_reason": null
 }
 ```
 

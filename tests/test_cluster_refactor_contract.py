@@ -266,6 +266,8 @@ GROWTH_THRESHOLD_LLM_RESPONSE = ClusterRefactorLLMResponse(
         )
         for entry in GROWTH_THRESHOLD_MEMBER_METADATA
     ),
+    error=None,
+    error_reason=None,
 )
 
 INTERNALS_WITHOUT_EVAL_CONTEXT_IMPORT = dedent(
@@ -355,6 +357,25 @@ def test_prompt_for_cluster_refactor_does_not_require_llm_note_section() -> None
     assert '"symbol_signature"' in prompt
     assert '"symbol_body"' in prompt
     assert '"helper_source"' not in prompt.split("Cluster context:", maxsplit=1)[0]
+
+
+def test_cluster_prompt_documents_error_escape_hatch() -> None:
+    prompt = load_cluster_refactor_prompt_fixed_portion()
+    assert "## Aborting" in prompt
+    assert '"error"' in prompt
+    assert '"error_reason"' in prompt
+    assert "stop the pipeline" in prompt
+    assert "set every success field" in prompt
+    assert "to `null`" in prompt
+
+    schema = ClusterRefactorLLMResponse.model_json_schema()
+    properties = schema["properties"]
+    assert "error" in properties
+    assert "error_reason" in properties
+    required = schema.get("required", [])
+    assert "symbol_signature" in required
+    assert "error" in required
+    assert "error_reason" in required
 
 
 def test_append_cluster_refactor_note_section_covers_address_range() -> None:

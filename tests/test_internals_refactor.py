@@ -11,16 +11,19 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from src.formula_clustering import FormulaCluster
 from src.internals_refactor import (
     REFACTOR_PROMPT_VERSION,
     ClusterRefactorContext,
+    ClusterRefactorLLMResponse,
     ClusterRefactorResponse,
     HelperParameter,
     MemberContext,
     MemberKeyEntry,
     MemberKeys,
+    RefactorDeclaredError,
     SingletonRefactorContext,
     SingletonRefactorLLMResponse,
     SingletonRefactorResponse,
@@ -29,8 +32,10 @@ from src.internals_refactor import (
     apply_singleton_refactor_plan,
     build_singleton_refactor_context,
     collapse_bindings_for_response,
+    llm_refactor_cluster,
     llm_refactor_singleton,
     prompt_payload,
+    raise_if_llm_declared_error,
     refactor_cache_key,
     singleton_prompt_payload,
     validate_allowed_global_references,
@@ -746,6 +751,8 @@ SINGLETON_LLM_RESPONSE = SingletonRefactorLLMResponse(
         "Returns:\n    Projected debt-to-GDP ratio."
     ),
     symbol_body="return 1.0",
+    error=None,
+    error_reason=None,
 )
 
 
@@ -890,3 +897,338 @@ def test_llm_refactor_singleton_post_validate_retries_on_parity_error(
 
     assert parity_calls == 2
     assert "return 2.0" in response.symbol_source
+
+
+def test_singleton_llm_response_omits_optional_error_fields() -> None:
+    response = SingletonRefactorLLMResponse(
+        symbol_signature="def projected_debt_to_gdp(ctx: EvalContext) -> float:",
+        symbol_docstring=(
+            "Projected debt-to-GDP.\n\n"
+            "Args:\n    ctx: Workbook evaluation context.\n\n"
+            "Returns:\n    Projected debt-to-GDP ratio."
+        ),
+        symbol_body="return 1.0",
+        error=None,
+        error_reason=None,
+    )
+    assert response.error is None
+    assert response.error_reason is None
+
+
+def test_singleton_llm_response_error_requires_nonempty_reason() -> None:
+    with pytest.raises(ValidationError, match="error_reason"):
+        SingletonRefactorLLMResponse(
+            symbol_signature=None,
+            symbol_docstring=None,
+            symbol_body=None,
+            error=True,
+            error_reason="   ",
+        )
+
+
+def test_singleton_llm_response_error_requires_null_success_fields() -> None:
+    with pytest.raises(ValidationError, match="success fields must be null"):
+        SingletonRefactorLLMResponse(
+            symbol_signature="def projected_debt_to_gdp(ctx: EvalContext) -> float:",
+            symbol_docstring="Doc.",
+            symbol_body="return 1.0",
+            error=True,
+            error_reason="Cannot proceed.",
+        )
+
+
+def test_singleton_llm_response_error_allows_null_success_fields() -> None:
+    response = SingletonRefactorLLMResponse(
+        symbol_signature=None,
+        symbol_docstring=None,
+        symbol_body=None,
+        error=True,
+        error_reason="Unsupported independent operand variation.",
+    )
+    assert response.error is True
+    assert response.symbol_signature is None
+    with pytest.raises(RefactorDeclaredError, match="Unsupported independent"):
+        raise_if_llm_declared_error(
+            response,
+            kind="singleton",
+            target="Engine!C20",
+        )
+
+
+def test_cluster_llm_response_error_allows_null_success_fields() -> None:
+    response = ClusterRefactorLLMResponse(
+        symbol_signature=None,
+        symbol_docstring=None,
+        symbol_body=None,
+        parameters=None,
+        member_keys=None,
+        error=True,
+        error_reason="Cluster members lack unique binding-key triangulation.",
+    )
+    assert response.error is True
+    assert response.parameters is None
+    with pytest.raises(RefactorDeclaredError, match="unique binding-key"):
+        raise_if_llm_declared_error(
+            response,
+            kind="cluster",
+            target="cluster_1",
+        )
+
+
+def test_llm_refactor_singleton_aborts_on_declared_error_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_c20(ctx):\n    return 1.0\n", encoding="utf-8"
+    )
+    ctx = _singleton_refactor_test_context(tmp_path)
+    prepare_calls = 0
+    error_payload = {
+        "symbol_signature": None,
+        "symbol_docstring": None,
+        "symbol_body": None,
+        "error": True,
+        "error_reason": "Cannot safely rename this singleton.",
+    }
+
+    class _FakeMessage:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content: str) -> None:
+            self.message = _FakeMessage(content)
+
+    class _FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.choices = [_FakeChoice(content)]
+
+    class _FakeCompletions:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def create(self, **kwargs: object) -> _FakeResponse:
+            self.calls.append(kwargs)
+            return _FakeResponse(json.dumps(error_payload))
+
+    class _FakeChat:
+        def __init__(self) -> None:
+            self.completions = _FakeCompletions()
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.chat = _FakeChat()
+
+    fake_client = _FakeClient()
+
+    def boom_prepare(*_args: object, **_kwargs: object) -> SingletonRefactorResponse:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        raise AssertionError("prepare should not run for declared errors")
+
+    monkeypatch.setattr(
+        module,
+        "build_client",
+        lambda _model: (
+            fake_client,
+            module.provider_for_model("glm-test"),
+        ),
+    )
+    monkeypatch.setattr(module, "prepare_singleton_refactor_response", boom_prepare)
+    monkeypatch.setattr(module, "load_refactor_cache", lambda: {})
+    monkeypatch.setattr(module, "save_refactor_cache", lambda _cache: None)
+    monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
+    monkeypatch.setattr(module, "refactor_model", lambda: "glm-test")
+    monkeypatch.setattr(
+        module,
+        "build_singleton_refactor_prompt_context",
+        lambda *_args, **_kwargs: "context",
+    )
+    monkeypatch.setattr(
+        module,
+        "write_refactor_failure_diagnostic",
+        lambda **kwargs: tmp_path / "dump",
+    )
+
+    with pytest.raises(RefactorDeclaredError, match="Cannot safely rename"):
+        llm_refactor_singleton(
+            ctx,
+            internals_path=internals_path,
+            pristine_source="def cell_engine_c20(ctx):\n    return 1.0\n",
+            input_vectors=[{}],
+        )
+
+    assert len(fake_client.chat.completions.calls) == 1
+    assert prepare_calls == 0
+
+
+def test_llm_refactor_cluster_aborts_on_declared_error_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(PRISTINE_CLUSTER, encoding="utf-8")
+    prepare_calls = 0
+    error_payload = {
+        "symbol_signature": None,
+        "symbol_docstring": None,
+        "symbol_body": None,
+        "parameters": None,
+        "member_keys": None,
+        "error": True,
+        "error_reason": "Cannot safely collapse this cluster.",
+    }
+
+    class _FakeMessage:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content: str) -> None:
+            self.message = _FakeMessage(content)
+
+    class _FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.choices = [_FakeChoice(content)]
+
+    class _FakeCompletions:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def create(self, **kwargs: object) -> _FakeResponse:
+            self.calls.append(kwargs)
+            return _FakeResponse(json.dumps(error_payload))
+
+    class _FakeChat:
+        def __init__(self) -> None:
+            self.completions = _FakeCompletions()
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.chat = _FakeChat()
+
+    fake_client = _FakeClient()
+
+    def boom_prepare(*_args: object, **_kwargs: object) -> ClusterRefactorResponse:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        raise AssertionError("prepare should not run for declared errors")
+
+    monkeypatch.setattr(
+        module,
+        "build_client",
+        lambda _model: (
+            fake_client,
+            module.provider_for_model("glm-test"),
+        ),
+    )
+    monkeypatch.setattr(module, "prepare_cluster_refactor_response", boom_prepare)
+    monkeypatch.setattr(module, "load_refactor_cache", lambda: {})
+    monkeypatch.setattr(module, "save_refactor_cache", lambda _cache: None)
+    monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
+    monkeypatch.setattr(module, "refactor_model", lambda: "glm-test")
+    monkeypatch.setattr(
+        module,
+        "build_cluster_refactor_prompt_context",
+        lambda *_args, **_kwargs: "context",
+    )
+    monkeypatch.setattr(
+        module,
+        "write_refactor_failure_diagnostic",
+        lambda **kwargs: tmp_path / "dump",
+    )
+
+    with pytest.raises(RefactorDeclaredError, match="Cannot safely collapse"):
+        llm_refactor_cluster(
+            CLUSTER_CONTEXT,
+            internals_path=internals_path,
+            pristine_source=PRISTINE_CLUSTER,
+            input_vectors=[{}],
+        )
+
+    assert len(fake_client.chat.completions.calls) == 1
+    assert prepare_calls == 0
+
+
+def test_llm_refactor_singleton_declared_error_writes_diagnostic_dump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_c20(ctx):\n    return 1.0\n", encoding="utf-8"
+    )
+    ctx = _singleton_refactor_test_context(tmp_path)
+    dump_root = tmp_path / "failures"
+    error_payload = {
+        "symbol_signature": None,
+        "symbol_docstring": None,
+        "symbol_body": None,
+        "error": True,
+        "error_reason": "Ambiguous naming hints; aborting.",
+    }
+
+    class _FakeMessage:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content: str) -> None:
+            self.message = _FakeMessage(content)
+
+    class _FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.choices = [_FakeChoice(content)]
+
+    class _FakeCompletions:
+        def create(self, **kwargs: object) -> _FakeResponse:
+            return _FakeResponse(json.dumps(error_payload))
+
+    class _FakeChat:
+        def __init__(self) -> None:
+            self.completions = _FakeCompletions()
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.chat = _FakeChat()
+
+    monkeypatch.setattr(
+        module,
+        "build_client",
+        lambda _model: (
+            _FakeClient(),
+            module.provider_for_model("glm-test"),
+        ),
+    )
+    monkeypatch.setattr(module, "load_refactor_cache", lambda: {})
+    monkeypatch.setattr(module, "save_refactor_cache", lambda _cache: None)
+    monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
+    monkeypatch.setattr(module, "refactor_model", lambda: "glm-test")
+    monkeypatch.setattr(
+        module,
+        "build_singleton_refactor_prompt_context",
+        lambda *_args, **_kwargs: "context",
+    )
+    monkeypatch.setattr(module, "REFACTOR_FAILURE_DUMP_DIR", dump_root)
+
+    with pytest.raises(RefactorDeclaredError, match="Ambiguous naming hints"):
+        llm_refactor_singleton(ctx, internals_path=internals_path)
+
+    dumps = list(dump_root.iterdir())
+    assert len(dumps) == 1
+    dump_dir = dumps[0]
+    error_text = (dump_dir / "error.txt").read_text(encoding="utf-8")
+    assert "Ambiguous naming hints" in error_text
+    llm_response = json.loads(
+        (dump_dir / "llm_response.json").read_text(encoding="utf-8")
+    )
+    assert llm_response["error"] is True
+    assert llm_response["error_reason"] == "Ambiguous naming hints; aborting."
