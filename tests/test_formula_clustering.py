@@ -130,6 +130,30 @@ def test_binding_aware_fingerprint_includes_sorted_key_concepts() -> None:
     )
 
 
+def test_binding_aware_fingerprint_uses_distinct_dimension_ids() -> None:
+    bindings = {
+        "Engine!C10": {"PROJECTION_PERIOD": 1, "REFERENCE_PERIOD": 0},
+        "Engine!D10": {"PROJECTION_PERIOD": 2, "REFERENCE_PERIOD": 0},
+    }
+    fingerprint = structural_fingerprint(
+        "=Engine!C10",
+        bound_address_keys=bindings,
+    )
+    assert fingerprint is not None
+    skeleton, refs = fingerprint
+    assert refs == ("Engine!C10",)
+    assert skeleton == (
+        "ref",
+        0,
+        ("PROJECTION_PERIOD", "REFERENCE_PERIOD"),
+    )
+    assert formulas_are_parameterizable(
+        "=Engine!C10",
+        "=Engine!D10",
+        bound_address_keys=bindings,
+    )
+
+
 def test_formulas_are_parameterizable_for_column_sweep() -> None:
     left = "=Paris!B13+Inputs!C16"
     right = "=Paris!C13+Inputs!D16"

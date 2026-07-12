@@ -74,6 +74,9 @@ PROJECTION_LAYOUT: ProjectionColumnLayout | None = None
 #         4: "F",
 #         5: "G",
 #     },
+#     # Effective dimension id for the projection axis (defaults to TIME_PERIOD).
+#     # Use an explicit id when bindings distinguish projection from other
+#     # TIME_PERIOD dimensions, e.g. projection_dimension_id="PROJECTION_PERIOD".
 # )
 
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
