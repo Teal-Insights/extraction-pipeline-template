@@ -70,7 +70,7 @@ flowchart LR
 ### 1. Configure
 
 1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `CONSTRAINTS`, and `DIST_METADATA`.
-2. Author `bindings/*.bindings.yaml` (schema version `1.7.0`, one logical series per public API function or internal formula group).
+2. Author `bindings/*.bindings.yaml` (schema version `1.8.0`, one logical series per public API function or internal formula group).
 3. Constrain cells that control `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` so dynamic refs resolve completely.
 4. Classify every leaf as `input` or `constant`; every mutable input leaf must appear in `inputs.bindings.yaml`.
 5. Bind every internal formula cell in `internals.bindings.yaml` (see [Authoring internals](#authoring-internals) below).
@@ -90,7 +90,7 @@ See [artifacts/README.md](artifacts/README.md) and [artifacts/artifacts-catalog.
 
 #### Projection column layout (optional)
 
-Set `PROJECTION_LAYOUT` in [workbook_config.py](workbook_config.py) when the workbook has parallel time-series columns on an engine sheet and a related outputs sheet. The internals refactor uses this mapping to name helpers by economic time period instead of raw column letters. Leave it `None` when formulas do not follow that pattern.
+Set `PROJECTION_LAYOUT` in [workbook_config.py](workbook_config.py) when the workbook has parallel time-series columns on an engine sheet and a related outputs sheet. The internals refactor uses this mapping to name helpers by economic time period instead of raw column letters. Set `projection_dimension_id` when the projection axis uses an explicit dimension id other than `TIME_PERIOD` (for example `PROJECTION_PERIOD`). Leave it `None` when formulas do not follow that pattern.
 
 See the commented reference example at the bottom of `workbook_config.py` (Tiny DSA Engine columns C–G mapped to Outputs columns B–F).
 
@@ -124,7 +124,7 @@ During graph build the pipeline also runs **internal binding derivation** and op
 
 #### Internal series bindings
 
-After the dependency graph is extracted and bindings are validated, the pipeline derives **internal series** for formula cells declared with `internal: {}` in `bindings/internals.bindings.yaml`. Each resolved cell carries `{address, key, record}` triangulation data used by the graph explorer and internals refactor. Concept keys live in binding manifests and derived series records, not on graph node metadata.
+After the dependency graph is extracted and bindings are validated, the pipeline derives **internal series** for formula cells declared with `internal: {}` in `bindings/internals.bindings.yaml`. Each resolved cell carries `{address, key, record}` triangulation data used by the graph explorer and internals refactor. Effective dimension ids live in binding manifests and derived series records, not on graph node metadata.
 
 #### Authoring internals
 
@@ -132,12 +132,13 @@ Author `internals.bindings.yaml` after `--extract-graph`, when you can see which
 
 - **One series per logical group** — a single lookup/anchor cell or one formula row/range (e.g. `Engine!C10:G10`), not one entry per cell.
 - **Same YAML shape as public bindings** — use `internal: {}` instead of `input` / `output`. Scalar examples are in [tests/fixtures/synthetic/internals.bindings.yaml](tests/fixtures/synthetic/internals.bindings.yaml).
-- **Scalars vs row series** — lookup and anchor formulas usually use `layout: scalar` with `key: []`. Parallel time-series rows use `layout: row_series` with a `TIME_PERIOD` (or other) key dimension bound from the **header row that labels that row**; different tables often use different header rows.
-- **Reuse public concepts** — prefer concept IDs already in your bindings / `concept_scheme` (`TIME_PERIOD`, `INDICATOR`, `PARAMETER`, etc.) so refactor prompts get meaningful `key` / `record` hints.
+- **Scalars vs row series** — lookup and anchor formulas usually use `layout: scalar` with `key: []`. Parallel time-series rows use `layout: row_series` with a key dimension (often concept `TIME_PERIOD`) bound from the **header row that labels that row**; different tables often use different header rows.
+- **Give every dimension an explicit `id`** — `id` names the dimension itself and is the effective key used in records, cell keys, graph labels, and refactor parameters. `concept` is the SDMX-style meaning category. They match unless two dimensions in one series share a concept (e.g. projection axis and reference period both on `TIME_PERIOD`), in which case give each a distinct id such as `PROJECTION_PERIOD` / `REFERENCE_PERIOD`. Parameter names come from the effective id (`projection_period`). Concept-only keys remain valid only when the concept uniquely identifies one dimension.
+- **Reuse public concepts** — prefer concept IDs already in your bindings / `concept_scheme` (`TIME_PERIOD`, `INDICATOR`, `PARAMETER`, etc.) so refactor prompts get meaningful semantic hints even when dimension ids differ.
 - **Validate** — `validate_series_bindings(...)`, then `derive_internal_series(...)`. Run `uv run pytest tests/test_internal_binding_coverage.py` once `INTERNAL_BINDING_VALIDATION_MODE` is enabled.
 - **Review** — re-run `--extract-graph` and confirm bound formula nodes show `keys:` / `record:` labels in the graph explorer.
 
-Schema details and field shapes: excel-grapher `user_guide/05-series-bindings.qmd` (internal direction, schema 1.7.0+). Use [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.txt) for agent-assisted drafting.
+Schema details and field shapes: excel-grapher `user_guide/05-series-bindings.qmd` (internal direction, schema 1.8.0). Use [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.txt) for agent-assisted drafting.
 
 #### Internal binding coverage validation
 

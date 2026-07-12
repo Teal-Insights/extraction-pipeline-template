@@ -97,6 +97,7 @@ GROWTH_THRESHOLD_MEMBER_SOURCES = dedent(
 
 GROWTH_THRESHOLD_KEY_VOCABULARY = (
     KeyConceptSpec(
+        dimension_id="REPORTING_PERIOD",
         concept="REPORTING_PERIOD",
         dtype="int",
         suggested_param_name="reporting_period",
@@ -189,6 +190,7 @@ MINIMAL_PROMPT_PAYLOAD: dict[str, object] = {
     "canonical_template": "=IF(Forecast!{{col}}4>=Assumptions!$C$2,1,0)",
     "key_vocabulary": [
         {
+            "dimension_id": "REPORTING_PERIOD",
             "concept": "REPORTING_PERIOD",
             "dtype": "int",
             "suggested_param_name": "reporting_period",
@@ -247,7 +249,7 @@ GROWTH_THRESHOLD_LLM_RESPONSE = ClusterRefactorLLMResponse(
     parameters=(
         HelperParameter(
             name="reporting_period",
-            concept="REPORTING_PERIOD",
+            dimension_id="REPORTING_PERIOD",
             dtype="int",
         ),
     ),
@@ -257,7 +259,7 @@ GROWTH_THRESHOLD_LLM_RESPONSE = ClusterRefactorLLMResponse(
             function_name=entry["function_name"],
             keys=(
                 MemberKeyEntry(
-                    concept="REPORTING_PERIOD",
+                    dimension_id="REPORTING_PERIOD",
                     value=entry["expected_keys"]["REPORTING_PERIOD"],
                 ),
             ),

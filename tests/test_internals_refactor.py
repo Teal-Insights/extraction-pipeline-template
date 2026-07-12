@@ -38,6 +38,7 @@ from src.internals_refactor import (
     validate_parameter_names_match_vocabulary,
     validate_semantic_local_names,
     write_refactor_failure_diagnostic,
+    _prepare_cluster_refactor_response,
     _prompt_for_refactor,
     _prompt_for_singleton_refactor,
     _single_function_def,
@@ -103,6 +104,7 @@ def cell_engine_d6(ctx):
 
 KEY_VOCABULARY = (
     KeyConceptSpec(
+        dimension_id="TIME_PERIOD",
         concept="TIME_PERIOD",
         dtype="int",
         suggested_param_name="time_period",
@@ -156,19 +158,19 @@ CLUSTER_DOCSTRING = (
 )
 
 CLUSTER_PARAMETERS = (
-    HelperParameter(name="time_period", concept="TIME_PERIOD", dtype="int"),
+    HelperParameter(name="time_period", dimension_id="TIME_PERIOD", dtype="int"),
 )
 
 CLUSTER_MEMBER_KEYS = (
     MemberKeys(
         address="Engine!C6",
         function_name="cell_engine_c6",
-        keys=(MemberKeyEntry(concept="TIME_PERIOD", value=1),),
+        keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
     ),
     MemberKeys(
         address="Engine!D6",
         function_name="cell_engine_d6",
-        keys=(MemberKeyEntry(concept="TIME_PERIOD", value=2),),
+        keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=2),),
     ),
 )
 
@@ -293,7 +295,7 @@ def test_validate_cluster_rejects_duplicate_member_key_combinations() -> None:
         MemberKeys(
             address="Engine!D6",
             function_name="cell_engine_d6",
-            keys=(MemberKeyEntry(concept="TIME_PERIOD", value=1),),
+            keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
         ),
     )
     with patch(
@@ -330,7 +332,7 @@ def test_validate_cluster_accepts_eval_context_type_hint() -> None:
 
 def test_validate_cluster_rejects_wrong_parameter_name() -> None:
     bad_parameters = (
-        HelperParameter(name="period", concept="TIME_PERIOD", dtype="int"),
+        HelperParameter(name="period", dimension_id="TIME_PERIOD", dtype="int"),
     )
     with pytest.raises(ValueError, match="suggested_param_name"):
         validate_parameter_names_match_vocabulary(
@@ -370,6 +372,158 @@ def test_collapse_bindings_for_response_renders_literal_calls() -> None:
     assert len(bindings) == 2
     assert bindings[0].literal_call == "combined_input_passthrough(ctx, time_period=1)"
     assert bindings[1].literal_call == "combined_input_passthrough(ctx, time_period=2)"
+
+
+def test_collapse_bindings_for_dual_period_dimension_ids() -> None:
+    response = ClusterRefactorResponse(
+        helper_name="dual_period_lookup",
+        helper_docstring="Lookup.\n\nArgs:\n    ctx: Context.\n",
+        parameters=(
+            HelperParameter(
+                name="projection_period",
+                dimension_id="PROJECTION_PERIOD",
+                dtype="int",
+            ),
+            HelperParameter(
+                name="reference_period",
+                dimension_id="REFERENCE_PERIOD",
+                dtype="int",
+            ),
+        ),
+        helper_source=(
+            "def dual_period_lookup(ctx, projection_period, reference_period):\n"
+            "    return projection_period + reference_period\n"
+        ),
+        member_keys=(
+            MemberKeys(
+                address="Engine!C10",
+                function_name="cell_engine_c10",
+                keys=(
+                    MemberKeyEntry(dimension_id="PROJECTION_PERIOD", value=1),
+                    MemberKeyEntry(dimension_id="REFERENCE_PERIOD", value=0),
+                ),
+            ),
+        ),
+    )
+    bindings = collapse_bindings_for_response(response)
+    assert bindings[0].literal_call == (
+        "dual_period_lookup(ctx, projection_period=1, reference_period=0)"
+    )
+
+
+def test_helper_parameter_accepts_legacy_concept_only_payload() -> None:
+    parameter = HelperParameter.model_validate(
+        {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
+    )
+    assert parameter.dimension_id == "TIME_PERIOD"
+    assert parameter.concept == "TIME_PERIOD"
+
+
+def test_member_key_entry_accepts_legacy_concept_only_payload() -> None:
+    entry = MemberKeyEntry.model_validate({"concept": "TIME_PERIOD", "value": 1})
+    assert entry.dimension_id == "TIME_PERIOD"
+
+
+def test_prepare_resolves_legacy_concept_payload_against_vocabulary() -> None:
+    response = ClusterRefactorResponse.model_validate(
+        {
+            "helper_name": "combined_input_passthrough",
+            "helper_docstring": CLUSTER_DOCSTRING,
+            "parameters": [
+                {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
+            ],
+            "helper_source": VALID_CLUSTER_SOURCE,
+            "member_keys": [
+                {
+                    "address": "Engine!C6",
+                    "function_name": "cell_engine_c6",
+                    "keys": [{"concept": "TIME_PERIOD", "value": 1}],
+                },
+                {
+                    "address": "Engine!D6",
+                    "function_name": "cell_engine_d6",
+                    "keys": [{"concept": "TIME_PERIOD", "value": 2}],
+                },
+            ],
+        }
+    )
+    prepared = _prepare_cluster_refactor_response(response, CLUSTER_CONTEXT)
+    assert prepared.parameters[0].dimension_id == "TIME_PERIOD"
+    assert prepared.parameters[0].concept == "TIME_PERIOD"
+    assert prepared.member_keys[0].keys[0].dimension_id == "TIME_PERIOD"
+
+
+def test_prepare_rejects_concept_mismatch_for_dimension_id() -> None:
+    response = _cluster_response(
+        parameters=(
+            HelperParameter(
+                name="time_period",
+                dimension_id="TIME_PERIOD",
+                concept="REF_AREA",
+                dtype="int",
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="does not match vocabulary concept"):
+        _prepare_cluster_refactor_response(response, CLUSTER_CONTEXT)
+
+
+def test_prepare_rejects_ambiguous_shared_concept_without_dimension_id() -> None:
+    dual_vocab = (
+        KeyConceptSpec(
+            dimension_id="PROJECTION_PERIOD",
+            concept="TIME_PERIOD",
+            dtype="int",
+            suggested_param_name="projection_period",
+        ),
+        KeyConceptSpec(
+            dimension_id="REFERENCE_PERIOD",
+            concept="TIME_PERIOD",
+            dtype="int",
+            suggested_param_name="reference_period",
+        ),
+    )
+    ctx = ClusterRefactorContext(
+        cluster_id=1,
+        canonical_template="=Inputs!{col}1",
+        row=6,
+        members=CLUSTER_MEMBERS,
+        external_dependencies=(),
+        semantic_dependencies=(),
+        call_sites=(),
+        first_year_column="C",
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS,
+        key_vocabulary=dual_vocab,
+        expected_member_keys={
+            "Engine!C6": {"PROJECTION_PERIOD": 1},
+            "Engine!D6": {"PROJECTION_PERIOD": 2},
+        },
+        naming_hints={},
+    )
+    response = ClusterRefactorResponse.model_validate(
+        {
+            "helper_name": "combined_input_passthrough",
+            "helper_docstring": CLUSTER_DOCSTRING,
+            "parameters": [
+                {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
+            ],
+            "helper_source": VALID_CLUSTER_SOURCE,
+            "member_keys": [
+                {
+                    "address": "Engine!C6",
+                    "function_name": "cell_engine_c6",
+                    "keys": [{"concept": "TIME_PERIOD", "value": 1}],
+                },
+                {
+                    "address": "Engine!D6",
+                    "function_name": "cell_engine_d6",
+                    "keys": [{"concept": "TIME_PERIOD", "value": 2}],
+                },
+            ],
+        }
+    )
+    with pytest.raises(ValueError, match="ambiguous"):
+        _prepare_cluster_refactor_response(response, ctx)
 
 
 def test_apply_cluster_collapse_rewrites_and_removes_wrappers() -> None:
