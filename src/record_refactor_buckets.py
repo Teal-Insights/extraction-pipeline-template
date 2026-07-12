@@ -133,7 +133,7 @@ def _cluster_skip_reason(
     internals_source: str,
     *,
     layout: ProjectionColumnLayout | None,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
 ) -> str | None:
     if len(cluster.members) < 2:
@@ -155,11 +155,7 @@ def _cluster_skip_reason(
     if eligible_members < 2:
         return "cluster_has_fewer_than_two_graph_formula_members"
 
-    if (
-        bound_address_keys is not None
-        and workbook_path is not None
-        and layout is not None
-    ):
+    if workbook_path is not None and layout is not None:
         varying = varying_key_concepts(
             cluster.members,
             bound_address_keys=bound_address_keys,
@@ -230,7 +226,7 @@ def record_refactor_buckets(
     layout: ProjectionColumnLayout | None,
     compression: CompressionMode = "optimal",
     refactor_graph: ProjectionResult | None = None,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys,
 ) -> tuple[RefactorBucketRecord, ...]:
     """Classify formula clusters into singleton and cluster refactor target buckets."""
     clusters = cluster_graph_formulas(

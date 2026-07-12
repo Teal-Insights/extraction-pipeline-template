@@ -24,7 +24,6 @@ from excel_grapher.core.formula_ast import (
 )
 from excel_grapher.exporter import ProjectionResult
 from excel_grapher.grapher.graph import DependencyGraph
-from fastpyxl.utils.cell import column_index_from_string
 
 from src.refactor_bindings import BindingKeyValue, expected_keys_for_address
 from src.refactor_types import VariationMode
@@ -35,6 +34,17 @@ ClusterableGraph: TypeAlias = DependencyGraph | ProjectionResult
 StructuralFingerprint: TypeAlias = tuple[tuple, tuple[str, ...]]
 
 BoundAddressKeys: TypeAlias = Mapping[str, Mapping[str, BindingKeyValue]]
+
+
+def _require_bound_address_keys(
+    bound_address_keys: BoundAddressKeys | None,
+) -> BoundAddressKeys:
+    if bound_address_keys is None:
+        raise ValueError(
+            "bound_address_keys is required for formula clustering; "
+            "build it with build_bound_address_keys() from series bindings"
+        )
+    return bound_address_keys
 
 
 @dataclass
@@ -51,7 +61,12 @@ class _ClusteringKeyCache:
 
     def warm_from_formulas(self, formulas: Mapping[str, str]) -> None:
         for formula in formulas.values():
-            fingerprint = structural_fingerprint(formula)
+            fingerprint = structural_fingerprint(
+                formula,
+                bound_address_keys=self.bound_address_keys,
+                workbook_path=self.workbook_path,
+                layout=self.layout,
+            )
             if fingerprint is None:
                 continue
             for address in fingerprint[1]:
@@ -329,52 +344,17 @@ def _binding_aware_fingerprint_complete(
     return walk(skeleton)
 
 
-def _reference_deltas(
-    left_refs: tuple[str, ...], right_refs: tuple[str, ...]
-) -> list[tuple[int, int]] | None:
-    if len(left_refs) != len(right_refs):
-        return None
-    deltas: list[tuple[int, int]] = []
-    for left_ref, right_ref in zip(left_refs, right_refs, strict=True):
-        left_sheet, left_col, left_row = parse_workbook_address(left_ref)
-        right_sheet, right_col, right_row = parse_workbook_address(right_ref)
-        if left_sheet != right_sheet:
-            return None
-        left_col_index = column_index_from_string(left_col)
-        right_col_index = column_index_from_string(right_col)
-        deltas.append((right_col_index - left_col_index, right_row - left_row))
-    return deltas
-
-
-def _single_axis_reference_deltas(deltas: list[tuple[int, int]]) -> bool:
-    if not deltas:
-        return True
-    col_deltas = {delta[0] for delta in deltas}
-    row_deltas = {delta[1] for delta in deltas}
-    if col_deltas == {0} and row_deltas == {0}:
-        return True
-    if len(row_deltas) == 1 and row_deltas == {0}:
-        return True
-    if len(col_deltas) == 1 and col_deltas == {0}:
-        return True
-    for col_delta, row_delta in deltas:
-        if col_delta != 0 and row_delta != 0:
-            return False
-    cols_vary = any(delta[0] != 0 for delta in deltas)
-    rows_vary = any(delta[1] != 0 for delta in deltas)
-    return not (cols_vary and rows_vary)
-
-
 def formulas_are_parameterizable(
     left_formula: str,
     right_formula: str,
     *,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> bool:
     """Return whether two normalized formulas belong in the same parameterizable bucket."""
+    _require_bound_address_keys(bound_address_keys)
     left_fingerprint = structural_fingerprint(
         left_formula,
         bound_address_keys=bound_address_keys,
@@ -396,26 +376,20 @@ def formulas_are_parameterizable(
     if left_skeleton != right_skeleton:
         return False
 
-    if bound_address_keys is not None:
-        if not _binding_aware_fingerprint_complete(
-            left_fingerprint
-        ) or not _binding_aware_fingerprint_complete(right_fingerprint):
-            return False
-        if len(left_refs) != len(right_refs):
-            return False
-        return True
-
-    deltas = _reference_deltas(left_refs, right_refs)
-    if deltas is None:
+    if not _binding_aware_fingerprint_complete(
+        left_fingerprint
+    ) or not _binding_aware_fingerprint_complete(right_fingerprint):
         return False
-    return _single_axis_reference_deltas(deltas)
+    if len(left_refs) != len(right_refs):
+        return False
+    return True
 
 
 def _should_cluster(
     left_formula: str,
     right_formula: str,
     *,
-    bound_address_keys: BoundAddressKeys | None,
+    bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None,
     layout: ProjectionColumnLayout | None,
     key_cache: _ClusteringKeyCache | None,
@@ -704,23 +678,22 @@ def cluster_has_independent_operand_variation(
 def cluster_graph_formulas(
     graph: ClusterableGraph,
     *,
-    bound_address_keys: BoundAddressKeys | None = None,
+    bound_address_keys: BoundAddressKeys,
     variation_mode: VariationMode = "independent",
     workbook_path: Path | None = None,
     layout: ProjectionColumnLayout | None = None,
 ) -> tuple[FormulaCluster, ...]:
     """Cluster non-leaf formula nodes by AST shape and binding-aware ref placeholders."""
+    resolved_bound_keys = _require_bound_address_keys(bound_address_keys)
     formula_nodes = _formula_nodes(graph)
     addresses = sorted(formula_nodes)
 
-    key_cache: _ClusteringKeyCache | None = None
-    if bound_address_keys is not None:
-        key_cache = _ClusteringKeyCache(
-            bound_address_keys=bound_address_keys,
-            workbook_path=workbook_path,
-            layout=layout,
-        )
-        key_cache.warm_from_formulas(formula_nodes)
+    key_cache = _ClusteringKeyCache(
+        bound_address_keys=resolved_bound_keys,
+        workbook_path=workbook_path,
+        layout=layout,
+    )
+    key_cache.warm_from_formulas(formula_nodes)
 
     parent = {address: address for address in addresses}
 
@@ -755,11 +728,7 @@ def cluster_graph_formulas(
     raw_clusters: list[tuple[str, ...]] = []
     for _root, members in sorted(grouped.items(), key=lambda item: item[1]):
         ordered_members = tuple(sorted(members))
-        if (
-            variation_mode == "dominant_key_only"
-            and bound_address_keys is not None
-            and len(ordered_members) >= 2
-        ):
+        if variation_mode == "dominant_key_only" and len(ordered_members) >= 2:
             raw_clusters.extend(
                 _split_cluster_by_dominant_keys(
                     ordered_members,

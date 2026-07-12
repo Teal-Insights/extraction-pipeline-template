@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -87,6 +88,17 @@ MISMATCHED_KEY_SET_BINDINGS = {
     "Inputs!D16": {"REF_AREA": "DE"},
 }
 
+DEBT_TO_GDP_BINDINGS: dict[str, dict[str, int]] = {}
+for col, time_period in zip("BCDEFG", range(1, 7), strict=True):
+    DEBT_TO_GDP_BINDINGS[f"Inputs!{col}6"] = {"TIME_PERIOD": time_period}
+    DEBT_TO_GDP_BINDINGS[f"Inputs!{col}16"] = {"TIME_PERIOD": time_period}
+    DEBT_TO_GDP_BINDINGS[f"Inputs!{col}17"] = {"TIME_PERIOD": time_period}
+for col, time_period in zip("CDEFG", range(2, 7), strict=True):
+    DEBT_TO_GDP_BINDINGS[f"Engine!{col}16"] = {"TIME_PERIOD": time_period}
+    DEBT_TO_GDP_BINDINGS[f"Engine!{col}20"] = {"TIME_PERIOD": time_period}
+DEBT_TO_GDP_BINDINGS["Engine!C16"] = {"TIME_PERIOD": 1}
+DEBT_TO_GDP_BINDINGS["Engine!C20"] = {"TIME_PERIOD": 1}
+
 VARIABLE_COUNTRY_PAIR_BINDINGS = {
     "Inputs!B10": {"REF_AREA": "US", "TIME_PERIOD": 1},
     "Inputs!C10": {"REF_AREA": "CN", "TIME_PERIOD": 1},
@@ -154,10 +166,13 @@ def test_binding_aware_fingerprint_uses_distinct_dimension_ids() -> None:
     )
 
 
-def test_formulas_are_parameterizable_for_column_sweep() -> None:
-    left = "=Paris!B13+Inputs!C16"
-    right = "=Paris!C13+Inputs!D16"
-    assert formulas_are_parameterizable(left, right)
+def test_formulas_are_parameterizable_requires_bound_address_keys() -> None:
+    with pytest.raises(ValueError, match="bound_address_keys is required"):
+        formulas_are_parameterizable(
+            "=Paris!B13+Inputs!C16",
+            "=Paris!C13+Inputs!D16",
+            bound_address_keys=None,  # type: ignore[arg-type]
+        )
 
 
 def test_formulas_are_parameterizable_with_binding_keys_for_column_sweep() -> None:
@@ -173,7 +188,11 @@ def test_formulas_are_parameterizable_with_binding_keys_for_column_sweep() -> No
 def test_formulas_are_parameterizable_with_binding_keys_for_both_axes() -> None:
     left = "=Paris!B13+Inputs!C16"
     right = "=Paris!C14+Inputs!D16"
-    assert not formulas_are_parameterizable(left, right)
+    assert not formulas_are_parameterizable(
+        left,
+        right,
+        bound_address_keys=COLUMN_SWEEP_BINDINGS,
+    )
     assert formulas_are_parameterizable(
         left,
         right,
@@ -184,13 +203,21 @@ def test_formulas_are_parameterizable_with_binding_keys_for_both_axes() -> None:
 def test_formulas_are_not_parameterizable_for_different_structure() -> None:
     left = "=Paris!B13+1"
     right = "=Paris!B13*2"
-    assert not formulas_are_parameterizable(left, right)
+    assert not formulas_are_parameterizable(
+        left,
+        right,
+        bound_address_keys={"Paris!B13": {"TIME_PERIOD": 1}},
+    )
 
 
 def test_formulas_are_not_parameterizable_when_refs_vary_on_both_axes() -> None:
     left = "=Paris!B13+Inputs!C16"
     right = "=Paris!C14+Inputs!D16"
-    assert not formulas_are_parameterizable(left, right)
+    assert not formulas_are_parameterizable(
+        left,
+        right,
+        bound_address_keys=COLUMN_SWEEP_BINDINGS,
+    )
 
 
 def test_formulas_are_not_parameterizable_when_ref_key_sets_differ() -> None:
@@ -213,16 +240,36 @@ def test_formulas_are_not_parameterizable_when_binding_metadata_missing() -> Non
     )
 
 
-def test_formulas_are_not_parameterizable_for_anchor_vs_recurrence() -> None:
+def test_formulas_are_parameterizable_for_matching_anchor_and_recurrence_shapes() -> None:
     left = "=Inputs!B6*(1+Inputs!C17/100)"
     right = "=Engine!C6*(1+Inputs!D17/100)"
-    assert not formulas_are_parameterizable(left, right)
+    bindings = {
+        "Inputs!B6": {"TIME_PERIOD": 1},
+        "Inputs!C17": {"TIME_PERIOD": 1},
+        "Engine!C6": {"TIME_PERIOD": 1},
+        "Inputs!D17": {"TIME_PERIOD": 2},
+    }
+    assert formulas_are_parameterizable(left, right, bound_address_keys=bindings)
+
+
+def test_cluster_graph_formulas_requires_bound_address_keys(
+    synthetic_projection,
+) -> None:
+    with pytest.raises(ValueError, match="bound_address_keys is required"):
+        cluster_graph_formulas(synthetic_projection, bound_address_keys=None)  # type: ignore[arg-type]
 
 
 def test_cluster_graph_formulas_groups_parallel_row_on_synthetic_projection(
     synthetic_projection,
+    synthetic_bound_address_keys,
+    synthetic_pipeline_config_fixture,
 ) -> None:
-    clusters = cluster_graph_formulas(synthetic_projection)
+    clusters = cluster_graph_formulas(
+        synthetic_projection,
+        bound_address_keys=synthetic_bound_address_keys,
+        workbook_path=synthetic_pipeline_config_fixture.workbook_path,
+        layout=synthetic_pipeline_config_fixture.projection_layout,
+    )
     engine_cluster = next(
         cluster
         for cluster in clusters
@@ -303,23 +350,24 @@ def test_dominant_key_only_variation_mode_splits_cluster() -> None:
     assert ("Engine!D5",) in member_sets
 
 
-def test_cluster_graph_formulas_splits_anchor_from_recurrence_chain() -> None:
-    clusters = cluster_graph_formulas(_debt_to_gdp_anchor_recurrence_graph())
+def test_cluster_graph_formulas_groups_debt_recurrence_chain_with_binding_keys() -> None:
+    clusters = cluster_graph_formulas(
+        _debt_to_gdp_anchor_recurrence_graph(),
+        bound_address_keys=DEBT_TO_GDP_BINDINGS,
+    )
     debt_clusters = [
         cluster
         for cluster in clusters
         if any(member.endswith("20") for member in cluster.members)
-        and len(cluster.members) >= 2
     ]
     assert len(debt_clusters) == 1
-    assert debt_clusters[0].members == (
+    assert set(debt_clusters[0].members) == {
+        "Engine!C20",
         "Engine!D20",
         "Engine!E20",
         "Engine!F20",
         "Engine!G20",
-    )
-    singletons = [cluster for cluster in clusters if cluster.members == ("Engine!C20",)]
-    assert len(singletons) == 1
+    }
 
 
 def test_dominant_key_only_split_passes_layout_to_ref_key_resolution(
