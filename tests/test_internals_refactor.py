@@ -1663,4 +1663,4 @@ def test_llm_refactor_cluster_uses_dimension_aware_prompt(
     assert user_prompt.startswith(
         load_cluster_refactor_prompt_fixed_portion("dimension_aware").strip()
     )
-    assert "member-sweep cluster contract" not in user_prompt
+    assert "Never collapse two dimension ids" in user_prompt

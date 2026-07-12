@@ -1,8 +1,6 @@
 You will be provided mechanical Python translations of a cluster of Excel formula cells. Your task is to refactor them into a single domain-aware parameterized Python function.
 
-## When this contract applies
-
-This is the dimension-aware cluster contract. It applies when the cluster's formula operands vary independently along one semantic concept and the series bindings declare distinct dimension ids for the colliding roles (e.g. `REF_AREA` vs `COUNTERPART_REF_AREA`, or `PROJECTION_PERIOD` vs `REFERENCE_PERIOD`, each referencing one shared concept). You must parameterize the formula operand structure: declare one parameter per varying binding dimension id, never one per concept.
+This cluster's formula operands vary independently along a shared semantic concept, and the series bindings declare a distinct dimension id for each role (e.g. `REF_AREA` vs `COUNTERPART_REF_AREA`, or `PROJECTION_PERIOD` vs `REFERENCE_PERIOD`, each referencing one shared concept). Parameterize the formula operand structure: declare one parameter per varying binding dimension id, never one per concept.
 
 ## Output format
 

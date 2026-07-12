@@ -361,14 +361,14 @@ def test_prompt_for_refactor_selects_dimension_aware_fixture() -> None:
     assert default_prompt.startswith(EXPECTED_FIXED_PORTION)
 
 
-def test_cluster_prompts_document_when_each_contract_applies() -> None:
+def test_cluster_prompts_carry_rules_but_not_selection_criteria() -> None:
+    """Contract selection is mechanical; prompts state rules, not applicability."""
     member_sweep = load_cluster_refactor_prompt_fixed_portion()
     dimension_aware = load_cluster_refactor_prompt_fixed_portion("dimension_aware")
-    assert "## When this contract applies" in member_sweep
-    assert "## When this contract applies" in dimension_aware
-    assert "member-sweep" in member_sweep
-    assert "dimension-aware" in dimension_aware
+    assert "When this contract applies" not in member_sweep
+    assert "When this contract applies" not in dimension_aware
     assert "COUNTERPART_REF_AREA" in dimension_aware
+    assert "one parameter per varying binding dimension id" in dimension_aware
     assert "Never collapse two dimension ids" in dimension_aware
 
 
