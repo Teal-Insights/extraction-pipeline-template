@@ -61,17 +61,13 @@ class _ClusteringKeyCache:
 
     def warm_from_formulas(self, formulas: Mapping[str, str]) -> None:
         for formula in formulas.values():
-            fingerprint = structural_fingerprint(
+            structural_fingerprint(
                 formula,
                 bound_address_keys=self.bound_address_keys,
                 workbook_path=self.workbook_path,
                 layout=self.layout,
+                key_cache=self,
             )
-            if fingerprint is None:
-                continue
-            for address in fingerprint[1]:
-                self.concepts_for_address(address)
-                self.values_for_address(address)
 
     def concepts_for_address(self, address: str) -> tuple[str, ...] | None:
         if address not in self._concept_cache:
