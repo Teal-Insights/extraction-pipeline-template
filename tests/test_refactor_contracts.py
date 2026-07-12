@@ -153,10 +153,16 @@ def test_selects_dimension_aware_when_counterpart_dimension_ids_cover_variation(
     None
 ):
     """Variable country pairs route to Contract B once counterpart ids exist."""
+    bindings = {
+        **VARIABLE_COUNTRY_PAIR_BINDINGS,
+        "Engine!B5": {"REF_AREA": "US", "COUNTERPART_REF_AREA": "CN"},
+        "Engine!C5": {"REF_AREA": "DE", "COUNTERPART_REF_AREA": "FR"},
+        "Engine!D5": {"REF_AREA": "JP", "COUNTERPART_REF_AREA": "KR"},
+    }
     contract = select_cluster_refactor_contract(
         TRADE_BALANCE_CLUSTER,
         TRADE_BALANCE_FORMULAS,
-        VARIABLE_COUNTRY_PAIR_BINDINGS,
+        bindings,
         frozenset({"REF_AREA", "COUNTERPART_REF_AREA"}),
         key_vocabulary=(
             TIME_PERIOD_SPEC,
@@ -165,6 +171,74 @@ def test_selects_dimension_aware_when_counterpart_dimension_ids_cover_variation(
         ),
     )
     assert contract == "dimension_aware"
+
+
+def test_selects_member_sweep_for_derivable_fixed_lag() -> None:
+    """A constant (t, t-1) operand offset is derivable and stays on Contract A."""
+    cluster = FormulaCluster(
+        cluster_id=3,
+        members=("Engine!B2", "Engine!C2", "Engine!D2"),
+        canonical_template="=Inputs!B1-Inputs!A1",
+        row=2,
+    )
+    formula_nodes = {
+        "Engine!B2": "=Inputs!B1-Inputs!A1",
+        "Engine!C2": "=Inputs!C1-Inputs!B1",
+        "Engine!D2": "=Inputs!D1-Inputs!C1",
+    }
+    bindings = {
+        "Inputs!A1": {"TIME_PERIOD": 1},
+        "Inputs!B1": {"TIME_PERIOD": 2},
+        "Inputs!C1": {"TIME_PERIOD": 3},
+        "Inputs!D1": {"TIME_PERIOD": 4},
+        "Engine!B2": {"TIME_PERIOD": 2},
+        "Engine!C2": {"TIME_PERIOD": 3},
+        "Engine!D2": {"TIME_PERIOD": 4},
+    }
+    contract = select_cluster_refactor_contract(
+        cluster,
+        formula_nodes,
+        bindings,
+        frozenset({"TIME_PERIOD"}),
+        key_vocabulary=(TIME_PERIOD_SPEC,),
+    )
+    assert contract == "member_sweep"
+
+
+def test_returns_none_when_operand_roles_exceed_declared_dimension_ids() -> None:
+    """Three independent operand roles cannot be routed by two dimension ids."""
+    cluster = FormulaCluster(
+        cluster_id=4,
+        members=("Engine!B5", "Engine!C5", "Engine!D5"),
+        canonical_template="=Inputs!B10-Inputs!C10-Inputs!D10",
+        row=5,
+    )
+    formula_nodes = {
+        "Engine!B5": "=Inputs!B10-Inputs!C10-Inputs!D10",
+        "Engine!C5": "=Inputs!B11-Inputs!C11-Inputs!D11",
+        "Engine!D5": "=Inputs!B12-Inputs!C12-Inputs!D12",
+    }
+    bindings = {
+        **VARIABLE_COUNTRY_PAIR_BINDINGS,
+        "Inputs!D10": {"REF_AREA": "BR", "TIME_PERIOD": 1},
+        "Inputs!D11": {"REF_AREA": "MX", "TIME_PERIOD": 1},
+        "Inputs!D12": {"REF_AREA": "ZA", "TIME_PERIOD": 1},
+        "Engine!B5": {"REF_AREA": "US", "COUNTERPART_REF_AREA": "CN"},
+        "Engine!C5": {"REF_AREA": "DE", "COUNTERPART_REF_AREA": "FR"},
+        "Engine!D5": {"REF_AREA": "JP", "COUNTERPART_REF_AREA": "KR"},
+    }
+    contract = select_cluster_refactor_contract(
+        cluster,
+        formula_nodes,
+        bindings,
+        frozenset({"REF_AREA", "COUNTERPART_REF_AREA"}),
+        key_vocabulary=(
+            TIME_PERIOD_SPEC,
+            REF_AREA_SPEC,
+            COUNTERPART_REF_AREA_SPEC,
+        ),
+    )
+    assert contract is None
 
 
 def test_returns_none_when_flagged_dimension_lacks_counterpart_coverage() -> None:
