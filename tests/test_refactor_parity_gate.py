@@ -200,7 +200,7 @@ CLUSTER_INPUTS = [
 @pytest.fixture(scope="module")
 def parity_gate_dist_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("parity_gate_dist")
-    package_root = root / "tiny_dsa"
+    package_root = root / "my_model"
     package_root.mkdir(parents=True)
     fixture_runtime = (
         Path(__file__).resolve().parent / "fixtures" / "parity_gate_runtime.py"
