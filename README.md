@@ -34,6 +34,7 @@ Before running the pipeline, populate this repository with workbook-specific inp
 | Series bindings | `bindings/inputs.bindings.yaml`, `bindings/outputs.bindings.yaml`, `bindings/internals.bindings.yaml` | Records-shaped public API surface and internal formula-cell triangulation |
 | Package metadata | `workbook_config.py` → `DIST_METADATA` | Generated `dist/` project name, docs URLs, README |
 | Projection layout | `workbook_config.py` → `PROJECTION_LAYOUT` | Optional Engine/Outputs column mapping for internals refactor (see below) |
+| Variation mode | `workbook_config.py` → `VARIATION_MODE` | Formula-cluster splitting for internals refactor (see [Refactor](#7-refactor)) |
 | Internal binding exemptions | `workbook_config.py` → `INTERNAL_BINDING_EXEMPT_CELLS` | Reviewed formula cells allowed to remain unbound |
 | Scenario matrix | `tests/differential/*_scenario_matrix.py` (or hooks in `differential_test_graph.py`) | Representative input combinations for differential parity sweeps |
 | Graph parity evidence | `data/differential/graph/` | Reference reports after passing pre-export graph-oracle sweeps (optional until configured) |
@@ -198,6 +199,28 @@ Great Docs generates the distributable website from the exported package. LLM re
 ### 7. Refactor
 
 Cluster parallel formula families, collapse internals with LLM-authored semantic helpers behind a parity gate, and prune thin wrappers. Each refactor pass re-runs differential tests.
+
+#### Formula-cluster variation mode
+
+Set `VARIATION_MODE` in [workbook_config.py](workbook_config.py) to control how parallel formula cells are grouped before the LLM refactor step. This affects **export** and **refactor-bucket recording** only — not graph extraction (`--extract-graph` ignores it).
+
+| Mode | Behavior |
+|---|---|
+| `independent` (default) | Keep one refactor cluster when formulas share the same AST shape, even if operand binding keys vary along multiple dimensions. |
+| `dominant_key_only` | After AST clustering, split clusters where operand keys vary along more than one dimension, keeping only the dimension with the widest value spread as a refactor parameter. Use when a row of parallel formulas mixes, for example, country and time-period variation but you want helpers parameterized only by time period. |
+
+Override per run on either entry point:
+
+```bash
+uv run python -m src.extraction_pipeline --variation-mode dominant_key_only
+uv run python -m src.record_refactor_buckets --variation-mode dominant_key_only
+```
+
+Inspect planned refactor targets without calling the LLM:
+
+```bash
+uv run python -m src.record_refactor_buckets
+```
 
 ## Run the pipeline
 

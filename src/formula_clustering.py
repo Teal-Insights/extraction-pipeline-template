@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 from excel_grapher.core.formula_ast import (
     AstNode,
@@ -27,13 +27,12 @@ from excel_grapher.grapher.graph import DependencyGraph
 from fastpyxl.utils.cell import column_index_from_string
 
 from src.refactor_bindings import BindingKeyValue, expected_keys_for_address
+from src.refactor_types import VariationMode
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
 
 ClusterableGraph: TypeAlias = DependencyGraph | ProjectionResult
 
 StructuralFingerprint: TypeAlias = tuple[tuple, tuple[str, ...]]
-
-VariationMode: TypeAlias = Literal["independent", "dominant_key_only"]
 
 BoundAddressKeys: TypeAlias = Mapping[str, Mapping[str, BindingKeyValue]]
 

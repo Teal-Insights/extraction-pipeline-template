@@ -21,6 +21,14 @@ from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
 from src.docstring_callback import configure_docstring_callback
 from src.extraction_pipeline import build_pipeline_graph
+from src.pipeline_config import (
+    PipelineConfig,
+    add_variation_mode_argument,
+    apply_variation_mode_cli_override,
+    load_pipeline_config,
+    validate_pipeline_config,
+)
+from src.pipeline_context import activate_pipeline_config
 from src.formula_clustering import (
     BoundAddressKeys,
     ClusterableGraph,
@@ -42,12 +50,6 @@ from src.internals_refactor import (
     build_singleton_refactor_context,
 )
 from src.logging_config import configure_logging
-from src.pipeline_config import (
-    PipelineConfig,
-    load_pipeline_config,
-    validate_pipeline_config,
-)
-from src.pipeline_context import activate_pipeline_config
 from src.refactor_order import compute_cluster_refactor_order
 from src.subgraph_projection import build_refactor_projection
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
@@ -234,6 +236,7 @@ def record_refactor_buckets(
     clusters = cluster_graph_formulas(
         graph,
         bound_address_keys=bound_address_keys,
+        variation_mode=config.variation_mode,
         workbook_path=config.workbook_path,
         layout=layout,
     )
@@ -545,6 +548,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Bypass on-disk graph and projection caches for this run.",
     )
+    add_variation_mode_argument(parser)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     json_output = (
@@ -558,7 +562,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         else args.markdown_output
     )
 
-    config = load_pipeline_config()
+    config = apply_variation_mode_cli_override(
+        load_pipeline_config(), args.variation_mode
+    )
     validate_pipeline_config(config)
     activate_pipeline_config(config)
 
