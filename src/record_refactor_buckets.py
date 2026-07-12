@@ -228,7 +228,7 @@ def record_refactor_buckets(
     layout: ProjectionColumnLayout | None,
     compression: CompressionMode = "optimal",
     refactor_graph: ProjectionResult | None = None,
-    bound_address_keys: BoundAddressKeys,
+    bound_address_keys: BoundAddressKeys | None,
 ) -> tuple[RefactorBucketRecord, ...]:
     """Classify formula clusters into singleton and cluster refactor target buckets."""
     resolved_bound_keys = _require_bound_address_keys(bound_address_keys)

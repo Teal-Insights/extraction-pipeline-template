@@ -138,7 +138,7 @@ def test_structural_fingerprint_requires_bound_address_keys() -> None:
     with pytest.raises(ValueError, match="bound_address_keys is required"):
         structural_fingerprint(
             "=Paris!B13+1",
-            bound_address_keys=None,  # type: ignore[arg-type]
+            bound_address_keys=None,
         )
 
 
@@ -187,7 +187,7 @@ def test_formulas_are_parameterizable_requires_bound_address_keys() -> None:
         formulas_are_parameterizable(
             "=Paris!B13+Inputs!C16",
             "=Paris!C13+Inputs!D16",
-            bound_address_keys=None,  # type: ignore[arg-type]
+            bound_address_keys=None,
         )
 
 
@@ -274,7 +274,7 @@ def test_cluster_graph_formulas_requires_bound_address_keys(
     synthetic_projection,
 ) -> None:
     with pytest.raises(ValueError, match="bound_address_keys is required"):
-        cluster_graph_formulas(synthetic_projection, bound_address_keys=None)  # type: ignore[arg-type]
+        cluster_graph_formulas(synthetic_projection, bound_address_keys=None)
 
 
 def test_cluster_graph_formulas_groups_parallel_row_on_synthetic_projection(

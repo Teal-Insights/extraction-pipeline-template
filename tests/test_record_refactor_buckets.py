@@ -299,5 +299,5 @@ def test_record_refactor_buckets_requires_bound_address_keys(
             internal_binding_index=None,
             layout=None,
             compression="none",
-            bound_address_keys=None,  # type: ignore[arg-type]
+            bound_address_keys=None,
         )

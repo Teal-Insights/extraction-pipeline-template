@@ -372,7 +372,7 @@ def address_only_structural_fingerprint(
 def structural_fingerprint(
     normalized_formula: str,
     *,
-    bound_address_keys: BoundAddressKeys,
+    bound_address_keys: BoundAddressKeys | None,
     workbook_path: Path | None = None,
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
@@ -462,17 +462,17 @@ def formulas_are_parameterizable(
     left_formula: str,
     right_formula: str,
     *,
-    bound_address_keys: BoundAddressKeys,
+    bound_address_keys: BoundAddressKeys | None,
     workbook_path: Path | None = None,
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> bool:
     """Return whether two normalized formulas belong in the same parameterizable bucket."""
-    _require_bound_address_keys(bound_address_keys)
+    resolved_bound_keys = _require_bound_address_keys(bound_address_keys)
     return _formulas_are_parameterizable(
         left_formula,
         right_formula,
-        bound_address_keys=bound_address_keys,
+        bound_address_keys=resolved_bound_keys,
         workbook_path=workbook_path,
         layout=layout,
         key_cache=key_cache,
@@ -772,7 +772,7 @@ def cluster_has_independent_operand_variation(
 def cluster_graph_formulas(
     graph: ClusterableGraph,
     *,
-    bound_address_keys: BoundAddressKeys,
+    bound_address_keys: BoundAddressKeys | None,
     variation_mode: VariationMode = "independent",
     workbook_path: Path | None = None,
     layout: ProjectionColumnLayout | None = None,
