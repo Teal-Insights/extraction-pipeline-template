@@ -234,6 +234,7 @@ def record_refactor_buckets(
     clusters = cluster_graph_formulas(
         graph,
         bound_address_keys=bound_address_keys,
+        variation_mode=config.variation_mode,
         workbook_path=config.workbook_path,
         layout=layout,
     )
