@@ -256,7 +256,9 @@ def test_formulas_are_not_parameterizable_when_binding_metadata_missing() -> Non
     )
 
 
-def test_formulas_are_parameterizable_for_matching_anchor_and_recurrence_shapes() -> None:
+def test_formulas_are_parameterizable_for_matching_anchor_and_recurrence_shapes() -> (
+    None
+):
     left = "=Inputs!B6*(1+Inputs!C17/100)"
     right = "=Engine!C6*(1+Inputs!D17/100)"
     bindings = {
@@ -366,7 +368,9 @@ def test_dominant_key_only_variation_mode_splits_cluster() -> None:
     assert ("Engine!D5",) in member_sets
 
 
-def test_cluster_graph_formulas_groups_debt_recurrence_chain_with_binding_keys() -> None:
+def test_cluster_graph_formulas_groups_debt_recurrence_chain_with_binding_keys() -> (
+    None
+):
     clusters = cluster_graph_formulas(
         _debt_to_gdp_anchor_recurrence_graph(),
         bound_address_keys=_debt_to_gdp_bindings(),

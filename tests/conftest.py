@@ -172,7 +172,9 @@ def synthetic_series_bindings():
 
 
 @pytest.fixture(scope="session")
-def synthetic_bound_address_keys(synthetic_configured_pipeline: SyntheticConfiguredPipeline):
+def synthetic_bound_address_keys(
+    synthetic_configured_pipeline: SyntheticConfiguredPipeline,
+):
     from src.refactor_bindings import build_bound_address_keys
 
     return build_bound_address_keys(

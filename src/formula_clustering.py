@@ -213,9 +213,7 @@ def _address_only_structural_tuple(node: AstNode, refs: list[str]) -> tuple:
         return (
             "fn",
             node.name,
-            tuple(
-                _address_only_structural_tuple(arg, refs) for arg in node.args
-            ),
+            tuple(_address_only_structural_tuple(arg, refs) for arg in node.args),
         )
     raise TypeError(type(node))
 
