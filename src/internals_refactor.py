@@ -53,7 +53,7 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 23
+REFACTOR_PROMPT_VERSION = 24
 
 
 def refactor_model() -> str:
@@ -308,31 +308,134 @@ class ClusterRefactorResponse(BaseModel):
     )
 
 
+class RefactorDeclaredError(RuntimeError):
+    """Raised when the LLM declares that a refactor cannot proceed safely."""
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        kind: Literal["singleton", "cluster"],
+        target: str,
+    ) -> None:
+        self.reason = reason
+        self.kind = kind
+        self.target = target
+        super().__init__(reason)
+
+
+def _validate_llm_response_error_or_success[T: BaseModel](
+    response: T,
+    *,
+    success_fields: tuple[str, ...],
+) -> T:
+    error = getattr(response, "error")
+    error_reason = getattr(response, "error_reason")
+    if error is True:
+        reason = error_reason.strip() if isinstance(error_reason, str) else ""
+        if not reason:
+            raise ValueError(
+                "error_reason must be a non-empty string when error is true"
+            )
+        populated = [
+            name for name in success_fields if getattr(response, name) is not None
+        ]
+        if populated:
+            raise ValueError(
+                "success fields must be null when error is true: "
+                + ", ".join(populated)
+            )
+        return response
+    if error_reason is not None:
+        raise ValueError("error_reason must be null unless error is true")
+    missing = [
+        name
+        for name in success_fields
+        if getattr(response, name) is None
+        or (
+            isinstance(getattr(response, name), str)
+            and not getattr(response, name).strip()
+        )
+    ]
+    if missing:
+        raise ValueError(
+            "missing required fields for successful refactor: " + ", ".join(missing)
+        )
+    return response
+
+
+def raise_if_llm_declared_error(
+    response: BaseModel,
+    *,
+    kind: Literal["singleton", "cluster"],
+    target: str,
+) -> None:
+    """Abort immediately when the LLM sets ``error`` to true."""
+    if getattr(response, "error") is not True:
+        return
+    error_reason = getattr(response, "error_reason")
+    reason = error_reason.strip() if isinstance(error_reason, str) else ""
+    if not reason:
+        raise ValueError("error_reason must be a non-empty string when error is true")
+    raise RefactorDeclaredError(reason, kind=kind, target=target)
+
+
 class ClusterRefactorLLMResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    symbol_signature: str = Field(
+    symbol_signature: str | None = Field(
         description=(
             "Python function signature, including `def` keyword, `snake_case` "
             "semantic name, `ctx: EvalContext`, typed economic parameters from "
-            "`key_vocabulary`, and return type hint."
-        )
+            "`key_vocabulary`, and return type hint. Null when error is true."
+        ),
     )
-    symbol_docstring: str = Field(
-        description="Google-style docstring. Include Args and Returns sections."
+    symbol_docstring: str | None = Field(
+        description=(
+            "Google-style docstring. Include Args and Returns sections. "
+            "Null when error is true."
+        ),
     )
-    symbol_body: str = Field(description="Python function body.")
-    parameters: tuple[HelperParameter, ...] = Field(
+    symbol_body: str | None = Field(
+        description="Python function body. Null when error is true.",
+    )
+    parameters: tuple[HelperParameter, ...] | None = Field(
         description=(
             "Economic parameters the helper varies along, tied to binding "
-            "dimension ids."
-        )
+            "dimension ids. Null when error is true."
+        ),
     )
-    member_keys: tuple[MemberKeys, ...] = Field(
+    member_keys: tuple[MemberKeys, ...] | None = Field(
         description=(
-            "One entry per cluster member with literal key values for that address."
-        )
+            "One entry per cluster member with literal key values for that address. "
+            "Null when error is true."
+        ),
     )
+    error: bool | None = Field(
+        description=(
+            "Set to true to abort this refactor and stop the pipeline when the "
+            "cluster cannot be safely refactored. Null or false on success."
+        ),
+    )
+    error_reason: str | None = Field(
+        description=(
+            "Human-readable explanation of why refactoring must abort. "
+            "Non-empty when error is true; null otherwise."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_success_fields_or_declared_error(self) -> ClusterRefactorLLMResponse:
+        return _validate_llm_response_error_or_success(
+            self,
+            success_fields=(
+                "symbol_signature",
+                "symbol_docstring",
+                "symbol_body",
+                "parameters",
+                "member_keys",
+            ),
+        )
 
 
 CLUSTER_REFACTOR_PROMPT_FIXTURE = (
@@ -378,16 +481,45 @@ class SingletonRefactorResponse(BaseModel):
 class SingletonRefactorLLMResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    symbol_signature: str = Field(
+    symbol_signature: str | None = Field(
         description=(
             "Python function signature, including `def` keyword, `snake_case` "
-            "semantic name, a single `ctx: EvalContext` argument, and return type hint."
+            "semantic name, a single `ctx: EvalContext` argument, and return type hint. "
+            "Null when error is true."
+        ),
+    )
+    symbol_docstring: str | None = Field(
+        description=(
+            "Google-style docstring. Include Args and Returns sections. "
+            "Null when error is true."
+        ),
+    )
+    symbol_body: str | None = Field(
+        description="Python function body. Null when error is true.",
+    )
+    error: bool | None = Field(
+        description=(
+            "Set to true to abort this refactor and stop the pipeline when the "
+            "cell cannot be safely refactored. Null or false on success."
+        ),
+    )
+    error_reason: str | None = Field(
+        description=(
+            "Human-readable explanation of why refactoring must abort. "
+            "Non-empty when error is true; null otherwise."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_success_fields_or_declared_error(self) -> SingletonRefactorLLMResponse:
+        return _validate_llm_response_error_or_success(
+            self,
+            success_fields=(
+                "symbol_signature",
+                "symbol_docstring",
+                "symbol_body",
+            ),
         )
-    )
-    symbol_docstring: str = Field(
-        description="Google-style docstring. Include Args and Returns sections."
-    )
-    symbol_body: str = Field(description="Python function body.")
 
 
 ALLOWED_SINGLETON_RETURN_TYPE_HINTS = frozenset({"bool", "float", "int", "str"})
@@ -1501,6 +1633,14 @@ def prepare_singleton_refactor_response(
     llm_response: SingletonRefactorLLMResponse,
     ctx: SingletonRefactorContext,
 ) -> SingletonRefactorResponse:
+    if (
+        llm_response.symbol_signature is None
+        or llm_response.symbol_docstring is None
+        or llm_response.symbol_body is None
+    ):
+        raise ValueError(
+            "singleton refactor response is missing required success fields"
+        )
     validate_singleton_return_type_hint(
         parse_singleton_return_type_hint(llm_response.symbol_signature)
     )
@@ -1779,6 +1919,14 @@ def prepare_cluster_refactor_response(
     llm_response: ClusterRefactorLLMResponse,
     ctx: ClusterRefactorContext,
 ) -> ClusterRefactorResponse:
+    if (
+        llm_response.symbol_signature is None
+        or llm_response.symbol_docstring is None
+        or llm_response.symbol_body is None
+        or llm_response.parameters is None
+        or llm_response.member_keys is None
+    ):
+        raise ValueError("cluster refactor response is missing required success fields")
     validate_singleton_return_type_hint(
         parse_cluster_return_type_hint(llm_response.symbol_signature)
     )
@@ -3279,8 +3427,13 @@ def llm_refactor_singleton(
         parsed: SingletonRefactorLLMResponse,
     ) -> SingletonRefactorLLMResponse:
         nonlocal validated_prepared
-        prepared = prepare_singleton_refactor_response(parsed, ctx)
         last_attempt["llm_response"] = parsed.model_dump()
+        raise_if_llm_declared_error(
+            parsed,
+            kind="singleton",
+            target=ctx.address,
+        )
+        prepared = prepare_singleton_refactor_response(parsed, ctx)
         last_attempt["prepared_response"] = prepared.model_dump()
         validated_prepared = _apply_singleton_refactor_validation(prepared)
         return parsed
@@ -3305,6 +3458,24 @@ def llm_refactor_singleton(
             post_validate=_post_validate_singleton_llm,
             max_attempts=DEFAULT_MAX_ATTEMPTS,
         )
+    except RefactorDeclaredError as error:
+        dump_dir = write_refactor_failure_diagnostic(
+            kind="singleton",
+            target=ctx.address,
+            error=error,
+            user_prompt=user_prompt,
+            llm_response=last_attempt.get("llm_response"),
+            prepared_response=last_attempt.get("prepared_response"),
+            source="llm",
+            model=model,
+        )
+        logger.error(
+            "singleton refactor aborted by LLM address=%s reason=%s diagnostic=%s",
+            ctx.address,
+            error.reason,
+            dump_dir,
+        )
+        raise
     except RuntimeError as error:
         dump_dir = write_refactor_failure_diagnostic(
             kind="singleton",
@@ -3437,8 +3608,13 @@ def llm_refactor_cluster(
         parsed: ClusterRefactorLLMResponse,
     ) -> ClusterRefactorLLMResponse:
         nonlocal validated_prepared
-        prepared = prepare_cluster_refactor_response(parsed, ctx)
         last_attempt["llm_response"] = parsed.model_dump()
+        raise_if_llm_declared_error(
+            parsed,
+            kind="cluster",
+            target=f"cluster_{ctx.cluster_id}",
+        )
+        prepared = prepare_cluster_refactor_response(parsed, ctx)
         last_attempt["prepared_response"] = prepared.model_dump()
         validated_prepared = _apply_cluster_refactor_validation(prepared)
         return parsed
@@ -3464,6 +3640,24 @@ def llm_refactor_cluster(
             post_validate=_post_validate_cluster_llm,
             max_attempts=DEFAULT_MAX_ATTEMPTS,
         )
+    except RefactorDeclaredError as error:
+        dump_dir = write_refactor_failure_diagnostic(
+            kind="cluster",
+            target=f"cluster_{ctx.cluster_id}",
+            error=error,
+            user_prompt=user_prompt,
+            llm_response=last_attempt.get("llm_response"),
+            prepared_response=last_attempt.get("prepared_response"),
+            source="llm",
+            model=model,
+        )
+        logger.error(
+            "cluster refactor aborted by LLM cluster_id=%s reason=%s diagnostic=%s",
+            ctx.cluster_id,
+            error.reason,
+            dump_dir,
+        )
+        raise
     except RuntimeError as error:
         dump_dir = write_refactor_failure_diagnostic(
             kind="cluster",
