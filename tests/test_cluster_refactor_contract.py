@@ -44,12 +44,20 @@ class GrowthThresholdMemberMetadata(TypedDict):
 FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / "cluster_refactor_prompt.md"
 )
+DIMENSION_AWARE_FIXTURE_PATH = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "cluster_refactor_prompt_dimension_aware.md"
+)
 CONTEXT_DUMP_FIXTURE_PATH = (
     Path(__file__).resolve().parent
     / "fixtures"
     / "cluster_refactor_context_growth_threshold.md"
 )
 EXPECTED_FIXED_PORTION = FIXTURE_PATH.read_text(encoding="utf-8").strip()
+EXPECTED_DIMENSION_AWARE_FIXED_PORTION = DIMENSION_AWARE_FIXTURE_PATH.read_text(
+    encoding="utf-8"
+).strip()
 EXPECTED_CONTEXT_DUMP = CONTEXT_DUMP_FIXTURE_PATH.read_text(encoding="utf-8").strip()
 
 GROWTH_THRESHOLD_MEMBER_SOURCES = dedent(
@@ -335,6 +343,44 @@ def test_load_cluster_refactor_prompt_fixed_portion_matches_fixture() -> None:
     assert (
         load_cluster_refactor_prompt_fixed_portion().strip() == EXPECTED_FIXED_PORTION
     )
+
+
+def test_load_dimension_aware_prompt_fixed_portion_matches_fixture() -> None:
+    assert (
+        load_cluster_refactor_prompt_fixed_portion("dimension_aware").strip()
+        == EXPECTED_DIMENSION_AWARE_FIXED_PORTION
+    )
+
+
+def test_prompt_for_refactor_selects_dimension_aware_fixture() -> None:
+    prompt = _prompt_for_refactor("context dump", contract="dimension_aware")
+    assert prompt.startswith(EXPECTED_DIMENSION_AWARE_FIXED_PORTION)
+    assert prompt.endswith("context dump")
+
+    default_prompt = _prompt_for_refactor("context dump")
+    assert default_prompt.startswith(EXPECTED_FIXED_PORTION)
+
+
+def test_cluster_prompts_carry_rules_but_not_selection_criteria() -> None:
+    """Contract selection is mechanical; prompts state rules, not applicability."""
+    member_sweep = load_cluster_refactor_prompt_fixed_portion()
+    dimension_aware = load_cluster_refactor_prompt_fixed_portion("dimension_aware")
+    assert "When this contract applies" not in member_sweep
+    assert "When this contract applies" not in dimension_aware
+    assert "COUNTERPART_REF_AREA" in dimension_aware
+    assert "one parameter per varying binding dimension id" in dimension_aware
+    assert "Never collapse two dimension ids" in dimension_aware
+
+
+def test_dimension_aware_prompt_documents_error_escape_hatch() -> None:
+    prompt = load_cluster_refactor_prompt_fixed_portion("dimension_aware")
+    assert "## Aborting" in prompt
+    assert '"error"' in prompt
+    assert '"error_reason"' in prompt
+    assert "stop the pipeline" in prompt
+    assert "set every success field" in prompt
+    assert "to `null`" in prompt
+    assert '"symbol_signature"' in prompt
 
 
 def test_prompt_for_cluster_refactor_starts_with_fixed_portion() -> None:

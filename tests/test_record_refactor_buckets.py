@@ -233,6 +233,21 @@ def test_refactor_buckets_include_expected_singleton_and_cluster_members(
     ]
 
 
+def test_refactor_buckets_record_contract_for_cluster_targets(
+    refactor_buckets_report: dict[str, Any],
+) -> None:
+    buckets = refactor_buckets_report["buckets"]
+    cluster_buckets = [
+        bucket
+        for bucket in buckets
+        if bucket["kind"] == "cluster" and bucket["eligible"]
+    ]
+    assert cluster_buckets
+    assert all(bucket["contract"] == "member_sweep" for bucket in cluster_buckets)
+    singleton_buckets = [bucket for bucket in buckets if bucket["kind"] == "singleton"]
+    assert all(bucket["contract"] is None for bucket in singleton_buckets)
+
+
 def test_uncompressed_refactor_buckets_include_shocked_parameter_rows(
     tmp_path: Path,
 ) -> None:

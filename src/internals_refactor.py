@@ -10,7 +10,7 @@ import re
 import textwrap
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -37,6 +37,11 @@ from src.refactor_bindings import (
     render_literal_helper_call,
     resolve_dimension_key,
 )
+from src.refactor_contracts import (
+    ClusterRefactorContract,
+    concepts_with_multiple_dimensions,
+    select_cluster_refactor_contract,
+)
 from src.refactor_order import compute_cluster_refactor_order
 from src.runtime_symbols import allowed_runtime_symbols
 from src.semantic_naming import (
@@ -53,7 +58,7 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 24
+REFACTOR_PROMPT_VERSION = 25
 
 
 def refactor_model() -> str:
@@ -202,6 +207,7 @@ class ClusterRefactorContext:
     key_vocabulary: tuple[KeyConceptSpec, ...]
     expected_member_keys: dict[str, dict[str, BindingKeyValue]]
     naming_hints: dict[str, object]
+    contract: ClusterRefactorContract = "member_sweep"
 
 
 class HelperParameter(BaseModel):
@@ -438,9 +444,13 @@ class ClusterRefactorLLMResponse(BaseModel):
         )
 
 
-CLUSTER_REFACTOR_PROMPT_FIXTURE = (
-    repo_root / "tests" / "fixtures" / "cluster_refactor_prompt.md"
-)
+CLUSTER_REFACTOR_PROMPT_FIXTURES: dict[ClusterRefactorContract, Path] = {
+    "member_sweep": repo_root / "tests" / "fixtures" / "cluster_refactor_prompt.md",
+    "dimension_aware": (
+        repo_root / "tests" / "fixtures" / "cluster_refactor_prompt_dimension_aware.md"
+    ),
+}
+CLUSTER_REFACTOR_PROMPT_FIXTURE = CLUSTER_REFACTOR_PROMPT_FIXTURES["member_sweep"]
 
 
 @dataclass(frozen=True)
@@ -745,6 +755,25 @@ def build_cluster_refactor_context(
         workbook_path=workbook_path,
         layout=resolved_layout,
     )
+    varying_dimension_ids = frozenset(
+        dimension_id for keys in expected_member_keys.values() for dimension_id in keys
+    )
+    contract = select_cluster_refactor_contract(
+        replace(cluster, members=member_address_list),
+        {member.address: member.normalized_formula for member in members},
+        resolved_bound_keys,
+        varying_dimension_ids,
+        key_vocabulary=resolved_vocabulary,
+        workbook_path=workbook_path,
+        layout=resolved_layout,
+    )
+    if contract is None:
+        logger.warning(
+            "cluster %s skipped: operand-level variation is not routable by the "
+            "declared binding dimension ids (operand_level_variation_unsupported)",
+            cluster.cluster_id,
+        )
+        return None
 
     external_dependency_addresses = sorted(
         {
@@ -789,6 +818,7 @@ def build_cluster_refactor_context(
                 for member in members
             )
         ),
+        contract=contract,
     )
 
 
@@ -900,6 +930,7 @@ def refactor_cache_key(
     payload = {
         "model": refactor_model(),
         "prompt_version": REFACTOR_PROMPT_VERSION,
+        "contract": ctx.contract,
         "cluster_id": ctx.cluster_id,
         "canonical_template": ctx.canonical_template,
         "members": [
@@ -1416,6 +1447,22 @@ def validate_cluster_refactor_response(
     if len(set(dimension_sets)) != 1:
         raise ValueError("cluster members must share one varying key dimension set")
     varying_dimension_ids = dimension_sets[0]
+    if ctx.contract == "dimension_aware":
+        collapsed = [
+            f"concept {concept!r} requires one parameter per dimension id "
+            f"{sorted(dimension_ids)}"
+            for concept, dimension_ids in sorted(
+                concepts_with_multiple_dimensions(
+                    varying_dimension_ids, ctx.key_vocabulary
+                ).items()
+            )
+            if not set(dimension_ids) <= parameter_dimension_ids
+        ]
+        if collapsed:
+            raise ValueError(
+                "dimension-aware response collapses distinct dimensions onto one "
+                "concept parameter: " + "; ".join(collapsed)
+            )
     if parameter_dimension_ids != varying_dimension_ids:
         raise ValueError(
             "parameters must match varying binding key dimensions for the cluster: "
@@ -1853,8 +1900,10 @@ def build_singleton_refactor_prompt_context(
     )
 
 
-def load_cluster_refactor_prompt_fixed_portion() -> str:
-    return CLUSTER_REFACTOR_PROMPT_FIXTURE.read_text(encoding="utf-8")
+def load_cluster_refactor_prompt_fixed_portion(
+    contract: ClusterRefactorContract = "member_sweep",
+) -> str:
+    return CLUSTER_REFACTOR_PROMPT_FIXTURES[contract].read_text(encoding="utf-8")
 
 
 def append_cluster_refactor_note_section(
@@ -3600,7 +3649,7 @@ def llm_refactor_cluster(
         ctx,
         internals_path=internals_path,
     )
-    user_prompt = _prompt_for_refactor(context_dump)
+    user_prompt = _prompt_for_refactor(context_dump, contract=ctx.contract)
     last_attempt: dict[str, Any] = {}
     validated_prepared: ClusterRefactorResponse | None = None
 
@@ -3703,9 +3752,11 @@ def _prompt_for_singleton_refactor(
 def _prompt_for_refactor(
     payload_or_context: dict[str, object] | str,
     response_schema: dict[str, object] | None = None,
+    *,
+    contract: ClusterRefactorContract = "member_sweep",
 ) -> str:
     _ = response_schema
-    fixed = load_cluster_refactor_prompt_fixed_portion().strip()
+    fixed = load_cluster_refactor_prompt_fixed_portion(contract).strip()
     if isinstance(payload_or_context, str):
         return f"{fixed}\n\n{payload_or_context.strip()}"
     payload_json = json.dumps(payload_or_context, indent=2, default=str)
