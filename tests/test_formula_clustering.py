@@ -126,7 +126,9 @@ ENGINE_REF_LAYOUT = ProjectionColumnLayout(
 )
 
 
-def test_structural_fingerprint_abstracts_cell_addresses_but_preserves_literals() -> None:
+def test_structural_fingerprint_abstracts_cell_addresses_but_preserves_literals() -> (
+    None
+):
     left = address_only_structural_fingerprint("=Paris!B13+1")
     right_address = address_only_structural_fingerprint("=Paris!B14+2")
     assert left is not None
