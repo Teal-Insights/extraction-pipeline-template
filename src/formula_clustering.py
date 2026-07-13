@@ -414,6 +414,31 @@ _BINARY_PRECEDENCE: dict[str, int] = {
 }
 
 
+def _format_excel_number(value: object) -> str:
+    if isinstance(value, bool):
+        raise TypeError("bool is not a number literal")
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return format(value, "g")
+    return str(value)
+
+
+def _format_excel_string(value: object) -> str:
+    text = str(value).replace('"', '""')
+    return f'"{text}"'
+
+
+def _format_excel_bool(value: object) -> str:
+    if value is True:
+        return "TRUE"
+    if value is False:
+        return "FALSE"
+    raise TypeError(f"expected bool literal, got {type(value)!r}")
+
+
 def _format_ref_placeholder(index: object, concepts: object | None = None) -> str:
     label = f"ref_{index}"
     if concepts is None:
@@ -426,13 +451,13 @@ def _format_ref_placeholder(index: object, concepts: object | None = None) -> st
 def _format_skeleton_node(node: tuple, *, min_prec: int) -> str:
     kind = node[0]
     if kind == "num":
-        return "{num}"
+        return _format_excel_number(node[1])
     if kind == "str":
-        return "{str}"
+        return _format_excel_string(node[1])
     if kind == "bool":
-        return "{bool}"
+        return _format_excel_bool(node[1])
     if kind == "empty":
-        return "{empty}"
+        return ""
     if kind == "err":
         return str(node[1])
     if kind == "ref":
@@ -480,8 +505,8 @@ def format_structural_skeleton(skeleton: tuple) -> str:
     """Render a structural skeleton as an Excel-like formula with ref placeholders.
 
     Cell/range slots become ``ref_N`` or ``ref_N[DIM,...]`` using the fingerprint's
-    sorted binding dimension ids. Genericized scalars become ``{num}`` / ``{str}`` /
-    ``{bool}`` / ``{empty}``.
+    sorted binding dimension ids. Scalar literals render as Excel number, string
+    (``"..."``), or boolean (``TRUE``/``FALSE``) tokens; empty args render blank.
     """
     return f"={_format_skeleton_node(skeleton, min_prec=0)}"
 

@@ -183,20 +183,29 @@ def test_format_structural_skeleton_joins_sorted_dimension_ids() -> None:
     )
 
 
-def test_format_structural_skeleton_genericizes_scalars_and_functions() -> None:
+def test_format_structural_skeleton_renders_scalar_literals_and_functions() -> None:
     skeleton = (
         "fn",
         "IF",
         (
-            ("bin", ">", ("ref", 0, ("TIME_PERIOD",)), ("num",)),
+            ("bin", ">", ("ref", 0, ("TIME_PERIOD",)), ("num", 0)),
             ("ref", 1, None),
-            ("str",),
+            ("str", "baseline"),
         ),
     )
     assert (
         format_structural_skeleton(skeleton)
-        == "=IF(ref_0[TIME_PERIOD]>{num},ref_1,{str})"
+        == '=IF(ref_0[TIME_PERIOD]>0,ref_1,"baseline")'
     )
+
+
+def test_format_structural_skeleton_renders_bool_and_quoted_strings() -> None:
+    skeleton = (
+        "fn",
+        "IF",
+        (("bool", True), ("str", 'say "hi"'), ("empty",)),
+    )
+    assert format_structural_skeleton(skeleton) == '=IF(TRUE,"say ""hi""",)'
 
 
 def test_formulas_are_not_parameterizable_for_different_literal_values() -> None:

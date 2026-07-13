@@ -244,7 +244,7 @@ def main() -> None:
             "Optional detail sections to print (default: quiet summary only). "
             "Available: changes (per-cell membership diffs), "
             "members (per-bucket member lists), "
-            "fingerprints (per-bucket formula-like skeleton with ref_N[dims] placeholders). "
+            "fingerprints (per-bucket formula-like skeleton with literal scalars and ref_N[dims]). "
             "Example: --include changes fingerprints"
         ),
     )
