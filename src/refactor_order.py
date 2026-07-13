@@ -25,6 +25,11 @@ class RefactorUnit:
         )
 
 
+def refactor_failure_target(unit: RefactorUnit) -> str:
+    """Stable diagnostic slug for refactor failure dumps."""
+    return f"cluster_{unit.parent_cluster_id}_g{unit.refactor_group_id}"
+
+
 def assert_valid_cluster_refactor_order(
     projection: ClusterableGraph,
     ordered: tuple[FormulaCluster, ...],
@@ -174,10 +179,79 @@ def _is_member_ready(
     return True
 
 
-def _select_ready_parent_cluster(ready_by_family: dict[int, list[str]]) -> int:
+def _member_blocker_count(
+    address: str,
+    *,
+    remaining: set[str],
+    scheduled_members: set[str],
+    projection: ClusterableGraph,
+) -> int:
+    blockers = 0
+    for dependency in projection.get_dependencies(address):
+        if dependency in scheduled_members:
+            continue
+        if dependency in remaining:
+            blockers += 1
+    return blockers
+
+
+def _select_ready_parent_cluster(
+    ready_by_family: dict[int, list[str]],
+    *,
+    ready: frozenset[str],
+    remaining: set[str],
+    scheduled_members: set[str],
+    projection: ClusterableGraph,
+) -> int:
+    if len(ready_by_family) == 1:
+        return next(iter(ready_by_family))
+
+    waiting = tuple(sorted(address for address in remaining if address not in ready))
+    if not waiting:
+        return min(
+            ready_by_family,
+            key=lambda parent_id: (-len(ready_by_family[parent_id]), parent_id),
+        )
+
+    min_blockers = min(
+        _member_blocker_count(
+            address,
+            remaining=remaining,
+            scheduled_members=scheduled_members,
+            projection=projection,
+        )
+        for address in waiting
+    )
+    priority_waiters = frozenset(
+        address
+        for address in waiting
+        if _member_blocker_count(
+            address,
+            remaining=remaining,
+            scheduled_members=scheduled_members,
+            projection=projection,
+        )
+        == min_blockers
+    )
+
+    def unblocks_score(parent_id: int) -> int:
+        batch = frozenset(ready_by_family[parent_id])
+        return sum(
+            1
+            for waiter in priority_waiters
+            if any(
+                dependency in batch
+                for dependency in projection.get_dependencies(waiter)
+            )
+        )
+
     return min(
         ready_by_family,
-        key=lambda parent_id: (-len(ready_by_family[parent_id]), parent_id),
+        key=lambda parent_id: (
+            -unblocks_score(parent_id),
+            -len(ready_by_family[parent_id]),
+            parent_id,
+        ),
     )
 
 
@@ -219,7 +293,14 @@ def _schedule_refactor_units_on_cycle(
             parent_id = address_to_parent[address]
             ready_by_family.setdefault(parent_id, []).append(address)
 
-        parent_id = _select_ready_parent_cluster(ready_by_family)
+        ready_set = frozenset(ready)
+        parent_id = _select_ready_parent_cluster(
+            ready_by_family,
+            ready=ready_set,
+            remaining=remaining,
+            scheduled_members=scheduled_members,
+            projection=projection,
+        )
         batch = tuple(sorted(ready_by_family[parent_id]))
         parent = clusters_by_id[parent_id]
 

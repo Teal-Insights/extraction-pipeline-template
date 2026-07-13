@@ -3,8 +3,6 @@ from __future__ import annotations
 from typing import cast
 
 from excel_grapher.exporter import BaseProjectionManifest, ProjectionResult
-from excel_grapher.grapher.graph import DependencyGraph
-from excel_grapher.grapher.node import Node
 
 from src.formula_clustering import FormulaCluster, cluster_graph_formulas
 from src.refactor_order import (
@@ -12,9 +10,10 @@ from src.refactor_order import (
     assert_valid_refactor_schedule,
     compute_cluster_refactor_order,
     compute_refactor_schedule,
+    refactor_failure_target,
 )
 from src.subgraph_projection import build_refactor_projection
-from src.workbook_addresses import parse_workbook_address
+from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
 
 
 def test_refactor_projection_uses_optimal_compression(synthetic_graph) -> None:
@@ -169,81 +168,10 @@ def test_schedule_emits_multi_member_unit_when_parallel_members_ready() -> None:
     assert_valid_refactor_schedule(projection, units)
 
 
-def _formula_node(sheet: str, column: str, row: int, formula: str) -> Node:
-    return Node(
-        sheet=sheet,
-        column=column,
-        row=row,
-        formula=formula,
-        normalized_formula=formula,
-        value=None,
-        is_leaf=False,
-        metadata={},
-    )
-
-
-def _leaf_node(sheet: str, column: str, row: int, value: object = 0) -> Node:
-    return Node(
-        sheet=sheet,
-        column=column,
-        row=row,
-        formula=None,
-        normalized_formula=None,
-        value=value,
-        is_leaf=True,
-        metadata={},
-    )
-
-
-def _inter_cluster_cycle_graph() -> tuple[DependencyGraph, dict[str, dict[str, int]]]:
-    """Acyclic cell graph whose formula clusters form a dependency cycle."""
-    graph = DependencyGraph()
-    for address, value in (
-        ("Inputs!A2", 1),
-        ("Inputs!A3", 1),
-        ("Inputs!B1", 0),
-    ):
-        sheet, column, row = parse_workbook_address(address)
-        graph.add_node(_leaf_node(sheet, column, row, value))
-
-    formulas = {
-        "Engine!B2": "=Inputs!A2+Inputs!B1",
-        "Engine!C2": "=Inputs!A2*Engine!B2",
-        "Engine!B3": "=Inputs!A3+Engine!C2",
-        "Engine!C3": "=Inputs!A3*Engine!B3",
-    }
-    for address, formula in formulas.items():
-        sheet, column, row = parse_workbook_address(address)
-        graph.add_node(_formula_node(sheet, column, row, formula))
-
-    for dependent, dependency in (
-        ("Engine!B2", "Inputs!A2"),
-        ("Engine!B2", "Inputs!B1"),
-        ("Engine!C2", "Inputs!A2"),
-        ("Engine!C2", "Engine!B2"),
-        ("Engine!B3", "Inputs!A3"),
-        ("Engine!B3", "Engine!C2"),
-        ("Engine!C3", "Inputs!A3"),
-        ("Engine!C3", "Engine!B3"),
-    ):
-        graph.add_edge(dependent, dependency)
-
-    bindings = {
-        "Inputs!A2": {"TIME_PERIOD": 1},
-        "Inputs!A3": {"TIME_PERIOD": 2},
-        "Inputs!B1": {"TIME_PERIOD": 0},
-        "Engine!B2": {"TIME_PERIOD": 1},
-        "Engine!C2": {"TIME_PERIOD": 1},
-        "Engine!B3": {"TIME_PERIOD": 2},
-        "Engine!C3": {"TIME_PERIOD": 2},
-    }
-    return graph, bindings
-
-
 def test_cluster_detection_can_create_inter_cluster_cycle_on_acyclic_cell_graph() -> (
     None
 ):
-    graph, bindings = _inter_cluster_cycle_graph()
+    graph, bindings = inter_cluster_cycle_graph()
 
     assert graph.evaluation_order() == [
         "Inputs!A2",
@@ -277,4 +205,42 @@ def test_cluster_detection_can_create_inter_cluster_cycle_on_acyclic_cell_graph(
         "Engine!C3",
     }
     assert len({unit.refactor_group_id for unit in units}) == 4
+    assert refactor_failure_target(units[0]) == (
+        f"cluster_{units[0].parent_cluster_id}_g{units[0].refactor_group_id}"
+    )
     assert_valid_refactor_schedule(graph, units)
+
+
+def test_schedule_prefers_family_that_unblocks_least_blocked_waiter() -> None:
+    """When two families are ready, prefer the batch waited on by more blockers."""
+    cluster_x = FormulaCluster(
+        cluster_id=0,
+        members=("Sheet!X1", "Sheet!X2", "Sheet!X3"),
+        canonical_template="=Inputs!A1",
+        row=None,
+    )
+    cluster_y = FormulaCluster(
+        cluster_id=1,
+        members=("Sheet!Y1", "Sheet!Y2"),
+        canonical_template="=Inputs!A2",
+        row=None,
+    )
+
+    class _HeuristicProjection:
+        def get_dependencies(self, address: str) -> tuple[str, ...]:
+            deps = {
+                "Sheet!X1": ("Inputs!A1",),
+                "Sheet!X2": ("Sheet!Y1",),
+                "Sheet!X3": ("Sheet!Y1",),
+                "Sheet!Y1": ("Inputs!A2",),
+                "Sheet!Y2": ("Sheet!X1",),
+            }
+            return deps.get(address, ())
+
+    projection = cast(ProjectionResult, _HeuristicProjection())
+    units = compute_refactor_schedule(projection, (cluster_x, cluster_y))
+
+    assert units[0].members == ("Sheet!Y1",)
+    assert units[1].members == ("Sheet!X1", "Sheet!X2", "Sheet!X3")
+    assert units[2].members == ("Sheet!Y2",)
+    assert_valid_refactor_schedule(projection, units)
