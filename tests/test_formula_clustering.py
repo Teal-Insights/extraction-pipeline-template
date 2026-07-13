@@ -2,6 +2,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+from excel_grapher.core.formula_ast import parse
 from excel_grapher.grapher.graph import DependencyGraph
 from excel_grapher.grapher.node import Node
 
@@ -488,6 +489,41 @@ def test_cluster_graph_formulas_caches_resolved_binding_keys(
         )
 
     assert resolver.call_count <= max_expected_resolutions
+
+
+def test_cluster_graph_formulas_parses_each_formula_once(
+    synthetic_workbook_path: Path,
+) -> None:
+    """Clustering should bucket by per-formula fingerprint, not re-parse pairwise."""
+    graph = DependencyGraph()
+    formulas = {
+        "Engine!B5": "=Inputs!B10-Inputs!C10",
+        "Engine!C5": "=Inputs!B11-Inputs!C11",
+        "Engine!D5": "=Inputs!B12-Inputs!C12",
+        "Engine!E5": "=Inputs!B13-Inputs!C13",
+        "Engine!F5": "=Inputs!B14-Inputs!C14",
+    }
+    for address, formula in formulas.items():
+        sheet, column, row = parse_workbook_address(address)
+        graph.add_node(_formula_node(sheet, column, row, formula))
+
+    bound_address_keys = {
+        **TRADE_BALANCE_BINDINGS,
+        "Inputs!B13": {"REF_AREA": "US", "TIME_PERIOD": 4},
+        "Inputs!C13": {"REF_AREA": "CN", "TIME_PERIOD": 4},
+        "Inputs!B14": {"REF_AREA": "US", "TIME_PERIOD": 5},
+        "Inputs!C14": {"REF_AREA": "CN", "TIME_PERIOD": 5},
+    }
+
+    with patch("src.formula_clustering.parse", wraps=parse) as parser:
+        cluster_graph_formulas(
+            graph,
+            bound_address_keys=bound_address_keys,
+            workbook_path=synthetic_workbook_path,
+            layout=ENGINE_REF_LAYOUT,
+        )
+
+    assert parser.call_count <= len(formulas)
 
 
 def test_cluster_has_independent_operand_variation_detects_variable_country_pairs() -> (
