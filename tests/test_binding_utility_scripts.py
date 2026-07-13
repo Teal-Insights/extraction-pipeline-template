@@ -532,6 +532,41 @@ def test_binding_catalog_roundtrip_matches_synthetic_fixtures(
         assert emitted["series"] == expected["series"]
 
 
+def test_measure_shard_pattern_catalog_emits_filled_gap_column_shards() -> None:
+    """Pedagogical filled-header + measure-shard catalog stays structurally valid."""
+    catalog_path = (
+        Path(__file__).resolve().parents[1]
+        / "templates"
+        / "binding-pattern-measure-shards.example.yaml"
+    )
+    catalog = load_binding_catalog(catalog_path)
+    documents = build_binding_documents(catalog)
+    outputs = documents["outputs.bindings.yaml"]["series"]
+    internals = documents["internals.bindings.yaml"]["series"]
+
+    concept_ids = {concept["id"] for concept in catalog["concept_scheme"]["concepts"]}
+    assert {"OBS_VALUE", "TIME_PERIOD", "SCENARIO", "MEASURE"} <= concept_ids
+
+    assert {series["id"] for series in outputs} == {
+        "gap_milestones_2050",
+        "gap_milestones_2075",
+    }
+    compute_names = {series["output"]["compute"]["name"] for series in outputs}
+    assert compute_names == {"compute_gap_milestones"}
+    for series in outputs:
+        time_binds = [
+            dim["bind"]
+            for dim in series["structure"]["dimensions"]
+            if dim["id"] == "TIME_PERIOD"
+        ]
+        assert len(time_binds) == 1
+        assert time_binds[0]["fill"] is True
+        assert time_binds[0]["kind"] == "column_header"
+
+    assert len(internals) == 1
+    assert set(internals[0]["key"]) == {"SCENARIO", "TIME_PERIOD", "MEASURE"}
+
+
 def test_emit_bindings_from_catalog_validates_against_synthetic_workbook(
     tmp_path: Path,
 ) -> None:
