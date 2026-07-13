@@ -96,6 +96,7 @@ DOMINANT_KEY_SPLIT_BINDINGS = {
 def _dominant_key_split_graph() -> DependencyGraph:
     return _trade_balance_graph()
 
+
 COLUMN_SWEEP_BINDINGS = {
     "Paris!B13": {"TIME_PERIOD": 1},
     "Inputs!C16": {"REF_AREA": "US"},
