@@ -544,6 +544,9 @@ def test_measure_shard_pattern_catalog_emits_filled_gap_column_shards() -> None:
     outputs = documents["outputs.bindings.yaml"]["series"]
     internals = documents["internals.bindings.yaml"]["series"]
 
+    concept_ids = {concept["id"] for concept in catalog["concept_scheme"]["concepts"]}
+    assert {"OBS_VALUE", "TIME_PERIOD", "SCENARIO", "MEASURE"} <= concept_ids
+
     assert {series["id"] for series in outputs} == {
         "gap_milestones_2050",
         "gap_milestones_2075",

@@ -26,6 +26,9 @@ concept_scheme:
     - id: SCENARIO
       name: Scenario
       dtype: string
+    - id: MEASURE
+      name: Measure
+      dtype: string
 
 outputs:
   series:
