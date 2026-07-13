@@ -136,13 +136,58 @@ ENGINE_REF_LAYOUT = ProjectionColumnLayout(
 )
 
 
-def test_structural_fingerprint_abstracts_cell_addresses_and_scalars() -> None:
+def test_structural_fingerprint_abstracts_cell_addresses_but_preserves_literals() -> (
+    None
+):
     left = address_only_structural_fingerprint("=Paris!B13+1")
     right_address = address_only_structural_fingerprint("=Paris!B14+2")
     assert left is not None
     assert right_address is not None
-    assert left[0] == right_address[0]
+    assert left[0] != right_address[0]
     assert left[1] != right_address[1]
+    assert left[0] == (
+        "bin",
+        "+",
+        ("ref", 0),
+        ("num", 1.0),
+    )
+    assert right_address[0] == (
+        "bin",
+        "+",
+        ("ref", 0),
+        ("num", 2.0),
+    )
+
+
+def test_formulas_are_not_parameterizable_for_different_literal_values() -> None:
+    left = "=Paris!B13+1"
+    right = "=Paris!C13+1"
+    bindings = {
+        "Paris!B13": {"TIME_PERIOD": 1},
+        "Paris!C13": {"TIME_PERIOD": 2},
+    }
+    assert formulas_are_parameterizable(left, right, bound_address_keys=bindings)
+
+    assert not formulas_are_parameterizable(
+        "=Paris!B13+1",
+        "=Paris!B13+2",
+        bound_address_keys={"Paris!B13": {"TIME_PERIOD": 1}},
+    )
+    assert not formulas_are_parameterizable(
+        '="US"+Inputs!C16',
+        '="DE"+Inputs!C16',
+        bound_address_keys={
+            "Inputs!C16": {"REF_AREA": "US"},
+        },
+    )
+    assert not formulas_are_parameterizable(
+        "=IF(TRUE,Paris!B13,Paris!C13)",
+        "=IF(FALSE,Paris!B13,Paris!C13)",
+        bound_address_keys={
+            "Paris!B13": {"TIME_PERIOD": 1},
+            "Paris!C13": {"TIME_PERIOD": 2},
+        },
+    )
 
 
 def test_structural_fingerprint_requires_bound_address_keys() -> None:

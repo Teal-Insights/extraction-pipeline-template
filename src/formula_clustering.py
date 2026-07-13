@@ -181,11 +181,11 @@ def _binding_key_concepts_for_address(
 def _address_only_structural_tuple(node: AstNode, refs: list[str]) -> tuple:
     """Build a binding-agnostic skeleton for tests and diagnostics."""
     if isinstance(node, NumberNode):
-        return ("num",)
+        return ("num", node.value)
     if isinstance(node, StringNode):
-        return ("str",)
+        return ("str", node.value)
     if isinstance(node, BoolNode):
-        return ("bool",)
+        return ("bool", node.value)
     if isinstance(node, ErrorNode):
         return ("err", str(node.error))
     if isinstance(node, CellRefNode):
@@ -238,11 +238,11 @@ def _structural_tuple(
     key_cache: _ClusteringKeyCache | None = None,
 ) -> tuple:
     if isinstance(node, NumberNode):
-        return ("num",)
+        return ("num", node.value)
     if isinstance(node, StringNode):
-        return ("str",)
+        return ("str", node.value)
     if isinstance(node, BoolNode):
-        return ("bool",)
+        return ("bool", node.value)
     if isinstance(node, ErrorNode):
         return ("err", str(node.error))
     if isinstance(node, CellRefNode):
