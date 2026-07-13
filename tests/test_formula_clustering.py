@@ -87,6 +87,16 @@ TRADE_BALANCE_BINDINGS = {
     "Inputs!C12": {"REF_AREA": "CN", "TIME_PERIOD": 3},
 }
 
+DOMINANT_KEY_SPLIT_BINDINGS = {
+    **TRADE_BALANCE_BINDINGS,
+    "Inputs!C12": {"REF_AREA": "DE", "TIME_PERIOD": 3},
+}
+
+
+def _dominant_key_split_graph() -> DependencyGraph:
+    return _trade_balance_graph()
+
+
 COLUMN_SWEEP_BINDINGS = {
     "Paris!B13": {"TIME_PERIOD": 1},
     "Inputs!C16": {"REF_AREA": "US"},
@@ -332,35 +342,60 @@ def test_cluster_has_independent_operand_variation_detects_trade_balance_pattern
     )
 
 
+def test_dominant_key_only_split_resolves_each_member_once() -> None:
+    """dominant_key_only splitting should materialize each member's ref keys once."""
+    import src.formula_clustering as formula_clustering
+
+    graph = _dominant_key_split_graph()
+    call_counts: dict[str, int] = {}
+    original = formula_clustering._ref_position_key_values
+
+    def spy(
+        member_address: str,
+        formula: str,
+        bound_address_keys,
+        *,
+        workbook_path: Path | None = None,
+        layout: ProjectionColumnLayout | None = None,
+        key_cache=None,
+    ):
+        call_counts[member_address] = call_counts.get(member_address, 0) + 1
+        return original(
+            member_address,
+            formula,
+            bound_address_keys,
+            workbook_path=workbook_path,
+            layout=layout,
+            key_cache=key_cache,
+        )
+
+    with patch.object(formula_clustering, "_ref_position_key_values", spy):
+        cluster_graph_formulas(
+            graph,
+            bound_address_keys=DOMINANT_KEY_SPLIT_BINDINGS,
+            variation_mode="dominant_key_only",
+        )
+
+    assert call_counts == {
+        "Engine!B5": 1,
+        "Engine!C5": 1,
+        "Engine!D5": 1,
+    }
+
+
 def test_dominant_key_only_variation_mode_splits_cluster() -> None:
-    bindings = {
-        "Inputs!B10": {"REF_AREA": "US", "TIME_PERIOD": 1},
-        "Inputs!C10": {"REF_AREA": "CN", "TIME_PERIOD": 1},
-        "Inputs!B11": {"REF_AREA": "US", "TIME_PERIOD": 2},
-        "Inputs!C11": {"REF_AREA": "CN", "TIME_PERIOD": 2},
-        "Inputs!B12": {"REF_AREA": "US", "TIME_PERIOD": 3},
-        "Inputs!C12": {"REF_AREA": "DE", "TIME_PERIOD": 3},
-    }
-    graph = DependencyGraph()
-    formulas = {
-        "Engine!B5": "=Inputs!B10-Inputs!C10",
-        "Engine!C5": "=Inputs!B11-Inputs!C11",
-        "Engine!D5": "=Inputs!B12-Inputs!C12",
-    }
-    for address, formula in formulas.items():
-        sheet, column, row = parse_workbook_address(address)
-        graph.add_node(_formula_node(sheet, column, row, formula))
+    graph = _dominant_key_split_graph()
 
     independent_clusters = cluster_graph_formulas(
         graph,
-        bound_address_keys=bindings,
+        bound_address_keys=DOMINANT_KEY_SPLIT_BINDINGS,
         variation_mode="independent",
     )
     assert len(independent_clusters) == 1
 
     constrained_clusters = cluster_graph_formulas(
         graph,
-        bound_address_keys=bindings,
+        bound_address_keys=DOMINANT_KEY_SPLIT_BINDINGS,
         variation_mode="dominant_key_only",
     )
     assert len(constrained_clusters) == 2
