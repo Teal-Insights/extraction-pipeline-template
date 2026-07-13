@@ -32,7 +32,11 @@ from src.dependency_graph_viz import (
 from src.internal_bindings import binding_node_labels, build_internal_binding_index
 from src.internal_binding_coverage import enforce_internal_binding_coverage
 from src.docstring_callback import configure_docstring_callback
-from src.export_validation_assets import export_validation_assets
+from src.differential_validation import run_post_refactor_differential
+from src.export_validation_assets import (
+    export_reference_reports,
+    seed_validation_harness,
+)
 from src.logging_config import configure_logging
 from src.pipeline_config import (
     PipelineConfig,
@@ -436,7 +440,7 @@ tests/results/local/
     )
     write_dist_readme(config.dist_root, metadata=config.dist_metadata)
 
-    export_validation_assets(config=config)
+    seed_validation_harness(config=config)
 
     from src.formula_clustering import cluster_graph_formulas
     from src.internals_refactor import refactor_internals_all_clusters
@@ -463,6 +467,8 @@ tests/results/local/
         bindings_path=config.bindings_path,
         workbook_path=config.workbook_path,
     )
+    run_post_refactor_differential(config=config)
+    export_reference_reports(config=config)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
