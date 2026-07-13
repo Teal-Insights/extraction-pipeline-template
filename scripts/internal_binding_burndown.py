@@ -28,6 +28,7 @@ from excel_grapher.series_bindings import load_series_bindings  # noqa: E402
 
 from src.graph_cache import (  # noqa: E402
     DEFAULT_GRAPH_CACHE_DIR,
+    dependency_graph_cache_key,
     get_or_build_dependency_graph,
     load_newest_cached_dependency_graph,
 )
@@ -37,10 +38,36 @@ from src.internal_binding_coverage import (  # noqa: E402
     group_unbound_cells_by_sheet_row,
     suggested_layout_for_row,
 )
-from src.pipeline_config import load_pipeline_config  # noqa: E402
+from src.pipeline_config import (  # noqa: E402
+    PipelineConfig,
+    load_pipeline_config,
+    validate_pipeline_config,
+)
 
 
-def load_graph(config) -> tuple[DependencyGraph, str | None]:
+def _expected_graph_cache_key(config: PipelineConfig) -> str:
+    return dependency_graph_cache_key(
+        workbook_path=config.workbook_path,
+        targets=config.targets,
+        constraints=config.constraints,
+        bindings_path=config.bindings_path,
+        load_values=True,
+        capture_dependency_provenance=True,
+    )
+
+
+def _warn_if_cached_graph_is_stale(config: PipelineConfig, cache_key: str) -> None:
+    expected_key = _expected_graph_cache_key(config)
+    if cache_key == expected_key:
+        return
+    print(
+        "Warning: newest cached graph key does not match the current workbook, "
+        "bindings, or targets fingerprint. Burndown results may be stale; run "
+        "uv run python -m scripts.regenerate_graph_cache to refresh."
+    )
+
+
+def load_graph(config: PipelineConfig) -> tuple[DependencyGraph, str | None]:
     cached = load_newest_cached_dependency_graph(cache_dir=DEFAULT_GRAPH_CACHE_DIR)
     if cached is not None:
         graph, cache_key = cached
@@ -48,6 +75,7 @@ def load_graph(config) -> tuple[DependencyGraph, str | None]:
             f"Loaded cached graph key={cache_key[:12]} "
             f"from {DEFAULT_GRAPH_CACHE_DIR} ({len(graph)} nodes)"
         )
+        _warn_if_cached_graph_is_stale(config, cache_key)
         return graph, cache_key
 
     dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints, {})
@@ -80,6 +108,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_pipeline_config()
+    validate_pipeline_config(config)
     graph, _cache_key = load_graph(config)
     bindings = load_series_bindings(config.bindings_path)
 

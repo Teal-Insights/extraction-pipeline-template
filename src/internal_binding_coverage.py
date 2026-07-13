@@ -105,10 +105,7 @@ def group_unbound_cells_by_sheet_row(
         grouped[match["sheet"]][int(match["row"])].append(
             column_index_from_string(match["column"])
         )
-    return {
-        sheet: dict(rows)
-        for sheet, rows in grouped.items()
-    }
+    return {sheet: dict(rows) for sheet, rows in grouped.items()}
 
 
 def format_row_column_spans(

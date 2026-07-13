@@ -8,7 +8,10 @@ from typing import Any
 
 import yaml
 
-from excel_grapher.series_bindings.workflow import validate_bindings_workbook
+from excel_grapher.series_bindings.workflow import (
+    BindingsCheckResult,
+    validate_bindings_workbook,
+)
 
 BINDING_DIRECTIONS: tuple[str, ...] = ("inputs", "outputs", "internals")
 BINDING_FILENAMES: dict[str, str] = {
@@ -95,7 +98,7 @@ def validate_generated_bindings(
     *,
     workbook_path: Path,
     bindings_dir: Path,
-) -> dict[str, Any]:
+) -> BindingsCheckResult:
     """Validate emitted bindings against the configured workbook."""
     return validate_bindings_workbook(workbook_path, bindings_dir)
 
@@ -106,21 +109,19 @@ def emit_bindings_from_catalog(
     bindings_dir: Path,
     workbook_path: Path,
     validate: bool = True,
-) -> tuple[list[Path], dict[str, Any] | None]:
+) -> tuple[list[Path], BindingsCheckResult | None]:
     """Load a catalog, write binding sidecars, and optionally validate them."""
     catalog = load_binding_catalog(catalog_path)
     documents = build_binding_documents(catalog)
     written = write_binding_documents(bindings_dir, documents)
-    validation: dict[str, Any] | None = None
+    validation: BindingsCheckResult | None = None
     if validate:
         validation = validate_generated_bindings(
             workbook_path=workbook_path,
             bindings_dir=bindings_dir,
         )
         report = validation["report"]
-        errors = [
-            issue for issue in report["issues"] if issue["level"] == "error"
-        ]
+        errors = [issue for issue in report["issues"] if issue["level"] == "error"]
         if errors:
             preview = "\n".join(str(issue) for issue in errors[:5])
             raise BindingCatalogError(

@@ -11,7 +11,10 @@ import yaml
 from excel_grapher.series_bindings import load_series_bindings
 
 from scripts.internal_binding_burndown import load_graph
-from scripts.regenerate_graph_cache import graph_cache_target_bundles, regenerate_graph_cache
+from scripts.regenerate_graph_cache import (
+    graph_cache_target_bundles,
+    regenerate_graph_cache,
+)
 from src.binding_authoring import (
     build_binding_documents,
     emit_bindings_from_catalog,
@@ -40,9 +43,7 @@ def test_contiguous_column_ranges_groups_gaps() -> None:
 
 
 def test_group_unbound_cells_by_sheet_row() -> None:
-    grouped = group_unbound_cells_by_sheet_row(
-        ("Engine!B2", "Engine!C2", "Outputs!B1")
-    )
+    grouped = group_unbound_cells_by_sheet_row(("Engine!B2", "Engine!C2", "Outputs!B1"))
     assert grouped == {"Engine": {2: [2, 3]}, "Outputs": {1: [2]}}
 
 
@@ -69,9 +70,7 @@ def test_graph_cache_target_bundles_includes_default_and_extras(
     write_synthetic_workbook(workbook_path)
     config = replace(
         synthetic_pipeline_config(workbook_path=workbook_path),
-        graph_cache_target_bundles=(
-            ("subset graph", ("Outputs!B1",)),
-        ),
+        graph_cache_target_bundles=(("subset graph", ("Outputs!B1",)),),
     )
     bundles = graph_cache_target_bundles(config)
     assert bundles[0] == ("default graph", config.targets)
@@ -166,6 +165,123 @@ def test_prune_stale_graph_cache_entries_removes_only_stale_keys(
     assert pruned == ["drop.pkl.gz"]
     assert keep.is_file()
     assert not drop.is_file()
+
+
+def test_internal_binding_burndown_groups_unbound_formula_cells(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.graph_cache as graph_cache
+
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    bindings_path = tmp_path / "bindings"
+    bindings_path.mkdir()
+    fixture_bindings = Path(__file__).resolve().parent / "fixtures" / "synthetic"
+    for name in ("inputs.bindings.yaml", "outputs.bindings.yaml"):
+        source = fixture_bindings / name
+        (bindings_path / name).write_text(source.read_text(encoding="utf-8"))
+
+    config = replace(
+        synthetic_pipeline_config(workbook_path=workbook_path),
+        bindings_path=bindings_path,
+    )
+    cache_dir = tmp_path / "dependency-graph"
+
+    monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(
+        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.validate_pipeline_config",
+        lambda _config: None,
+    )
+    regenerate_graph_cache(force=True)
+
+    graph, _cache_key = load_graph(config)
+    bindings = load_series_bindings(config.bindings_path)
+    unbound = find_unbound_internal_formula_cells_from_manifest(
+        graph=graph,
+        bindings=bindings,
+        exempt_cells=config.internal_binding_exempt_cells,
+        workbook=config.workbook_path,
+    )
+
+    assert unbound == ("Engine!B2", "Engine!C2")
+    grouped = group_unbound_cells_by_sheet_row(unbound)
+    assert grouped == {"Engine": {2: [2, 3]}}
+    assert (
+        format_row_column_spans(sheet="Engine", row=2, columns=grouped["Engine"][2])
+        == "Engine!B2:C2"
+    )
+    assert suggested_layout_for_row(grouped["Engine"][2]) == "row_series"
+
+
+def test_internal_binding_burndown_warns_when_cached_graph_is_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import src.graph_cache as graph_cache
+
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    bindings_path = tmp_path / "bindings"
+    bindings_path.mkdir()
+    fixture_bindings = Path(__file__).resolve().parent / "fixtures" / "synthetic"
+    for name in (
+        "inputs.bindings.yaml",
+        "outputs.bindings.yaml",
+        "internals.bindings.yaml",
+    ):
+        source = fixture_bindings / name
+        (bindings_path / name).write_text(source.read_text(encoding="utf-8"))
+
+    config = replace(
+        synthetic_pipeline_config(workbook_path=workbook_path),
+        bindings_path=bindings_path,
+    )
+    cache_dir = tmp_path / "dependency-graph"
+
+    monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(
+        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.validate_pipeline_config",
+        lambda _config: None,
+    )
+    regenerate_graph_cache(force=True)
+
+    internals_path = bindings_path / "internals.bindings.yaml"
+    internals_path.write_text(
+        internals_path.read_text(encoding="utf-8") + "\n# cache-bust\n",
+        encoding="utf-8",
+    )
+
+    load_graph(config)
+    captured = capsys.readouterr()
+
+    assert "Warning: newest cached graph key does not match" in captured.out
+    assert "regenerate_graph_cache" in captured.out
 
 
 def test_internal_binding_burndown_reports_no_unbound_cells_for_synthetic(
