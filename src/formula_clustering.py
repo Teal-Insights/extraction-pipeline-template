@@ -712,13 +712,16 @@ def _split_cluster_by_dominant_keys(
         return (members,)
 
     canonical_formula = formula_nodes[members[0]]
-    fingerprint = _structural_fingerprint(
-        canonical_formula,
-        bound_address_keys=bound_address_keys,
-        workbook_path=workbook_path,
-        layout=layout,
-        key_cache=key_cache,
-    )
+    if key_cache is not None:
+        fingerprint = key_cache.fingerprint_for_formula(members[0], canonical_formula)
+    else:
+        fingerprint = _structural_fingerprint(
+            canonical_formula,
+            bound_address_keys=bound_address_keys,
+            workbook_path=workbook_path,
+            layout=layout,
+            key_cache=None,
+        )
     if fingerprint is None:
         return (members,)
     _skeleton, refs = fingerprint
