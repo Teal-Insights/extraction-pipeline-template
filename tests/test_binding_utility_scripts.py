@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
+import fastpyxl
 import pytest
 import yaml
 
+from excel_grapher.grapher.graph import DependencyGraph
 from excel_grapher.series_bindings import load_series_bindings
+from excel_grapher.series_bindings.resolve import BindingDirection
 
 from scripts.internal_binding_burndown import load_graph
 from scripts.regenerate_graph_cache import (
@@ -19,6 +23,14 @@ from src.binding_authoring import (
     build_binding_documents,
     emit_bindings_from_catalog,
     load_binding_catalog,
+)
+from src.binding_resolution_audit import (
+    AuditFinding,
+    _unfilled_label_binds,
+    audit_binding_resolutions,
+    findings_from_resolution,
+    find_sparse_label_bind_issues,
+    format_audit_findings,
 )
 from src.graph_cache import (
     dependency_graph_cache_key,
@@ -363,3 +375,520 @@ def test_emit_bindings_from_catalog_validates_against_synthetic_workbook(
     assert len(written) == 3
     assert validation is not None
     assert validation["report"]["ok"] is True
+
+
+def test_findings_from_resolution_flags_partial_bind_and_empty_public() -> None:
+    partial = findings_from_resolution(
+        {
+            "series_id": "gap_milestones",
+            "ok": False,
+            "requires_address": False,
+            "leaves": [
+                {
+                    "address": "Sheet!I26",
+                    "coordinates": {},
+                    "key": {},
+                    "record": {},
+                }
+            ],
+            "issues": [
+                {
+                    "level": "error",
+                    "code": "bind_resolution_failed",
+                    "message": "column_header row 23: no source label",
+                    "series_id": "gap_milestones",
+                    "address": "Sheet!H26",
+                }
+            ],
+        },
+        direction="output",
+        series={
+            "id": "gap_milestones",
+            "output": {"compute": {"name": "compute_gap"}},
+        },
+    )
+    assert any(finding.code == "bind_resolution_failed" for finding in partial)
+    assert any(finding.code == "partial_bind_failure" for finding in partial)
+
+    empty = findings_from_resolution(
+        {
+            "series_id": "missing_output",
+            "ok": True,
+            "requires_address": False,
+            "leaves": [],
+            "issues": [
+                {
+                    "level": "warning",
+                    "code": "no_resolved_cells",
+                    "message": "No resolved output cells",
+                    "series_id": "missing_output",
+                    "address": None,
+                }
+            ],
+        },
+        direction="output",
+        series={
+            "id": "missing_output",
+            "output": {"compute": {"name": "compute_missing"}},
+        },
+    )
+    assert any(
+        finding.code == "empty_public_series" and finding.severity == "warning"
+        for finding in empty
+    )
+
+
+def test_unfilled_label_binds_skips_filled_and_non_label_binds() -> None:
+    assert (
+        _unfilled_label_binds(
+            {
+                "structure": {
+                    "dimensions": [
+                        {
+                            "bind": {
+                                "kind": "column_header",
+                                "header_row": 1,
+                                "fill": True,
+                            }
+                        },
+                        {"bind": {"kind": "data_cell", "read": "float"}},
+                    ]
+                }
+            }
+        )
+        == []
+    )
+    binds = _unfilled_label_binds(
+        {
+            "structure": {
+                "dimensions": [
+                    {"bind": {"kind": "column_header", "header_row": 1}},
+                    {"bind": {"kind": "row_label", "label_column": "B"}},
+                ]
+            }
+        }
+    )
+    assert len(binds) == 2
+
+
+def test_find_sparse_label_bind_issues_short_circuits_without_workbook_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_expand(*_args: object, **_kwargs: object) -> list[str]:
+        raise AssertionError("expand should not run when no unfilled label binds")
+
+    def _fail_load(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("workbook should not load when no unfilled label binds")
+
+    monkeypatch.setattr(
+        "src.binding_resolution_audit.expand_data_range_for_graph",
+        _fail_expand,
+    )
+    monkeypatch.setattr(
+        "src.binding_resolution_audit.fastpyxl.load_workbook",
+        _fail_load,
+    )
+    findings = find_sparse_label_bind_issues(
+        graph=cast(DependencyGraph, None),  # unused on short-circuit
+        series={
+            "id": "scalar_only",
+            "data_range": "Engine!B2",
+            "structure": {
+                "dimensions": [{"bind": {"kind": "data_cell", "read": "float"}}]
+            },
+        },
+        workbook_path="unused.xlsx",
+        direction="internal",
+    )
+    assert findings == []
+
+
+def test_audit_binding_resolutions_reuses_one_workbook_for_sparse_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.binding_resolution_audit as audit_mod
+    import src.graph_cache as graph_cache
+
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+
+    wb = fastpyxl.load_workbook(workbook_path)
+    wb["Engine"]["B1"] = 2020
+    wb["Engine"]["C1"] = None
+    wb.save(workbook_path)
+    wb.close()
+
+    bindings_path = tmp_path / "bindings"
+    bindings_path.mkdir()
+    fixture_bindings = Path(__file__).resolve().parent / "fixtures" / "synthetic"
+    for name in (
+        "inputs.bindings.yaml",
+        "outputs.bindings.yaml",
+        "internals.bindings.yaml",
+    ):
+        (bindings_path / name).write_text(
+            (fixture_bindings / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    internals = yaml.safe_load(
+        (bindings_path / "internals.bindings.yaml").read_text(encoding="utf-8")
+    )
+    internals["series"].append(
+        {
+            "id": "engine_sparse_years",
+            "sheet": "Engine",
+            "data_range": "Engine!B2:C2",
+            "layout": "series",
+            "internal": {},
+            "structure": {
+                "measure": {
+                    "concept": "OBS_VALUE",
+                    "dtype": "float",
+                    "bind": {"kind": "data_cell", "read": "float"},
+                },
+                "dimensions": [
+                    {
+                        "id": "TIME_PERIOD",
+                        "concept": "TIME_PERIOD",
+                        "role": "key",
+                        "scope": "cell",
+                        "bind": {
+                            "kind": "column_header",
+                            "header_row": 1,
+                            "read": "int",
+                        },
+                    }
+                ],
+            },
+            "key": ["TIME_PERIOD"],
+            "validation": {"warn_on_partial_overlap": False},
+        }
+    )
+    (bindings_path / "internals.bindings.yaml").write_text(
+        yaml.safe_dump(internals, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    config = replace(
+        synthetic_pipeline_config(workbook_path=workbook_path),
+        bindings_path=bindings_path,
+    )
+    cache_dir = tmp_path / "dependency-graph"
+    monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(
+        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.validate_pipeline_config",
+        lambda _config: None,
+    )
+    regenerate_graph_cache(force=True)
+    graph, _ = load_graph(config)
+
+    sparse_workbook_handles: list[fastpyxl.Workbook | None] = []
+    real_sparse = audit_mod.find_sparse_label_bind_issues
+
+    def tracking_sparse(
+        graph: DependencyGraph,
+        series: dict[str, Any],
+        *,
+        workbook_path: Path | str,
+        direction: BindingDirection,
+        workbook: fastpyxl.Workbook | None = None,
+    ) -> list[AuditFinding]:
+        sparse_workbook_handles.append(workbook)
+        return real_sparse(
+            graph,
+            series,
+            workbook_path=workbook_path,
+            direction=direction,
+            workbook=workbook,
+        )
+
+    monkeypatch.setattr(audit_mod, "find_sparse_label_bind_issues", tracking_sparse)
+    report = audit_binding_resolutions(
+        graph,
+        load_series_bindings(bindings_path),
+        workbook=workbook_path,
+        directions=("internal",),
+    )
+    assert not report.ok
+    assert sparse_workbook_handles
+    assert all(handle is not None for handle in sparse_workbook_handles)
+    assert len({id(handle) for handle in sparse_workbook_handles}) == 1
+
+
+def test_find_sparse_label_bind_issues_without_fill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.graph_cache as graph_cache
+
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    # Sparse year headers across Engine!B2:C2 (B has a year, C is blank).
+    wb = fastpyxl.load_workbook(workbook_path)
+    engine = wb["Engine"]
+    engine["B1"] = 2020
+    engine["C1"] = None
+    wb.save(workbook_path)
+    wb.close()
+
+    bindings_path = tmp_path / "bindings"
+    bindings_path.mkdir()
+    fixture_bindings = Path(__file__).resolve().parent / "fixtures" / "synthetic"
+    for name in (
+        "inputs.bindings.yaml",
+        "outputs.bindings.yaml",
+        "internals.bindings.yaml",
+    ):
+        (bindings_path / name).write_text(
+            (fixture_bindings / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    internals = yaml.safe_load(
+        (bindings_path / "internals.bindings.yaml").read_text(encoding="utf-8")
+    )
+    internals["series"].append(
+        {
+            "id": "engine_sparse_years",
+            "sheet": "Engine",
+            "data_range": "Engine!B2:C2",
+            "layout": "series",
+            "internal": {},
+            "structure": {
+                "measure": {
+                    "concept": "OBS_VALUE",
+                    "dtype": "float",
+                    "bind": {"kind": "data_cell", "read": "float"},
+                },
+                "dimensions": [
+                    {
+                        "id": "TIME_PERIOD",
+                        "concept": "TIME_PERIOD",
+                        "role": "key",
+                        "scope": "cell",
+                        "bind": {
+                            "kind": "column_header",
+                            "header_row": 1,
+                            "read": "int",
+                        },
+                    }
+                ],
+            },
+            "key": ["TIME_PERIOD"],
+            "validation": {"warn_on_partial_overlap": False},
+        }
+    )
+    (bindings_path / "internals.bindings.yaml").write_text(
+        yaml.safe_dump(internals, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    config = replace(
+        synthetic_pipeline_config(workbook_path=workbook_path),
+        bindings_path=bindings_path,
+    )
+    cache_dir = tmp_path / "dependency-graph"
+    monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(
+        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.validate_pipeline_config",
+        lambda _config: None,
+    )
+    regenerate_graph_cache(force=True)
+    graph, _ = load_graph(config)
+    series = next(s for s in internals["series"] if s["id"] == "engine_sparse_years")
+
+    sparse = find_sparse_label_bind_issues(
+        graph,
+        series,
+        workbook_path=workbook_path,
+        direction="internal",
+    )
+    assert sparse
+    assert sparse[0].code == "sparse_label_without_fill"
+    assert "fill: true" in sparse[0].message
+
+    report = audit_binding_resolutions(
+        graph,
+        load_series_bindings(bindings_path),
+        workbook=workbook_path,
+        directions=("internal",),
+    )
+    assert not report.ok
+    assert any(
+        finding.series_id == "engine_sparse_years"
+        and finding.code
+        in {
+            "sparse_label_without_fill",
+            "bind_resolution_failed",
+            "partial_bind_failure",
+        }
+        for finding in report.findings
+    )
+    rendered = "\n".join(format_audit_findings(report.findings))
+    assert "engine_sparse_years" in rendered
+
+
+def test_binding_resolution_audit_clean_for_synthetic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.graph_cache as graph_cache
+
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    config = synthetic_pipeline_config(workbook_path=workbook_path)
+    cache_dir = tmp_path / "dependency-graph"
+    monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(
+        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.validate_pipeline_config",
+        lambda _config: None,
+    )
+    regenerate_graph_cache(force=True)
+    graph, _ = load_graph(config)
+    bindings = load_series_bindings(config.bindings_path)
+
+    report = audit_binding_resolutions(
+        graph,
+        bindings,
+        workbook=config.workbook_path,
+    )
+    assert report.ok
+    assert report.error_count == 0
+
+
+def test_binding_resolution_audit_cli_exits_nonzero_on_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.graph_cache as graph_cache
+    from scripts.binding_resolution_audit import main as audit_main
+
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+
+    wb = fastpyxl.load_workbook(workbook_path)
+    wb["Engine"]["B1"] = 2020
+    wb["Engine"]["C1"] = None
+    wb.save(workbook_path)
+    wb.close()
+
+    bindings_path = tmp_path / "bindings"
+    bindings_path.mkdir()
+    fixture_bindings = Path(__file__).resolve().parent / "fixtures" / "synthetic"
+    for name in (
+        "inputs.bindings.yaml",
+        "outputs.bindings.yaml",
+        "internals.bindings.yaml",
+    ):
+        (bindings_path / name).write_text(
+            (fixture_bindings / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    internals = yaml.safe_load(
+        (bindings_path / "internals.bindings.yaml").read_text(encoding="utf-8")
+    )
+    internals["series"].append(
+        {
+            "id": "engine_sparse_years",
+            "sheet": "Engine",
+            "data_range": "Engine!B2:C2",
+            "layout": "series",
+            "internal": {},
+            "structure": {
+                "measure": {
+                    "concept": "OBS_VALUE",
+                    "dtype": "float",
+                    "bind": {"kind": "data_cell", "read": "float"},
+                },
+                "dimensions": [
+                    {
+                        "id": "TIME_PERIOD",
+                        "concept": "TIME_PERIOD",
+                        "role": "key",
+                        "scope": "cell",
+                        "bind": {
+                            "kind": "column_header",
+                            "header_row": 1,
+                            "read": "int",
+                        },
+                    }
+                ],
+            },
+            "key": ["TIME_PERIOD"],
+            "validation": {"warn_on_partial_overlap": False},
+        }
+    )
+    (bindings_path / "internals.bindings.yaml").write_text(
+        yaml.safe_dump(internals, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    config = replace(
+        synthetic_pipeline_config(workbook_path=workbook_path),
+        bindings_path=bindings_path,
+    )
+    cache_dir = tmp_path / "dependency-graph"
+    monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(
+        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.validate_pipeline_config",
+        lambda _config: None,
+    )
+    monkeypatch.setattr(
+        "scripts.binding_resolution_audit.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.binding_resolution_audit.validate_pipeline_config",
+        lambda _config: None,
+    )
+    regenerate_graph_cache(force=True)
+
+    assert audit_main(["--direction", "internal"]) == 1
