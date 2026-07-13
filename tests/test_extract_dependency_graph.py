@@ -68,7 +68,7 @@ def test_extract_graph_cli_exits_zero_on_synthetic_workbook(
     assert (output_dir / "extraction-summary.json").is_file()
 
 
-def test_main_without_extract_graph_flag_runs_export(
+def test_main_without_extract_graph_flag_runs_full_pipeline(
     synthetic_pipeline_config_fixture,
 ) -> None:
     with patch(
@@ -77,16 +77,11 @@ def test_main_without_extract_graph_flag_runs_export(
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
             with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch(
-                    "src.extraction_pipeline.export_generated_package"
-                ) as export:
-                    with patch(
-                        "src.documentation_pipeline.run_documentation_pipeline"
-                    ) as document:
-                        main([])
+                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                    main([])
 
-    export.assert_called_once()
-    document.assert_called_once()
+    pipeline.assert_called_once()
+    assert pipeline.call_args.kwargs["stop_after_stage"] == "document"
 
 
 def test_load_pipeline_config_default_graph_output_dir() -> None:
@@ -148,7 +143,7 @@ def test_export_generated_package_passes_variation_mode_to_cluster_graph_formula
     )
 
 
-def test_main_passes_cli_variation_mode_to_export(
+def test_main_passes_cli_variation_mode_to_pipeline(
     synthetic_pipeline_config_fixture,
 ) -> None:
     with patch(
@@ -157,11 +152,8 @@ def test_main_passes_cli_variation_mode_to_export(
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
             with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch(
-                    "src.extraction_pipeline.export_generated_package"
-                ) as export:
-                    with patch("src.documentation_pipeline.run_documentation_pipeline"):
-                        main(["--variation-mode", "dominant_key_only"])
+                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                    main(["--variation-mode", "dominant_key_only"])
 
-    export.assert_called_once()
-    assert export.call_args.args[0].variation_mode == "dominant_key_only"
+    pipeline.assert_called_once()
+    assert pipeline.call_args.args[0].variation_mode == "dominant_key_only"

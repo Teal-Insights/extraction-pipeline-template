@@ -101,7 +101,8 @@ See the commented reference example at the bottom of `workbook_config.py` (Tiny 
 Build the dependency graph with provenance enabled and write review artifacts before export:
 
 ```bash
-uv run python -m src.extraction_pipeline --extract-graph
+uv run python -m src.extraction_pipeline --stop-after-stage extract
+# equivalent: --extract-graph
 ```
 
 This writes `artifacts/dependency-graph/` (see [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md)), then exits. Review graph completeness manually (step 5 in the [onboarding checklist](#clone-and-configure-onboarding-checklist)): expected sheets, no spurious nodes, shock/engine paths present. See [artifacts/README.md](artifacts/README.md) for commit policy and [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for the summary schema.
@@ -242,6 +243,22 @@ After graph-oracle parity passes (see [Verify graph](#3-verify-graph)), run the 
 ```bash
 uv sync
 uv run python -m src.extraction_pipeline
+```
+
+### Stop after a stage
+
+The pipeline is ordered as `extract → export → refactor → validate → document`. Use `--stop-after-stage` to run through a named stage and exit — useful while iterating without paying for later LLM or docs work:
+
+| Flag | Stops after | Typical use |
+|---|---|---|
+| `--stop-after-stage extract` (or `--extract-graph`) | Graph build + review artifacts | Bindings / constraint iteration |
+| `--stop-after-stage export` | Codegen package + seeded validation harness | Inspect generated API before LLM refactor |
+| `--stop-after-stage refactor` | Internals rewrite | Skip differential + docs |
+| `--stop-after-stage validate` | Post-refactor differential + shipped reports | Skip documentation website |
+| `--stop-after-stage document` (default) | Full pipeline | Release / complete run |
+
+```bash
+uv run python -m src.extraction_pipeline --stop-after-stage export
 ```
 
 ### Prerequisites

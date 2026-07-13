@@ -65,6 +65,21 @@ SeriesResolutionList = Sequence[Mapping[str, Any]]
 
 EXTRACTION_SUMMARY_SCHEMA_VERSION = "1.0.0"
 
+PipelineStageName = Literal[
+    "extract",
+    "export",
+    "refactor",
+    "validate",
+    "document",
+]
+PIPELINE_STAGES: tuple[PipelineStageName, ...] = (
+    "extract",
+    "export",
+    "refactor",
+    "validate",
+    "document",
+)
+
 
 @dataclass(frozen=True)
 class PipelineGraphResult:
@@ -87,6 +102,24 @@ class DependencyGraphExtraction:
     internal_series: SeriesResolutionList
     timer: StageTimer
     elapsed_seconds: float
+
+
+@dataclass(frozen=True)
+class ExportStageState:
+    """Shared state produced by the export stage for later pipeline stages."""
+
+    config: PipelineConfig
+    graph_result: PipelineGraphResult
+    refactor_projection: Any
+    internal_binding_index: Any
+    package_root: Path
+
+
+@dataclass(frozen=True)
+class RefactorStageState:
+    """Shared state produced by the refactor stage for validation."""
+
+    config: PipelineConfig
 
 
 def count_provenance_edges(graph: DependencyGraph) -> int:
@@ -359,13 +392,13 @@ def build_pipeline_graph(
     )
 
 
-def export_generated_package(
+def run_export_stage(
     config: PipelineConfig,
     *,
     no_cache: bool = False,
     force_rebuild: bool = False,
-) -> None:
-    """Write the generated package under dist/."""
+) -> ExportStageState:
+    """Build the graph, generate the package under dist/, and seed the harness."""
     configure_logging()
     timer = StageTimer()
     stall_log_path = resolve_stall_log_path(config.graph_output_dir)
@@ -442,42 +475,128 @@ tests/results/local/
 
     seed_validation_harness(config=config)
 
+    return ExportStageState(
+        config=config,
+        graph_result=graph_result,
+        refactor_projection=refactor_projection,
+        internal_binding_index=internal_binding_index,
+        package_root=package_root,
+    )
+
+
+def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
+    """Cluster formulas and rewrite internals behind the parity gate."""
     from src.formula_clustering import cluster_graph_formulas
     from src.internals_refactor import refactor_internals_all_clusters
     from src.refactor_bindings import build_bound_address_keys
 
+    config = state.config
+    graph_result = state.graph_result
     bound_address_keys = build_bound_address_keys(
         graph_result.input_series,
         graph_result.output_series,
         graph_result.internal_series,
     )
     formula_clusters = cluster_graph_formulas(
-        refactor_projection,
+        state.refactor_projection,
         bound_address_keys=bound_address_keys,
         variation_mode=config.variation_mode,
         workbook_path=config.workbook_path,
         layout=config.projection_layout,
     )
     refactor_internals_all_clusters(
-        refactor_projection,
+        state.refactor_projection,
         formula_clusters,
-        internals_path=package_root / "internals.py",
-        source_graph=graph,
-        internal_binding_index=internal_binding_index,
+        internals_path=state.package_root / "internals.py",
+        source_graph=graph_result.graph,
+        internal_binding_index=state.internal_binding_index,
         bindings_path=config.bindings_path,
         workbook_path=config.workbook_path,
     )
-    run_post_refactor_differential(config=config)
-    export_reference_reports(config=config)
+    return RefactorStageState(config=config)
+
+
+def run_validate_stage(state: RefactorStageState) -> None:
+    """Run post-refactor differential and ship reference reports into dist/."""
+    run_post_refactor_differential(config=state.config)
+    export_reference_reports(config=state.config)
+
+
+def run_pipeline(
+    config: PipelineConfig,
+    *,
+    stop_after_stage: PipelineStageName | str = "document",
+    no_cache: bool = False,
+    force_rebuild: bool = False,
+) -> None:
+    """Run pipeline stages in order, stopping after ``stop_after_stage`` inclusive."""
+    if stop_after_stage not in PIPELINE_STAGES:
+        raise ValueError(
+            f"unknown pipeline stage {stop_after_stage!r}; "
+            f"expected one of {list(PIPELINE_STAGES)}"
+        )
+
+    if stop_after_stage == "extract":
+        extract_dependency_graph(
+            config,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+        )
+        return
+
+    export_state = run_export_stage(
+        config,
+        no_cache=no_cache,
+        force_rebuild=force_rebuild,
+    )
+    if stop_after_stage == "export":
+        return
+
+    refactor_state = run_refactor_stage(export_state)
+    if stop_after_stage == "refactor":
+        return
+
+    run_validate_stage(refactor_state)
+    if stop_after_stage == "validate":
+        return
+
+    from src.documentation_pipeline import run_documentation_pipeline
+
+    run_documentation_pipeline(config)
+
+
+def export_generated_package(
+    config: PipelineConfig,
+    *,
+    no_cache: bool = False,
+    force_rebuild: bool = False,
+) -> None:
+    """Write the generated package under dist/ through the validate stage."""
+    run_pipeline(
+        config,
+        stop_after_stage="validate",
+        no_cache=no_cache,
+        force_rebuild=force_rebuild,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     configure_logging()
     parser = argparse.ArgumentParser(description="Run the extraction pipeline.")
-    parser.add_argument(
+    stop_group = parser.add_mutually_exclusive_group()
+    stop_group.add_argument(
+        "--stop-after-stage",
+        choices=PIPELINE_STAGES,
+        default=None,
+        help=(
+            "Run pipeline stages through the named stage and exit. "
+            f"Stages in order: {', '.join(PIPELINE_STAGES)}."
+        ),
+    )
+    stop_group.add_argument(
         "--extract-graph",
         action="store_true",
-        help="Build the dependency graph, write review artifacts, and exit.",
+        help="Alias for --stop-after-stage extract.",
     )
     parser.add_argument(
         "--no-cache",
@@ -492,13 +611,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     validate_pipeline_config(config)
     activate_pipeline_config(config)
-    if args.extract_graph:
-        extract_dependency_graph(config, no_cache=args.no_cache)
-        return
-    export_generated_package(config, no_cache=args.no_cache)
-    from src.documentation_pipeline import run_documentation_pipeline
 
-    run_documentation_pipeline(config)
+    stop_after_stage: PipelineStageName = "document"
+    if args.extract_graph:
+        stop_after_stage = "extract"
+    elif args.stop_after_stage is not None:
+        stop_after_stage = cast(PipelineStageName, args.stop_after_stage)
+
+    run_pipeline(
+        config,
+        stop_after_stage=stop_after_stage,
+        no_cache=args.no_cache,
+    )
 
 
 if __name__ == "__main__":
