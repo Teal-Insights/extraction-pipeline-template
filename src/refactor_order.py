@@ -46,9 +46,7 @@ def assert_valid_refactor_schedule(
 ) -> None:
     """Raise ``AssertionError`` when a unit appears before a unit that owns its dependency."""
     owners = _address_owner_units(units)
-    position = {
-        unit.refactor_group_id: index for index, unit in enumerate(units)
-    }
+    position = {unit.refactor_group_id: index for index, unit in enumerate(units)}
     for unit in units:
         member_set = frozenset(unit.members)
         for address in unit.members:
@@ -123,9 +121,7 @@ def _kahn_cluster_order(
     depends_on: dict[int, set[int]],
 ) -> tuple[FormulaCluster, ...] | None:
     eligible_by_id = {cluster.cluster_id: cluster for cluster in eligible}
-    inbound: dict[int, set[int]] = {
-        cluster.cluster_id: set() for cluster in eligible
-    }
+    inbound: dict[int, set[int]] = {cluster.cluster_id: set() for cluster in eligible}
     for cluster_id, prerequisites in depends_on.items():
         for prerequisite_id in prerequisites:
             inbound[cluster_id].add(prerequisite_id)
@@ -195,9 +191,7 @@ def _schedule_refactor_units_on_cycle(
         for address in cluster.members:
             address_to_parent[address] = cluster.cluster_id
 
-    remaining = {
-        address for cluster in eligible for address in cluster.members
-    }
+    remaining = {address for cluster in eligible for address in cluster.members}
     scheduled_members: set[str] = set()
     units: list[RefactorUnit] = []
     refactor_group_id = 0
