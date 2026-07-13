@@ -208,6 +208,35 @@ def test_format_structural_skeleton_renders_bool_and_quoted_strings() -> None:
     assert format_structural_skeleton(skeleton) == '=IF(TRUE,"say ""hi""",)'
 
 
+def test_format_structural_skeleton_round_trips_parsed_literals() -> None:
+    formula = '=IF(TRUE,"say ""hi""",)'
+    fingerprint = address_only_structural_fingerprint(formula)
+    assert fingerprint is not None
+    skeleton, refs = fingerprint
+    assert refs == ()
+    assert format_structural_skeleton(skeleton) == formula
+
+
+def test_format_structural_skeleton_rejects_wrong_scalar_types() -> None:
+    with pytest.raises(TypeError, match="bool is not a number literal"):
+        format_structural_skeleton(("num", True))
+    with pytest.raises(TypeError, match="expected int or float"):
+        format_structural_skeleton(("num", "12"))
+    with pytest.raises(TypeError, match="expected str"):
+        format_structural_skeleton(("str", 12))
+    with pytest.raises(TypeError, match="expected bool literal"):
+        format_structural_skeleton(("bool", "TRUE"))
+
+
+def test_format_structural_skeleton_rejects_incomplete_scalar_nodes() -> None:
+    with pytest.raises(TypeError, match="num skeleton node requires a value"):
+        format_structural_skeleton(("num",))
+    with pytest.raises(TypeError, match="str skeleton node requires a value"):
+        format_structural_skeleton(("str",))
+    with pytest.raises(TypeError, match="bool skeleton node requires a value"):
+        format_structural_skeleton(("bool",))
+
+
 def test_formulas_are_not_parameterizable_for_different_literal_values() -> None:
     left = "=Paris!B13+1"
     right = "=Paris!C13+1"

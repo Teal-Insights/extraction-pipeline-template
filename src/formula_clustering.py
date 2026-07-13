@@ -423,11 +423,13 @@ def _format_excel_number(value: object) -> str:
         if value.is_integer():
             return str(int(value))
         return format(value, "g")
-    return str(value)
+    raise TypeError(f"expected int or float number literal, got {type(value)!r}")
 
 
 def _format_excel_string(value: object) -> str:
-    text = str(value).replace('"', '""')
+    if not isinstance(value, str):
+        raise TypeError(f"expected str string literal, got {type(value)!r}")
+    text = value.replace('"', '""')
     return f'"{text}"'
 
 
@@ -437,6 +439,12 @@ def _format_excel_bool(value: object) -> str:
     if value is False:
         return "FALSE"
     raise TypeError(f"expected bool literal, got {type(value)!r}")
+
+
+def _skeleton_literal_value(node: tuple, *, kind: str) -> object:
+    if len(node) < 2:
+        raise TypeError(f"{kind} skeleton node requires a value")
+    return node[1]
 
 
 def _format_ref_placeholder(index: object, concepts: object | None = None) -> str:
@@ -451,15 +459,15 @@ def _format_ref_placeholder(index: object, concepts: object | None = None) -> st
 def _format_skeleton_node(node: tuple, *, min_prec: int) -> str:
     kind = node[0]
     if kind == "num":
-        return _format_excel_number(node[1])
+        return _format_excel_number(_skeleton_literal_value(node, kind=kind))
     if kind == "str":
-        return _format_excel_string(node[1])
+        return _format_excel_string(_skeleton_literal_value(node, kind=kind))
     if kind == "bool":
-        return _format_excel_bool(node[1])
+        return _format_excel_bool(_skeleton_literal_value(node, kind=kind))
     if kind == "empty":
         return ""
     if kind == "err":
-        return str(node[1])
+        return str(_skeleton_literal_value(node, kind=kind))
     if kind == "ref":
         if len(node) == 2:
             return _format_ref_placeholder(node[1])
