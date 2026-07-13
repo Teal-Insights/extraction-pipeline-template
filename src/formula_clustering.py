@@ -531,13 +531,16 @@ def _ref_position_key_values(
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> list[dict[str, BindingKeyValue]] | None:
-    fingerprint = _structural_fingerprint(
-        formula,
-        bound_address_keys=bound_address_keys,
-        workbook_path=workbook_path,
-        layout=layout,
-        key_cache=key_cache,
-    )
+    if key_cache is not None:
+        fingerprint = key_cache.fingerprint_for_formula(member_address, formula)
+    else:
+        fingerprint = _structural_fingerprint(
+            formula,
+            bound_address_keys=bound_address_keys,
+            workbook_path=workbook_path,
+            layout=layout,
+            key_cache=None,
+        )
     if fingerprint is None or not _binding_aware_fingerprint_complete(fingerprint):
         return None
     _skeleton, refs = fingerprint
@@ -565,6 +568,59 @@ def _ref_position_key_values(
     return values_by_ref
 
 
+def _varying_concepts_at_ref_from_matrix(
+    member_matrices: Mapping[str, list[dict[str, BindingKeyValue]] | None],
+    members: tuple[str, ...],
+    ref_index: int,
+) -> frozenset[str]:
+    concept_values: dict[str, set[BindingKeyValue]] = {}
+    for member in members:
+        ref_values = member_matrices[member]
+        if ref_values is None or ref_index >= len(ref_values):
+            return frozenset()
+        for concept, value in ref_values[ref_index].items():
+            concept_values.setdefault(concept, set()).add(value)
+    return frozenset(
+        concept for concept, values in concept_values.items() if len(values) > 1
+    )
+
+
+def _dominant_key_at_ref_from_matrix(
+    member_matrices: Mapping[str, list[dict[str, BindingKeyValue]] | None],
+    members: tuple[str, ...],
+    ref_index: int,
+    varying_concepts: frozenset[str],
+) -> str | None:
+    if not varying_concepts:
+        return None
+    counts: dict[str, int] = {}
+    for concept in varying_concepts:
+        values: set[BindingKeyValue] = set()
+        for member in members:
+            ref_values = member_matrices[member]
+            if ref_values is None or ref_index >= len(ref_values):
+                continue
+            if concept in ref_values[ref_index]:
+                values.add(ref_values[ref_index][concept])
+        counts[concept] = len(values)
+    return max(counts, key=lambda concept: (counts[concept], concept))
+
+
+def _split_signature_from_ref_keys(
+    keys_at_ref: dict[str, BindingKeyValue],
+    dominant_key: str,
+    varying_concepts: frozenset[str],
+) -> tuple[BindingKeyValue, ...] | None:
+    signature: list[BindingKeyValue] = []
+    for concept in sorted(varying_concepts):
+        if concept == dominant_key:
+            continue
+        if concept not in keys_at_ref:
+            return None
+        signature.append(keys_at_ref[concept])
+    return tuple(signature)
+
+
 def _dominant_varying_concepts_at_ref(
     members: tuple[str, ...],
     formula_nodes: Mapping[str, str],
@@ -575,9 +631,8 @@ def _dominant_varying_concepts_at_ref(
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> frozenset[str]:
-    concept_values: dict[str, set[BindingKeyValue]] = {}
-    for member in members:
-        ref_values = _ref_position_key_values(
+    member_matrices = {
+        member: _ref_position_key_values(
             member,
             formula_nodes[member],
             bound_address_keys,
@@ -585,13 +640,9 @@ def _dominant_varying_concepts_at_ref(
             layout=layout,
             key_cache=key_cache,
         )
-        if ref_values is None or ref_index >= len(ref_values):
-            return frozenset()
-        for concept, value in ref_values[ref_index].items():
-            concept_values.setdefault(concept, set()).add(value)
-    return frozenset(
-        concept for concept, values in concept_values.items() if len(values) > 1
-    )
+        for member in members
+    }
+    return _varying_concepts_at_ref_from_matrix(member_matrices, members, ref_index)
 
 
 def _dominant_key_for_ref(
@@ -605,26 +656,20 @@ def _dominant_key_for_ref(
     layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> str | None:
-    if not varying_concepts:
-        return None
-    counts: dict[str, int] = {}
-    for concept in varying_concepts:
-        values: set[BindingKeyValue] = set()
-        for member in members:
-            ref_values = _ref_position_key_values(
-                member,
-                formula_nodes[member],
-                bound_address_keys,
-                workbook_path=workbook_path,
-                layout=layout,
-                key_cache=key_cache,
-            )
-            if ref_values is None or ref_index >= len(ref_values):
-                continue
-            if concept in ref_values[ref_index]:
-                values.add(ref_values[ref_index][concept])
-        counts[concept] = len(values)
-    return max(counts, key=lambda concept: (counts[concept], concept))
+    member_matrices = {
+        member: _ref_position_key_values(
+            member,
+            formula_nodes[member],
+            bound_address_keys,
+            workbook_path=workbook_path,
+            layout=layout,
+            key_cache=key_cache,
+        )
+        for member in members
+    }
+    return _dominant_key_at_ref_from_matrix(
+        member_matrices, members, ref_index, varying_concepts
+    )
 
 
 def _dominant_key_split_signature(
@@ -649,15 +694,9 @@ def _dominant_key_split_signature(
     )
     if ref_values is None or ref_index >= len(ref_values):
         return None
-    keys_at_ref = ref_values[ref_index]
-    signature: list[BindingKeyValue] = []
-    for concept in sorted(varying_concepts):
-        if concept == dominant_key:
-            continue
-        if concept not in keys_at_ref:
-            return None
-        signature.append(keys_at_ref[concept])
-    return tuple(signature)
+    return _split_signature_from_ref_keys(
+        ref_values[ref_index], dominant_key, varying_concepts
+    )
 
 
 def _split_cluster_by_dominant_keys(
@@ -686,42 +725,40 @@ def _split_cluster_by_dominant_keys(
     if not refs:
         return (members,)
 
+    member_matrices = {
+        member: _ref_position_key_values(
+            member,
+            formula_nodes[member],
+            bound_address_keys,
+            workbook_path=workbook_path,
+            layout=layout,
+            key_cache=key_cache,
+        )
+        for member in members
+    }
+
+    ref_dominance: list[tuple[frozenset[str], str | None]] = []
+    for ref_index in range(len(refs)):
+        varying = _varying_concepts_at_ref_from_matrix(
+            member_matrices, members, ref_index
+        )
+        dominant = _dominant_key_at_ref_from_matrix(
+            member_matrices, members, ref_index, varying
+        )
+        ref_dominance.append((varying, dominant))
+
     groups: dict[tuple[tuple[BindingKeyValue, ...], ...], list[str]] = {}
     for member in members:
+        ref_values = member_matrices[member]
         signatures: list[tuple[BindingKeyValue, ...]] = []
-        for ref_index in range(len(refs)):
-            varying = _dominant_varying_concepts_at_ref(
-                members,
-                formula_nodes,
-                bound_address_keys,
-                ref_index,
-                workbook_path=workbook_path,
-                layout=layout,
-                key_cache=key_cache,
-            )
-            dominant = _dominant_key_for_ref(
-                members,
-                formula_nodes,
-                bound_address_keys,
-                ref_index,
-                varying,
-                workbook_path=workbook_path,
-                layout=layout,
-                key_cache=key_cache,
-            )
-            if dominant is None:
+        for ref_index, (varying, dominant) in enumerate(ref_dominance):
+            if dominant is None or ref_values is None or ref_index >= len(ref_values):
                 signatures.append(())
                 continue
-            signature = _dominant_key_split_signature(
-                member,
-                formula_nodes,
-                bound_address_keys,
-                ref_index,
+            signature = _split_signature_from_ref_keys(
+                ref_values[ref_index],
                 dominant,
                 varying,
-                workbook_path=workbook_path,
-                layout=layout,
-                key_cache=key_cache,
             )
             if signature is None:
                 signatures.append(())
