@@ -11,6 +11,7 @@ from src.formula_clustering import (
     address_only_structural_fingerprint,
     cluster_graph_formulas,
     cluster_has_independent_operand_variation,
+    format_structural_skeleton,
     formulas_are_parameterizable,
     structural_fingerprint,
 )
@@ -156,6 +157,45 @@ def test_structural_fingerprint_abstracts_cell_addresses_but_preserves_literals(
         "+",
         ("ref", 0),
         ("num", 2.0),
+    )
+
+
+def test_format_structural_skeleton_renders_formula_like_placeholders() -> None:
+    skeleton = (
+        "bin",
+        "+",
+        ("ref", 0, ("TIME_PERIOD",)),
+        ("ref", 1, ("REF_AREA",)),
+    )
+    assert format_structural_skeleton(skeleton) == "=ref_0[TIME_PERIOD]+ref_1[REF_AREA]"
+
+
+def test_format_structural_skeleton_joins_sorted_dimension_ids() -> None:
+    skeleton = (
+        "bin",
+        "-",
+        ("ref", 0, ("REF_AREA", "TIME_PERIOD")),
+        ("ref", 1, ("REF_AREA", "TIME_PERIOD")),
+    )
+    assert (
+        format_structural_skeleton(skeleton)
+        == "=ref_0[REF_AREA,TIME_PERIOD]-ref_1[REF_AREA,TIME_PERIOD]"
+    )
+
+
+def test_format_structural_skeleton_genericizes_scalars_and_functions() -> None:
+    skeleton = (
+        "fn",
+        "IF",
+        (
+            ("bin", ">", ("ref", 0, ("TIME_PERIOD",)), ("num",)),
+            ("ref", 1, None),
+            ("str",),
+        ),
+    )
+    assert (
+        format_structural_skeleton(skeleton)
+        == "=IF(ref_0[TIME_PERIOD]>{num},ref_1,{str})"
     )
 
 

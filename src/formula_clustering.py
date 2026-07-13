@@ -398,6 +398,94 @@ def structural_fingerprint(
     )
 
 
+_BINARY_PRECEDENCE: dict[str, int] = {
+    "^": 6,
+    "*": 5,
+    "/": 5,
+    "+": 4,
+    "-": 4,
+    "&": 3,
+    "=": 2,
+    "<>": 2,
+    "<": 2,
+    ">": 2,
+    "<=": 2,
+    ">=": 2,
+}
+
+
+def _format_ref_placeholder(index: object, concepts: object | None = None) -> str:
+    label = f"ref_{index}"
+    if concepts is None:
+        return label
+    if not isinstance(concepts, tuple):
+        return label
+    return f"{label}[{','.join(str(concept) for concept in concepts)}]"
+
+
+def _format_skeleton_node(node: tuple, *, min_prec: int) -> str:
+    kind = node[0]
+    if kind == "num":
+        return "{num}"
+    if kind == "str":
+        return "{str}"
+    if kind == "bool":
+        return "{bool}"
+    if kind == "empty":
+        return "{empty}"
+    if kind == "err":
+        return str(node[1])
+    if kind == "ref":
+        if len(node) == 2:
+            return _format_ref_placeholder(node[1])
+        return _format_ref_placeholder(node[1], node[2])
+    if kind == "range":
+        if len(node) == 3:
+            start = _format_ref_placeholder(node[1])
+            end = _format_ref_placeholder(node[2])
+        else:
+            start = _format_ref_placeholder(node[1], node[3])
+            end = _format_ref_placeholder(node[2], node[4])
+        return f"{start}:{end}"
+    if kind == "wcol":
+        sheet, column = node[1], node[2]
+        return f"{sheet}!{column}:{column}"
+    if kind == "wrow":
+        sheet, row = node[1], node[2]
+        return f"{sheet}!{row}:{row}"
+    if kind == "unary":
+        op = str(node[1])
+        operand = _format_skeleton_node(node[2], min_prec=7)
+        return f"{op}{operand}"
+    if kind == "bin":
+        op = str(node[1])
+        prec = _BINARY_PRECEDENCE.get(op, 1)
+        left = _format_skeleton_node(node[2], min_prec=prec)
+        # Left-associative: parenthesize right side on equal precedence for
+        # non-associative-looking ops (-, /, comparisons).
+        right_prec = prec + (0 if op in {"*", "+", "&", "^"} else 1)
+        right = _format_skeleton_node(node[3], min_prec=right_prec)
+        rendered = f"{left}{op}{right}"
+        if prec < min_prec:
+            return f"({rendered})"
+        return rendered
+    if kind == "fn":
+        name = str(node[1])
+        args = ",".join(_format_skeleton_node(arg, min_prec=0) for arg in node[2])
+        return f"{name}({args})"
+    raise TypeError(f"unknown skeleton node kind: {kind!r}")
+
+
+def format_structural_skeleton(skeleton: tuple) -> str:
+    """Render a structural skeleton as an Excel-like formula with ref placeholders.
+
+    Cell/range slots become ``ref_N`` or ``ref_N[DIM,...]`` using the fingerprint's
+    sorted binding dimension ids. Genericized scalars become ``{num}`` / ``{str}`` /
+    ``{bool}`` / ``{empty}``.
+    """
+    return f"={_format_skeleton_node(skeleton, min_prec=0)}"
+
+
 def _binding_aware_fingerprint_complete(
     fingerprint: StructuralFingerprint,
 ) -> bool:
