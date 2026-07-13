@@ -126,7 +126,7 @@ def test_export_generated_package_passes_variation_mode_to_cluster_graph_formula
                 with patch("src.extraction_pipeline.CodeGenerator") as generator_cls:
                     generator = generator_cls.return_value.__enter__.return_value
                     generator.generate_modules.return_value = {"internals.py": "pass\n"}
-                    with patch("src.extraction_pipeline.export_validation_assets"):
+                    with patch("src.extraction_pipeline.seed_validation_harness"):
                         with patch(
                             "src.formula_clustering.cluster_graph_formulas",
                             cluster_graph_formulas,
@@ -134,7 +134,13 @@ def test_export_generated_package_passes_variation_mode_to_cluster_graph_formula
                             with patch(
                                 "src.internals_refactor.refactor_internals_all_clusters"
                             ):
-                                export_generated_package(config)
+                                with patch(
+                                    "src.extraction_pipeline.run_post_refactor_differential"
+                                ):
+                                    with patch(
+                                        "src.extraction_pipeline.export_reference_reports"
+                                    ):
+                                        export_generated_package(config)
 
     cluster_graph_formulas.assert_called_once()
     assert (
