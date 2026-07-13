@@ -4,6 +4,14 @@ Author `inputs.bindings.yaml`, `outputs.bindings.yaml`, and `internals.bindings.
 
 Use schema version `1.8.0` and the prompt in [templates/binding-authoring-prompt.txt](../templates/binding-authoring-prompt.txt).
 
+After authoring (or when export fails in codegen), run
+`uv run python -m scripts.binding_resolution_audit` to catch bind-resolution errors that
+`validate_series_bindings` / `derive_*_series` can miss — for example sparse year headers
+without `fill: true`, or output series that resolve only a subset of their `data_range`.
+This is a correctness audit of authored bindings; burndown
+(`uv run python -m scripts.internal_binding_burndown`) is the coverage worklist for
+cells that still lack a binding.
+
 ## Dimension `id` vs `concept`
 
 | Field | Role |
