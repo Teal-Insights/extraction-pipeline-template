@@ -119,6 +119,50 @@ def build_bound_address_keys(
     return index
 
 
+def internal_series_cell_owners(
+    internal_series: Sequence[Mapping[str, Any]],
+) -> dict[str, tuple[str, ...]]:
+    """Map each internal-series cell address to the series ids that claim it."""
+    owners: dict[str, list[str]] = {}
+    for series in internal_series:
+        series_id = series.get("id")
+        if not isinstance(series_id, str) or not series_id:
+            continue
+        for cell in series.get("cells", []):
+            address = cell.get("address")
+            if isinstance(address, str):
+                owners.setdefault(address, []).append(series_id)
+    return {address: tuple(series_ids) for address, series_ids in owners.items()}
+
+
+def build_address_to_series_id(
+    internal_series: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    """Map each internal-series cell address to its owning ``series_id``."""
+    owners_by_address = internal_series_cell_owners(internal_series)
+    duplicates = {
+        address: series_ids
+        for address, series_ids in owners_by_address.items()
+        if len(series_ids) > 1
+    }
+    if duplicates:
+        sample_address, sample_series_ids = sorted(duplicates.items())[0]
+        raise ValueError(
+            "internal series cell address must map to exactly one series_id; "
+            f"got {sample_address!r} in {list(sample_series_ids)}"
+            + (
+                f" and {len(duplicates) - 1} more duplicate address(es)"
+                if len(duplicates) > 1
+                else ""
+            )
+        )
+    return {
+        address: series_ids[0]
+        for address, series_ids in owners_by_address.items()
+        if len(series_ids) == 1
+    }
+
+
 def _read_engine_time_period(
     column: str,
     workbook_path: Path,

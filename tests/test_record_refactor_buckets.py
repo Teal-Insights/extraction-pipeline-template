@@ -57,7 +57,8 @@ def _load_validated_pipeline_config() -> PipelineConfig:
         validate_pipeline_config(config)
     except FileNotFoundError as exc:
         pytest.skip(f"Pipeline configuration is incomplete: {exc}")
-    return config
+    # Pin legacy series-blind clustering so exact bucket counts stay stable.
+    return replace(config, clustering_mode="ast")
 
 
 @pytest.fixture(scope="module")
@@ -240,6 +241,36 @@ def test_refactor_buckets_include_expected_singleton_and_cluster_members(
     ]
 
 
+def test_refactor_buckets_include_series_ids_for_internal_members(
+    synthetic_pipeline_config_fixture,
+    synthetic_projection,
+    synthetic_bound_address_keys,
+) -> None:
+    config = replace(synthetic_pipeline_config_fixture, clustering_mode="ast")
+    address_to_series_id = {
+        "Engine!B2": "engine_b2",
+        "Engine!C2": "engine_c2",
+    }
+    records = record_refactor_buckets(
+        config,
+        graph=synthetic_projection,
+        internals_path=None,
+        internal_binding_index=None,
+        layout=config.projection_layout,
+        compression="none",
+        bound_address_keys=synthetic_bound_address_keys,
+        address_to_series_id=address_to_series_id,
+    )
+    engine_buckets = [
+        record
+        for record in records
+        if any(address.startswith("Engine!") for address in record.members)
+    ]
+    assert engine_buckets
+    assert all(record.series_ids for record in engine_buckets)
+    assert any("engine_b2" in record.series_ids for record in engine_buckets)
+
+
 def test_refactor_buckets_record_contract_for_cluster_targets(
     refactor_buckets_report: dict[str, Any],
 ) -> None:
@@ -313,6 +344,42 @@ def test_main_passes_cli_variation_mode_to_bucket_recording(
     assert run_buckets.call_args.args[0].variation_mode == "dominant_key_only"
 
 
+def test_main_passes_cli_clustering_mode_to_bucket_recording(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    with patch(
+        "src.record_refactor_buckets.load_pipeline_config",
+        return_value=synthetic_pipeline_config_fixture,
+    ):
+        with patch("src.record_refactor_buckets.validate_pipeline_config"):
+            with patch("src.record_refactor_buckets.activate_pipeline_config"):
+                with patch(
+                    "src.record_refactor_buckets.run_record_refactor_buckets"
+                ) as run_buckets:
+                    run_buckets.return_value = {
+                        "formula_cluster_count": 0,
+                        "refactor_unit_count": 0,
+                        "cluster_count": 0,
+                        "refactor_target_count": 0,
+                        "skipped_target_count": 0,
+                        "buckets": [],
+                    }
+                    main(
+                        [
+                            "--clustering-mode",
+                            "ast",
+                            "--json-output",
+                            str(tmp_path / "buckets.json"),
+                            "--markdown-output",
+                            str(tmp_path / "buckets.md"),
+                        ]
+                    )
+
+    run_buckets.assert_called_once()
+    assert run_buckets.call_args.args[0].clustering_mode == "ast"
+
+
 def test_record_refactor_buckets_requires_bound_address_keys(
     synthetic_pipeline_config_fixture,
     synthetic_projection,
@@ -333,8 +400,9 @@ def test_record_refactor_buckets_schedules_inter_cluster_cycle_mcve(
     synthetic_pipeline_config_fixture,
 ) -> None:
     graph, bindings = inter_cluster_cycle_graph()
+    config = replace(synthetic_pipeline_config_fixture, clustering_mode="ast")
     records = record_refactor_buckets(
-        synthetic_pipeline_config_fixture,
+        config,
         graph=graph,
         internals_path=None,
         internal_binding_index=None,

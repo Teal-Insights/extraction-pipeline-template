@@ -29,6 +29,7 @@ from src.binding_resolution_audit import (
     _unfilled_label_binds,
     audit_binding_resolutions,
     findings_from_resolution,
+    find_duplicate_internal_formula_cell_bindings,
     find_sparse_label_bind_issues,
     format_audit_findings,
 )
@@ -799,6 +800,98 @@ def test_find_sparse_label_bind_issues_without_fill(
     rendered = "\n".join(format_audit_findings(report.findings))
     assert "engine_sparse_years" in rendered
     assert "sparse_label_without_fill" in rendered
+
+
+def test_binding_resolution_audit_reports_duplicate_internal_cell_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.graph_cache as graph_cache
+
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    bindings_path = tmp_path / "bindings"
+    bindings_path.mkdir()
+    fixture_bindings = Path(__file__).resolve().parent / "fixtures" / "synthetic"
+    for name in (
+        "inputs.bindings.yaml",
+        "outputs.bindings.yaml",
+        "internals.bindings.yaml",
+    ):
+        (bindings_path / name).write_text(
+            (fixture_bindings / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    internals_yaml = bindings_path / "internals.bindings.yaml"
+    internals_text = internals_yaml.read_text(encoding="utf-8")
+    internals_yaml.write_text(
+        internals_text
+        + """
+  - id: engine_b2_duplicate
+    sheet: Engine
+    data_range: Engine!B2
+    layout: scalar
+    internal: {}
+    structure:
+      measure:
+        concept: OBS_VALUE
+        dtype: float
+        bind:
+          kind: data_cell
+          read: float
+      dimensions: []
+    key: []
+""",
+        encoding="utf-8",
+    )
+
+    config = replace(
+        synthetic_pipeline_config(workbook_path=workbook_path),
+        bindings_path=bindings_path,
+    )
+    cache_dir = tmp_path / "dependency-graph"
+    monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(
+        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
+        cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.load_pipeline_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.validate_pipeline_config",
+        lambda _config: None,
+    )
+    regenerate_graph_cache(force=True)
+    graph, _ = load_graph(config)
+    bindings = load_series_bindings(bindings_path)
+
+    findings = find_duplicate_internal_formula_cell_bindings(
+        graph,
+        bindings,
+        workbook_path=workbook_path,
+    )
+    assert findings
+    assert findings[0].code == "duplicate_internal_cell_binding"
+    assert findings[0].address == "Engine!B2"
+    assert "engine_b2" in findings[0].message
+    assert "engine_b2_duplicate" in findings[0].message
+
+    report = audit_binding_resolutions(
+        graph,
+        bindings,
+        workbook=config.workbook_path,
+        directions=("internal",),
+    )
+    assert not report.ok
+    assert any(
+        finding.code == "duplicate_internal_cell_binding" for finding in report.findings
+    )
 
 
 def test_binding_resolution_audit_clean_for_synthetic(

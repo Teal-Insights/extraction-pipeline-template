@@ -303,6 +303,60 @@ def findings_from_resolution(
     return findings
 
 
+def _is_internal_binding_series(series: dict[str, Any]) -> bool:
+    return isinstance(series.get("internal"), dict)
+
+
+def find_duplicate_internal_formula_cell_bindings(
+    graph: DependencyGraph,
+    bindings: WorkbookSeriesBindings,
+    *,
+    workbook_path: Path | str,
+) -> list[AuditFinding]:
+    """Flag formula cells claimed by more than one internal series binding."""
+    owners: dict[str, list[str]] = {}
+    for series in bindings.get("series", []):
+        if not isinstance(series, dict) or not _is_internal_binding_series(series):
+            continue
+        series_id = str(series.get("id", ""))
+        if not series_id:
+            continue
+        data_range = series.get("data_range")
+        if not isinstance(data_range, str):
+            continue
+        try:
+            addresses = expand_data_range_for_graph(
+                graph, data_range, workbook=workbook_path
+            )
+        except (ValueError, TypeError):
+            continue
+        for address in addresses:
+            node = graph.get_node(address)
+            if node is None or node.is_leaf or node.normalized_formula is None:
+                continue
+            owners.setdefault(address, []).append(series_id)
+
+    findings: list[AuditFinding] = []
+    for address, series_ids in sorted(owners.items()):
+        unique_series_ids = tuple(dict.fromkeys(series_ids))
+        if len(unique_series_ids) < 2:
+            continue
+        findings.append(
+            AuditFinding(
+                severity="error",
+                code="duplicate_internal_cell_binding",
+                series_id=unique_series_ids[0],
+                direction="internal",
+                message=(
+                    f"Formula cell is bound by multiple internal series: "
+                    f"{list(unique_series_ids)}"
+                ),
+                address=address,
+            )
+        )
+    return findings
+
+
 def audit_binding_resolutions(
     graph: DependencyGraph,
     bindings: WorkbookSeriesBindings,
@@ -355,6 +409,15 @@ def audit_binding_resolutions(
                 )
     finally:
         loaded_workbook.close()
+
+    if "internal" in directions:
+        findings.extend(
+            find_duplicate_internal_formula_cell_bindings(
+                graph,
+                bindings,
+                workbook_path=workbook_path,
+            )
+        )
 
     return BindingResolutionAuditReport(findings=tuple(findings))
 

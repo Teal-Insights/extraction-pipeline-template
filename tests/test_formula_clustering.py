@@ -419,6 +419,7 @@ def test_cluster_graph_formulas_groups_parallel_row_on_synthetic_projection(
     clusters = cluster_graph_formulas(
         synthetic_projection,
         bound_address_keys=synthetic_bound_address_keys,
+        clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
         layout=synthetic_pipeline_config_fixture.projection_layout,
     )
@@ -435,6 +436,7 @@ def test_cluster_graph_formulas_groups_trade_balance_with_binding_keys() -> None
     clusters = cluster_graph_formulas(
         _trade_balance_graph(),
         bound_address_keys=TRADE_BALANCE_BINDINGS,
+        clustering_mode="ast",
     )
     trade_clusters = [
         cluster for cluster in clusters if cluster.members[0].endswith("5")
@@ -496,6 +498,7 @@ def test_dominant_key_only_split_resolves_each_member_once() -> None:
         cluster_graph_formulas(
             graph,
             bound_address_keys=DOMINANT_KEY_SPLIT_BINDINGS,
+            clustering_mode="ast",
             variation_mode="dominant_key_only",
         )
 
@@ -512,6 +515,7 @@ def test_dominant_key_only_variation_mode_splits_cluster() -> None:
     independent_clusters = cluster_graph_formulas(
         graph,
         bound_address_keys=DOMINANT_KEY_SPLIT_BINDINGS,
+        clustering_mode="ast",
         variation_mode="independent",
     )
     assert len(independent_clusters) == 1
@@ -519,6 +523,7 @@ def test_dominant_key_only_variation_mode_splits_cluster() -> None:
     constrained_clusters = cluster_graph_formulas(
         graph,
         bound_address_keys=DOMINANT_KEY_SPLIT_BINDINGS,
+        clustering_mode="ast",
         variation_mode="dominant_key_only",
     )
     assert len(constrained_clusters) == 2
@@ -533,6 +538,7 @@ def test_cluster_graph_formulas_groups_debt_recurrence_chain_with_binding_keys()
     clusters = cluster_graph_formulas(
         _debt_to_gdp_anchor_recurrence_graph(),
         bound_address_keys=_debt_to_gdp_bindings(),
+        clustering_mode="ast",
     )
     debt_clusters = [
         cluster
@@ -601,6 +607,7 @@ def test_dominant_key_only_split_passes_layout_to_ref_key_resolution(
     cluster_graph_formulas(
         graph,
         bound_address_keys=bindings,
+        clustering_mode="ast",
         variation_mode="dominant_key_only",
         workbook_path=synthetic_workbook_path,
         layout=ENGINE_REF_LAYOUT,
@@ -642,6 +649,7 @@ def test_cluster_graph_formulas_caches_resolved_binding_keys(
         cluster_graph_formulas(
             graph,
             bound_address_keys=bound_address_keys,
+            clustering_mode="ast",
             workbook_path=synthetic_workbook_path,
             layout=ENGINE_REF_LAYOUT,
         )
@@ -677,6 +685,7 @@ def test_cluster_graph_formulas_parses_each_formula_once(
         cluster_graph_formulas(
             graph,
             bound_address_keys=bound_address_keys,
+            clustering_mode="ast",
             workbook_path=synthetic_workbook_path,
             layout=ENGINE_REF_LAYOUT,
         )
@@ -705,3 +714,148 @@ def test_cluster_has_independent_operand_variation_detects_variable_country_pair
         VARIABLE_COUNTRY_PAIR_BINDINGS,
         frozenset({"REF_AREA"}),
     )
+
+
+def _shared_ast_multi_series_graph() -> DependencyGraph:
+    """Two internal series whose members share one AST family on TIME_PERIOD only."""
+    graph = DependencyGraph()
+    formulas = {
+        "Engine!B5": "=Inputs!B10+1",
+        "Engine!C5": "=Inputs!B11+1",
+        "Engine!B6": "=Inputs!B10+1",
+        "Engine!C6": "=Inputs!B11+1",
+    }
+    for address, formula in formulas.items():
+        sheet, column, row = parse_workbook_address(address)
+        graph.add_node(_formula_node(sheet, column, row, formula))
+    return graph
+
+
+SHARED_AST_MULTI_SERIES_BINDINGS = {
+    "Inputs!B10": {"TIME_PERIOD": 1},
+    "Inputs!B11": {"TIME_PERIOD": 2},
+}
+
+SHARED_AST_ADDRESS_TO_SERIES_ID = {
+    "Engine!B5": "revenue_growth",
+    "Engine!C5": "revenue_growth",
+    "Engine!B6": "expenditure_growth",
+    "Engine!C6": "expenditure_growth",
+}
+
+
+def test_series_mode_skips_formula_fingerprinting() -> None:
+    graph = _shared_ast_multi_series_graph()
+    with patch("src.formula_clustering.parse") as parser:
+        cluster_graph_formulas(
+            graph,
+            bound_address_keys=SHARED_AST_MULTI_SERIES_BINDINGS,
+            clustering_mode="series",
+            address_to_series_id=SHARED_AST_ADDRESS_TO_SERIES_ID,
+        )
+    parser.assert_not_called()
+
+
+def test_series_ast_partitions_shared_ast_cluster_by_series() -> None:
+    graph = _shared_ast_multi_series_graph()
+
+    ast_clusters = cluster_graph_formulas(
+        graph,
+        bound_address_keys=SHARED_AST_MULTI_SERIES_BINDINGS,
+        clustering_mode="ast",
+        address_to_series_id=SHARED_AST_ADDRESS_TO_SERIES_ID,
+    )
+    assert len(ast_clusters) == 1
+    assert set(ast_clusters[0].members) == {
+        "Engine!B5",
+        "Engine!C5",
+        "Engine!B6",
+        "Engine!C6",
+    }
+
+    series_ast_clusters = cluster_graph_formulas(
+        graph,
+        bound_address_keys=SHARED_AST_MULTI_SERIES_BINDINGS,
+        clustering_mode="series_ast",
+        address_to_series_id=SHARED_AST_ADDRESS_TO_SERIES_ID,
+    )
+    assert len(series_ast_clusters) == 2
+    member_sets = {cluster.members for cluster in series_ast_clusters}
+    assert member_sets == {
+        ("Engine!B5", "Engine!C5"),
+        ("Engine!B6", "Engine!C6"),
+    }
+
+
+def test_series_mode_clusters_one_unit_per_internal_series() -> None:
+    graph = _shared_ast_multi_series_graph()
+    clusters = cluster_graph_formulas(
+        graph,
+        bound_address_keys=SHARED_AST_MULTI_SERIES_BINDINGS,
+        clustering_mode="series",
+        address_to_series_id=SHARED_AST_ADDRESS_TO_SERIES_ID,
+    )
+    assert len(clusters) == 2
+    member_sets = {cluster.members for cluster in clusters}
+    assert member_sets == {
+        ("Engine!B5", "Engine!C5"),
+        ("Engine!B6", "Engine!C6"),
+    }
+
+
+def test_series_ast_applies_variation_mode_within_each_series() -> None:
+    graph = DependencyGraph()
+    formulas = {
+        "Engine!B5": "=Inputs!B10-Inputs!C10",
+        "Engine!C5": "=Inputs!B11-Inputs!C11",
+        "Engine!B6": "=Inputs!B10-Inputs!C10",
+        "Engine!C6": "=Inputs!B11-Inputs!C11",
+        "Engine!D6": "=Inputs!B12-Inputs!C12",
+    }
+    for address, formula in formulas.items():
+        sheet, column, row = parse_workbook_address(address)
+        graph.add_node(_formula_node(sheet, column, row, formula))
+
+    bindings = {
+        **TRADE_BALANCE_BINDINGS,
+        "Inputs!C12": {"REF_AREA": "DE", "TIME_PERIOD": 3},
+    }
+    address_to_series_id = {
+        "Engine!B5": "series_a",
+        "Engine!C5": "series_a",
+        "Engine!B6": "series_b",
+        "Engine!C6": "series_b",
+        "Engine!D6": "series_b",
+    }
+
+    clusters = cluster_graph_formulas(
+        graph,
+        bound_address_keys=bindings,
+        clustering_mode="series_ast",
+        variation_mode="dominant_key_only",
+        address_to_series_id=address_to_series_id,
+    )
+    member_sets = {cluster.members for cluster in clusters}
+    assert ("Engine!B5", "Engine!C5") in member_sets
+    assert ("Engine!B6", "Engine!C6") in member_sets
+    assert ("Engine!D6",) in member_sets
+
+
+def test_series_ast_defaults_without_explicit_mode() -> None:
+    graph = _shared_ast_multi_series_graph()
+    clusters = cluster_graph_formulas(
+        graph,
+        bound_address_keys=SHARED_AST_MULTI_SERIES_BINDINGS,
+        address_to_series_id=SHARED_AST_ADDRESS_TO_SERIES_ID,
+    )
+    assert len(clusters) == 2
+
+
+def test_series_aware_clustering_requires_address_to_series_id() -> None:
+    graph = _shared_ast_multi_series_graph()
+    with pytest.raises(ValueError, match="address_to_series_id"):
+        cluster_graph_formulas(
+            graph,
+            bound_address_keys=SHARED_AST_MULTI_SERIES_BINDINGS,
+            clustering_mode="series_ast",
+        )
