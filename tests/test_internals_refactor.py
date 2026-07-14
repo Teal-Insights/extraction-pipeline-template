@@ -20,6 +20,7 @@ from src.internals_refactor import (
     ClusterRefactorLLMResponse,
     ClusterRefactorResponse,
     HelperParameter,
+    InternalsSourceIndex,
     MemberContext,
     MemberKeyEntry,
     MemberKeys,
@@ -33,12 +34,14 @@ from src.internals_refactor import (
     build_cluster_refactor_context,
     build_singleton_refactor_context,
     collapse_bindings_for_response,
+    extract_function_source,
     llm_refactor_cluster,
     llm_refactor_singleton,
     load_cluster_refactor_prompt_fixed_portion,
     prompt_payload,
     raise_if_llm_declared_error,
     refactor_cache_key,
+    refactor_internals_all_clusters,
     singleton_prompt_payload,
     validate_allowed_global_references,
     validate_cluster_refactor_response,
@@ -1599,6 +1602,148 @@ def test_build_cluster_refactor_context_defaults_to_member_sweep(
     )
     assert ctx is not None
     assert ctx.contract == "member_sweep"
+
+
+def test_extract_function_source_matches_index_slice() -> None:
+    source = TRADE_BALANCE_INTERNALS
+    index = InternalsSourceIndex.from_source(source)
+    for name in ("cell_engine_b5", "cell_engine_c5", "cell_engine_d5"):
+        assert index.function_source(name) == extract_function_source(source, name)
+
+
+def test_build_cluster_context_parses_internals_once_with_shared_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.internals_refactor.allowed_runtime_symbols",
+        lambda: ALLOWED_RUNTIME_SYMBOLS,
+    )
+    internals_path = _write_trade_balance_internals(tmp_path)
+    index = InternalsSourceIndex.from_source(internals_path.read_text(encoding="utf-8"))
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
+        "Inputs!B10": {"TIME_PERIOD": 1},
+        "Inputs!C10": {"TIME_PERIOD": 1},
+        "Inputs!B11": {"TIME_PERIOD": 2},
+        "Inputs!C11": {"TIME_PERIOD": 2},
+        "Inputs!B12": {"TIME_PERIOD": 3},
+        "Inputs!C12": {"TIME_PERIOD": 3},
+        "Engine!B5": {"TIME_PERIOD": 1},
+        "Engine!C5": {"TIME_PERIOD": 2},
+        "Engine!D5": {"TIME_PERIOD": 3},
+    }
+
+    with patch(
+        "src.internals_refactor.ast.parse",
+        side_effect=AssertionError("ast.parse should not run when index is shared"),
+    ):
+        ctx = build_cluster_refactor_context(
+            _trade_balance_projection(),
+            TRADE_BALANCE_CLUSTER,
+            internals_path,
+            bound_address_keys=bound_address_keys,
+            key_vocabulary=(KEY_VOCABULARY[0],),
+            workbook_path=tmp_path / "workbook.xlsx",
+            bindings_path=tmp_path / "bindings",
+            internals_index=index,
+        )
+    assert ctx is not None
+    assert ctx.contract == "member_sweep"
+    assert {member.function_name for member in ctx.members} == {
+        "cell_engine_b5",
+        "cell_engine_c5",
+        "cell_engine_d5",
+    }
+
+
+def test_refactor_schedule_rebuilds_index_only_after_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
+
+    graph, bindings = inter_cluster_cycle_graph()
+    clusters = cluster_graph_formulas(graph, bound_address_keys=bindings)
+    internals_path = tmp_path / "internals.py"
+    version_sources = [
+        "def cell_engine_b2(ctx):\n    return 1.0\n",
+        "def cell_engine_b2(ctx):\n    return 2.0\n",
+        "def cell_engine_b2(ctx):\n    return 3.0\n",
+        "def cell_engine_b2(ctx):\n    return 4.0\n",
+        "def cell_engine_b2(ctx):\n    return 5.0\n",
+    ]
+    internals_path.write_text(version_sources[0], encoding="utf-8")
+
+    from_source_sources: list[str] = []
+    real_from_source = module.InternalsSourceIndex.from_source
+    indices_seen: list[module.InternalsSourceIndex] = []
+    apply_count = {"n": 0}
+
+    def tracking_from_source(source: str) -> module.InternalsSourceIndex:
+        from_source_sources.append(source)
+        return real_from_source(source)
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        index = kwargs.get("internals_index")
+        assert isinstance(index, module.InternalsSourceIndex)
+        indices_seen.append(index)
+        return SimpleNamespace(address=cluster.members[0])
+
+    def fake_singleton(
+        ctx: SimpleNamespace,
+        *,
+        internals_path: Path,
+        dry_run: bool = False,
+        pristine_source: str | None = None,
+        input_vectors: object | None = None,
+        source_graph: object | None = None,
+        diagnostic_target: str | None = None,
+    ) -> SimpleNamespace:
+        apply_count["n"] += 1
+        updated = version_sources[apply_count["n"]]
+        if not dry_run:
+            internals_path.write_text(updated, encoding="utf-8")
+        return SimpleNamespace(source=updated)
+
+    monkeypatch.setattr(
+        module.InternalsSourceIndex,
+        "from_source",
+        staticmethod(tracking_from_source),
+    )
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(module, "refactor_internals_singleton", fake_singleton)
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+
+    refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+    )
+
+    # One initial index + one rebuild per successful singleton apply (4 units).
+    assert len(from_source_sources) == 1 + apply_count["n"]
+    assert apply_count["n"] == 4
+    assert len(indices_seen) == 4
+    assert indices_seen[0] is not indices_seen[1]
+    assert from_source_sources[0] == version_sources[0]
+    assert from_source_sources[1] == version_sources[1]
 
 
 def test_llm_refactor_cluster_uses_dimension_aware_prompt(
