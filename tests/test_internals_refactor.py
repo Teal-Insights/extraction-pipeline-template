@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import ast
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -32,16 +33,20 @@ from src.internals_refactor import (
     apply_phase_c,
     apply_singleton_refactor_plan,
     build_cluster_refactor_context,
+    build_cluster_refactor_prompt_context,
     build_singleton_refactor_context,
+    build_singleton_refactor_prompt_context,
     collapse_bindings_for_response,
     extract_function_source,
     llm_refactor_cluster,
     llm_refactor_singleton,
     load_cluster_refactor_prompt_fixed_portion,
+    prepare_singleton_refactor_response,
     prompt_payload,
     raise_if_llm_declared_error,
     refactor_cache_key,
     refactor_internals_all_clusters,
+    refactor_internals_singleton,
     singleton_prompt_payload,
     validate_allowed_global_references,
     validate_cluster_refactor_response,
@@ -1512,6 +1517,53 @@ def _write_trade_balance_internals(tmp_path: Path) -> Path:
     return internals_path
 
 
+def _guard_internals_path_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    internals_path: Path,
+) -> None:
+    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+
+    def guarded_read_text(
+        self: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> str:
+        if self == internals_path:
+            raise AssertionError(
+                "internals_path.read_text should not run when index is shared"
+            )
+        return original_read_text(
+            self,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    def guarded_read_bytes(self: Path) -> bytes:
+        if self == internals_path:
+            raise AssertionError(
+                "internals_path.read_bytes should not run when index is shared"
+            )
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+
+
+@contextmanager
+def _block_internals_index_from_source() -> Iterator[None]:
+    with patch.object(
+        InternalsSourceIndex,
+        "from_source",
+        side_effect=AssertionError(
+            "InternalsSourceIndex.from_source should not run when index is shared"
+        ),
+    ):
+        yield
+
+
 def test_build_cluster_refactor_context_skips_unroutable_operand_variation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1656,6 +1708,256 @@ def test_build_cluster_context_parses_internals_once_with_shared_index(
     }
 
 
+def test_build_singleton_prompt_context_uses_shared_index_without_rereads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.internals_refactor.allowed_runtime_symbols",
+        lambda: ALLOWED_RUNTIME_SYMBOLS,
+    )
+    internals_path = _write_trade_balance_internals(tmp_path)
+    runtime_path = tmp_path / "runtime.py"
+    runtime_path.write_text(
+        "def xl_cell(ctx, address):\n    return 0\n", encoding="utf-8"
+    )
+    cluster = FormulaCluster(
+        cluster_id=99,
+        members=("Engine!B5",),
+        canonical_template="=Inputs!B10-Inputs!C10",
+        row=5,
+    )
+    index = InternalsSourceIndex.from_source(TRADE_BALANCE_INTERNALS)
+    ctx = build_singleton_refactor_context(
+        _trade_balance_projection(),
+        cluster,
+        internals_path,
+        internals_index=index,
+    )
+    assert ctx is not None
+
+    _guard_internals_path_reads(monkeypatch, internals_path)
+    with _block_internals_index_from_source():
+        dump = build_singleton_refactor_prompt_context(
+            ctx,
+            internals_path=internals_path,
+            runtime_path=runtime_path,
+            internals_index=index,
+        )
+    assert "cell_engine_b5" in dump
+
+
+def test_build_cluster_prompt_context_uses_shared_index_without_rereads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.internals_refactor as module
+
+    monkeypatch.setattr(
+        "src.internals_refactor.allowed_runtime_symbols",
+        lambda: ALLOWED_RUNTIME_SYMBOLS,
+    )
+    internals_path = _write_trade_balance_internals(tmp_path)
+    runtime_path = tmp_path / "runtime.py"
+    runtime_path.write_text(
+        "def xl_cell(ctx, address):\n    return 0\n", encoding="utf-8"
+    )
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
+        "Inputs!B10": {"TIME_PERIOD": 1},
+        "Inputs!C10": {"TIME_PERIOD": 1},
+        "Inputs!B11": {"TIME_PERIOD": 2},
+        "Inputs!C11": {"TIME_PERIOD": 2},
+        "Inputs!B12": {"TIME_PERIOD": 3},
+        "Inputs!C12": {"TIME_PERIOD": 3},
+        "Engine!B5": {"TIME_PERIOD": 1},
+        "Engine!C5": {"TIME_PERIOD": 2},
+        "Engine!D5": {"TIME_PERIOD": 3},
+    }
+    index = InternalsSourceIndex.from_source(TRADE_BALANCE_INTERNALS)
+    ctx = build_cluster_refactor_context(
+        _trade_balance_projection(),
+        TRADE_BALANCE_CLUSTER,
+        internals_path,
+        bound_address_keys=bound_address_keys,
+        key_vocabulary=(KEY_VOCABULARY[0],),
+        workbook_path=tmp_path / "workbook.xlsx",
+        bindings_path=tmp_path / "bindings",
+        internals_index=index,
+    )
+    assert ctx is not None
+
+    extract_calls: list[str] = []
+
+    def tracking_extract(source: str, function_name: str) -> str:
+        extract_calls.append(function_name)
+        return extract_function_source(source, function_name)
+
+    _guard_internals_path_reads(monkeypatch, internals_path)
+    monkeypatch.setattr(module, "extract_function_source", tracking_extract)
+    with _block_internals_index_from_source():
+        dump = build_cluster_refactor_prompt_context(
+            ctx,
+            internals_path=internals_path,
+            runtime_path=runtime_path,
+            internals_index=index,
+        )
+    assert extract_calls == []
+    assert "cell_engine_b5" in dump
+    assert "cell_engine_c5" in dump
+    assert "cell_engine_d5" in dump
+
+
+def test_llm_refactor_singleton_uses_shared_index_without_rereads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_c20(ctx):\n    return 1.0\n", encoding="utf-8"
+    )
+    runtime_path = tmp_path / "runtime.py"
+    runtime_path.write_text(
+        "def xl_cell(ctx, address):\n    return 0\n", encoding="utf-8"
+    )
+    index = InternalsSourceIndex.from_source(internals_path.read_text(encoding="utf-8"))
+    ctx = _singleton_refactor_test_context(tmp_path)
+
+    def fake_generate_validated_json(
+        **kwargs: object,
+    ) -> tuple[SingletonRefactorLLMResponse, str]:
+        post_validate = cast(
+            Callable[[SingletonRefactorLLMResponse], SingletonRefactorLLMResponse],
+            kwargs["post_validate"],
+        )
+        validated = post_validate(SINGLETON_LLM_RESPONSE)
+        return validated, SINGLETON_LLM_RESPONSE.model_dump_json()
+
+    monkeypatch.setattr(module, "generate_validated_json", fake_generate_validated_json)
+    monkeypatch.setattr(module, "load_refactor_cache", lambda: {})
+    monkeypatch.setattr(module, "save_refactor_cache", lambda _cache: None)
+    monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
+    monkeypatch.setattr(module, "refactor_model", lambda: "test-model")
+    monkeypatch.setattr(module, "build_client", lambda _model: (object(), object()))
+    _guard_internals_path_reads(monkeypatch, internals_path)
+    with _block_internals_index_from_source():
+        response = llm_refactor_singleton(
+            ctx,
+            internals_path=internals_path,
+            internals_index=index,
+        )
+    assert response.symbol_name == "projected_debt_to_gdp"
+
+
+def test_llm_refactor_cluster_uses_shared_index_without_rereads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(PRISTINE_CLUSTER, encoding="utf-8")
+    runtime_path = tmp_path / "runtime.py"
+    runtime_path.write_text(
+        "def xl_cell(ctx, address):\n    return 0\n", encoding="utf-8"
+    )
+    index = InternalsSourceIndex.from_source(internals_path.read_text(encoding="utf-8"))
+    llm_response = ClusterRefactorLLMResponse(
+        symbol_signature=(
+            "def indicator_change_from_reference(ctx: EvalContext, "
+            "projection_period: int, reference_period: int) -> float:"
+        ),
+        symbol_docstring=DUAL_PERIOD_DOCSTRING,
+        symbol_body=(
+            "column_by_period = {0: 'B', 1: 'C', 2: 'D'}\n"
+            "current_value = xl_cell(ctx, f'Inputs!{column_by_period[projection_period]}1')\n"
+            "reference_value = xl_cell(ctx, f'Inputs!{column_by_period[reference_period]}1')\n"
+            "return current_value - reference_value"
+        ),
+        parameters=DUAL_PERIOD_PARAMETERS,
+        member_keys=DUAL_PERIOD_MEMBER_KEYS,
+        error=None,
+        error_reason=None,
+    )
+
+    def fake_generate_validated_json(
+        **kwargs: object,
+    ) -> tuple[ClusterRefactorLLMResponse, str]:
+        post_validate = cast(
+            Callable[[ClusterRefactorLLMResponse], ClusterRefactorLLMResponse],
+            kwargs["post_validate"],
+        )
+        validated = post_validate(llm_response)
+        return validated, llm_response.model_dump_json()
+
+    monkeypatch.setattr(module, "generate_validated_json", fake_generate_validated_json)
+    monkeypatch.setattr(module, "load_refactor_cache", lambda: {})
+    monkeypatch.setattr(module, "save_refactor_cache", lambda _cache: None)
+    monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
+    monkeypatch.setattr(module, "refactor_model", lambda: "test-model")
+    monkeypatch.setattr(module, "build_client", lambda _model: (object(), object()))
+    monkeypatch.setattr(
+        module,
+        "_resolved_projection_layout",
+        lambda layout=None: DUAL_PERIOD_LAYOUT,
+    )
+    _guard_internals_path_reads(monkeypatch, internals_path)
+    with _block_internals_index_from_source():
+        response = llm_refactor_cluster(
+            DUAL_PERIOD_CONTEXT,
+            internals_path=internals_path,
+            internals_index=index,
+        )
+    assert response.helper_name == "indicator_change_from_reference"
+
+
+def test_refactor_internals_singleton_forwards_shared_index_to_llm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_c20(ctx):\n    return 1.0\n", encoding="utf-8"
+    )
+    index = InternalsSourceIndex.from_source(internals_path.read_text(encoding="utf-8"))
+    ctx = _singleton_refactor_test_context(tmp_path)
+    seen: dict[str, object] = {}
+
+    def fake_llm_refactor_singleton(
+        _ctx: SingletonRefactorContext,
+        *,
+        internals_path: Path,
+        internals_index: InternalsSourceIndex | None = None,
+        **kwargs: object,
+    ) -> SingletonRefactorResponse:
+        seen["internals_index"] = internals_index
+        seen["kwargs"] = kwargs
+        return prepare_singleton_refactor_response(SINGLETON_LLM_RESPONSE, _ctx)
+
+    monkeypatch.setattr(module, "llm_refactor_singleton", fake_llm_refactor_singleton)
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        module,
+        "apply_singleton_refactor_plan",
+        lambda source, _response, _ctx: (source, 0),
+    )
+    monkeypatch.setattr(module, "validate_refactored_internals", lambda _source: None)
+
+    _guard_internals_path_reads(monkeypatch, internals_path)
+    refactor_internals_singleton(
+        ctx,
+        internals_path=internals_path,
+        dry_run=True,
+        internals_index=index,
+    )
+    assert seen["internals_index"] is index
+
+
 def test_refactor_schedule_rebuilds_index_only_after_apply(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1707,7 +2009,12 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
         input_vectors: object | None = None,
         source_graph: object | None = None,
         diagnostic_target: str | None = None,
+        internals_index: object | None = None,
+        **kwargs: object,
     ) -> SimpleNamespace:
+        assert isinstance(internals_index, module.InternalsSourceIndex)
+        assert internals_index is indices_seen[-1]
+        _ = kwargs
         apply_count["n"] += 1
         updated = version_sources[apply_count["n"]]
         if not dry_run:
@@ -1848,7 +2155,10 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
         input_vectors: object | None = None,
         source_graph: object | None = None,
         diagnostic_target: str | None = None,
+        internals_index: object | None = None,
+        **kwargs: object,
     ) -> object:
+        _ = internals_index, kwargs
         scheduled_members.append((ctx.address,))
         if diagnostic_target is not None:
             diagnostic_targets.append(diagnostic_target)

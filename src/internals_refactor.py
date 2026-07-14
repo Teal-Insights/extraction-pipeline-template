@@ -685,13 +685,7 @@ def build_cluster_refactor_context(
 
     resolved_layout = _resolved_projection_layout(layout)
 
-    index = (
-        internals_index
-        if internals_index is not None
-        else InternalsSourceIndex.from_source(
-            internals_path.read_text(encoding="utf-8")
-        )
-    )
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
     source = index.source
     defined_functions = index.functions
 
@@ -843,13 +837,7 @@ def build_singleton_refactor_context(
 
     address = cluster.members[0]
 
-    index = (
-        internals_index
-        if internals_index is not None
-        else InternalsSourceIndex.from_source(
-            internals_path.read_text(encoding="utf-8")
-        )
-    )
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
     source = index.source
     defined_functions = index.functions
 
@@ -939,6 +927,16 @@ def extract_function_source(source: str, function_name: str) -> str:
     return InternalsSourceIndex.from_source(source).function_source(function_name)
 
 
+def _resolve_internals_index(
+    internals_path: Path,
+    *,
+    internals_index: InternalsSourceIndex | None = None,
+) -> InternalsSourceIndex:
+    if internals_index is not None:
+        return internals_index
+    return InternalsSourceIndex.from_source(internals_path.read_text(encoding="utf-8"))
+
+
 def scan_call_sites(
     source: str,
     member_addresses: frozenset[str],
@@ -948,6 +946,7 @@ def scan_call_sites(
 ) -> tuple[CallSite, ...]:
     resolved = index if index is not None else InternalsSourceIndex.from_source(source)
     sites: list[CallSite] = []
+    lines = list(resolved.lines)
 
     for top_level in resolved.module.body:
         if not isinstance(top_level, ast.FunctionDef):
@@ -959,7 +958,7 @@ def scan_call_sites(
             caller_address=caller_address,
             member_addresses=member_addresses,
             member_functions=member_functions,
-            lines=list(resolved.lines),
+            lines=lines,
             sites=sites,
         )
         visitor.visit(top_level)
@@ -1799,7 +1798,13 @@ def format_singleton_refactor_context_dump(
     )
 
 
-def _function_defs_by_name(source: str) -> dict[str, ast.FunctionDef]:
+def _function_defs_by_name(
+    source: str,
+    *,
+    index: InternalsSourceIndex | None = None,
+) -> dict[str, ast.FunctionDef]:
+    if index is not None:
+        return dict(index.functions)
     module = ast.parse(source)
     return {
         node.name: node for node in module.body if isinstance(node, ast.FunctionDef)
@@ -1869,10 +1874,11 @@ def _build_dependency_stubs(
     function_source: str,
     internals_source: str,
     runtime_source: str,
+    index: InternalsSourceIndex | None = None,
 ) -> str:
     called = _called_function_names(function_source)
     runtime_defs = _function_defs_by_name(runtime_source)
-    internals_defs = _function_defs_by_name(internals_source)
+    internals_defs = _function_defs_by_name(internals_source, index=index)
     runtime_names = sorted(name for name in called if name in runtime_defs)
     semantic_names = sorted(
         name
@@ -1899,17 +1905,29 @@ def build_singleton_refactor_context_dump(
     internals_source: str,
     runtime_source: str,
     cell_metadata: Mapping[str, object],
+    index: InternalsSourceIndex | None = None,
+    function_source: str | None = None,
 ) -> str:
-    function_source = extract_function_source(internals_source, function_name)
+    resolved = (
+        index
+        if index is not None
+        else InternalsSourceIndex.from_source(internals_source)
+    )
+    resolved_function_source = (
+        function_source
+        if function_source is not None
+        else resolved.function_source(function_name)
+    )
     metadata = dict(cell_metadata)
     metadata["address"] = address
     dependency_stubs = _build_dependency_stubs(
-        function_source=function_source,
+        function_source=resolved_function_source,
         internals_source=internals_source,
         runtime_source=runtime_source,
+        index=resolved,
     )
     return format_singleton_refactor_context_dump(
-        function_source=function_source,
+        function_source=resolved_function_source,
         cell_metadata=metadata,
         dependency_stubs=dependency_stubs,
     )
@@ -1935,18 +1953,22 @@ def build_singleton_refactor_prompt_context(
     *,
     internals_path: Path,
     runtime_path: Path | None = None,
+    internals_index: InternalsSourceIndex | None = None,
 ) -> str:
     resolved_runtime_path = (
         runtime_path
         if runtime_path is not None
         else internals_path.parent / "runtime.py"
     )
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
     return build_singleton_refactor_context_dump(
         function_name=ctx.function_name,
         address=ctx.address,
-        internals_source=internals_path.read_text(encoding="utf-8"),
+        internals_source=index.source,
         runtime_source=resolved_runtime_path.read_text(encoding="utf-8"),
         cell_metadata=_cell_metadata_for_singleton_refactor(ctx),
+        index=index,
+        function_source=ctx.python_source,
     )
 
 
@@ -2152,14 +2174,27 @@ def _build_cluster_dependency_stubs(
     member_function_names: Sequence[str],
     internals_source: str,
     runtime_source: str,
+    index: InternalsSourceIndex | None = None,
+    member_function_sources: Mapping[str, str] | None = None,
 ) -> str:
-    function_sources = [
-        extract_function_source(internals_source, function_name)
-        for function_name in member_function_names
-    ]
+    resolved = (
+        index
+        if index is not None
+        else InternalsSourceIndex.from_source(internals_source)
+    )
+    if member_function_sources is None:
+        function_sources = [
+            resolved.function_source(function_name)
+            for function_name in member_function_names
+        ]
+    else:
+        function_sources = [
+            member_function_sources[function_name]
+            for function_name in member_function_names
+        ]
     called = _called_function_names_from_sources(function_sources)
     runtime_defs = _function_defs_by_name(runtime_source)
-    internals_defs = _function_defs_by_name(internals_source)
+    internals_defs = resolved.functions
     runtime_names = sorted(name for name in called if name in runtime_defs)
     semantic_names = sorted(
         name
@@ -2186,15 +2221,37 @@ def build_cluster_refactor_context_dump(
     runtime_source: str,
     key_vocabulary: Sequence[KeyConceptSpec],
     member_metadata: Sequence[Mapping[str, object]],
+    index: InternalsSourceIndex | None = None,
+    member_function_sources: Mapping[str, str] | None = None,
 ) -> str:
+    resolved = (
+        index
+        if index is not None
+        else InternalsSourceIndex.from_source(internals_source)
+    )
+    if member_function_sources is None:
+        resolved_member_sources = {
+            function_name: resolved.function_source(function_name)
+            for function_name in member_function_names
+        }
+    else:
+        resolved_member_sources = {
+            function_name: member_function_sources.get(
+                function_name,
+                resolved.function_source(function_name),
+            )
+            for function_name in member_function_names
+        }
     member_sources = "\n\n\n".join(
-        extract_function_source(internals_source, function_name).strip()
+        resolved_member_sources[function_name].strip()
         for function_name in member_function_names
     )
     dependency_stubs = _build_cluster_dependency_stubs(
         member_function_names=member_function_names,
         internals_source=internals_source,
         runtime_source=runtime_source,
+        index=resolved,
+        member_function_sources=resolved_member_sources,
     )
     return format_cluster_refactor_context_dump(
         member_sources=member_sources,
@@ -2225,6 +2282,7 @@ def build_cluster_refactor_prompt_context(
     *,
     internals_path: Path,
     runtime_path: Path | None = None,
+    internals_index: InternalsSourceIndex | None = None,
 ) -> str:
     varying_dimension_ids = frozenset(
         dimension_id
@@ -2236,9 +2294,13 @@ def build_cluster_refactor_prompt_context(
         if runtime_path is not None
         else internals_path.parent / "runtime.py"
     )
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
+    member_function_sources = {
+        member.function_name: member.python_source for member in ctx.members
+    }
     return build_cluster_refactor_context_dump(
         member_function_names=tuple(member.function_name for member in ctx.members),
-        internals_source=internals_path.read_text(encoding="utf-8"),
+        internals_source=index.source,
         runtime_source=resolved_runtime_path.read_text(encoding="utf-8"),
         key_vocabulary=tuple(
             item
@@ -2246,6 +2308,8 @@ def build_cluster_refactor_prompt_context(
             if item.dimension_id in varying_dimension_ids
         ),
         member_metadata=_member_metadata_for_cluster_refactor(ctx),
+        index=index,
+        member_function_sources=member_function_sources,
     )
 
 
@@ -3273,9 +3337,11 @@ def refactor_internals_singleton(
     input_vectors: Sequence[Mapping[str, object]] | None = None,
     source_graph: DependencyGraph | None = None,
     diagnostic_target: str | None = None,
+    internals_index: InternalsSourceIndex | None = None,
 ) -> SingletonRefactorApplyResult:
-    source = internals_path.read_text(encoding="utf-8")
-    existing_names = _function_names(source)
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
+    source = index.source
+    existing_names = _function_names(source, index=index)
     if response is None:
         response = llm_refactor_singleton(
             ctx,
@@ -3284,6 +3350,7 @@ def refactor_internals_singleton(
             input_vectors=input_vectors,
             source_graph=source_graph,
             diagnostic_target=diagnostic_target,
+            internals_index=index,
         )
     validate_singleton_refactor_response(
         ctx,
@@ -3315,9 +3382,11 @@ def refactor_internals_cluster(
     input_vectors: Sequence[Mapping[str, object]] | None = None,
     source_graph: DependencyGraph | None = None,
     diagnostic_target: str | None = None,
+    internals_index: InternalsSourceIndex | None = None,
 ) -> ClusterRefactorApplyResult:
-    source = internals_path.read_text(encoding="utf-8")
-    existing_names = _function_names(source)
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
+    source = index.source
+    existing_names = _function_names(source, index=index)
     if response is None:
         response = llm_refactor_cluster(
             ctx,
@@ -3326,6 +3395,7 @@ def refactor_internals_cluster(
             input_vectors=input_vectors,
             source_graph=source_graph,
             diagnostic_target=diagnostic_target,
+            internals_index=index,
         )
     validate_cluster_refactor_response(
         ctx,
@@ -3367,19 +3437,17 @@ def refactor_internals_all_clusters(
     """
     pristine_source: str | None = None
     input_vectors: Sequence[Mapping[str, object]] | None = None
+    internals_index = _resolve_internals_index(internals_path)
     if parity_gate:
         from src.refactor_parity_gate import build_default_input_vectors
 
-        pristine_source = internals_path.read_text(encoding="utf-8")
+        pristine_source = internals_index.source
         input_vectors = build_default_input_vectors()
 
     ordered_units = compute_refactor_schedule(projection, clusters)
     results: list[ClusterRefactorApplyResult] = []
     responses: list[ClusterRefactorResponse] = []
     refactored_any = False
-    internals_index = InternalsSourceIndex.from_source(
-        internals_path.read_text(encoding="utf-8")
-    )
     for unit in ordered_units:
         cluster = unit.as_formula_cluster()
         diagnostic_target = refactor_failure_target(unit)
@@ -3402,6 +3470,7 @@ def refactor_internals_all_clusters(
                 input_vectors=input_vectors,
                 source_graph=source_graph,
                 diagnostic_target=diagnostic_target,
+                internals_index=internals_index,
             )
             if not dry_run:
                 internals_index = InternalsSourceIndex.from_source(
@@ -3431,6 +3500,7 @@ def refactor_internals_all_clusters(
             input_vectors=input_vectors,
             source_graph=source_graph,
             diagnostic_target=diagnostic_target,
+            internals_index=internals_index,
         )
         if not dry_run:
             internals_index = InternalsSourceIndex.from_source(result.source)
@@ -3468,11 +3538,13 @@ def llm_refactor_singleton(
     input_vectors: Sequence[Mapping[str, object]] | None = None,
     source_graph: DependencyGraph | None = None,
     diagnostic_target: str | None = None,
+    internals_index: InternalsSourceIndex | None = None,
 ) -> SingletonRefactorResponse:
     llm_schema = SingletonRefactorLLMResponse.model_json_schema()
-    internals_bytes = internals_path.read_bytes()
-    internals_source = internals_path.read_text(encoding="utf-8")
-    existing_names = _function_names(internals_source)
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
+    internals_bytes = index.source.encode("utf-8")
+    internals_source = index.source
+    existing_names = _function_names(internals_source, index=index)
     cache = load_refactor_cache()
     cache_key = singleton_refactor_cache_key(ctx, internals_bytes, llm_schema)
     failure_target = diagnostic_target or ctx.address
@@ -3555,6 +3627,7 @@ def llm_refactor_singleton(
     context_dump = build_singleton_refactor_prompt_context(
         ctx,
         internals_path=internals_path,
+        internals_index=index,
     )
     user_prompt = _prompt_for_singleton_refactor(context_dump)
     last_attempt: dict[str, Any] = {}
@@ -3651,11 +3724,13 @@ def llm_refactor_cluster(
     input_vectors: Sequence[Mapping[str, object]] | None = None,
     source_graph: DependencyGraph | None = None,
     diagnostic_target: str | None = None,
+    internals_index: InternalsSourceIndex | None = None,
 ) -> ClusterRefactorResponse:
     llm_schema = ClusterRefactorLLMResponse.model_json_schema()
-    internals_bytes = internals_path.read_bytes()
-    internals_source = internals_path.read_text(encoding="utf-8")
-    existing_names = _function_names(internals_source)
+    index = _resolve_internals_index(internals_path, internals_index=internals_index)
+    internals_bytes = index.source.encode("utf-8")
+    internals_source = index.source
+    existing_names = _function_names(internals_source, index=index)
     cache = load_refactor_cache()
     cache_key = refactor_cache_key(ctx, internals_bytes, llm_schema)
     failure_target = diagnostic_target or f"cluster_{ctx.cluster_id}"
@@ -3738,6 +3813,7 @@ def llm_refactor_cluster(
     context_dump = build_cluster_refactor_prompt_context(
         ctx,
         internals_path=internals_path,
+        internals_index=index,
     )
     user_prompt = _prompt_for_refactor(context_dump, contract=ctx.contract)
     last_attempt: dict[str, Any] = {}
@@ -3954,7 +4030,13 @@ def _function_to_primary_address(
     return None
 
 
-def _function_names(source: str) -> frozenset[str]:
+def _function_names(
+    source: str,
+    *,
+    index: InternalsSourceIndex | None = None,
+) -> frozenset[str]:
+    if index is not None:
+        return frozenset(index.functions)
     module = ast.parse(source)
     return frozenset(
         node.name for node in module.body if isinstance(node, ast.FunctionDef)
