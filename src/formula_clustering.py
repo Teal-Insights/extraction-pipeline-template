@@ -61,7 +61,8 @@ def _require_address_to_series_id(
         raise ValueError(
             "address_to_series_id is required for formula clustering when "
             f"clustering_mode={clustering_mode!r}; build it with "
-            "build_address_to_series_id() from derived internal series"
+            "build_address_to_series_id() from derived internal series, "
+            "falling back to public output/input series"
         )
     return address_to_series_id
 
@@ -1053,10 +1054,15 @@ def cluster_graph_formulas(
 
     ``clustering_mode`` selects the base grouping strategy:
 
-    - ``series``: one unit per internal series (no cross-series merging).
-    - ``series_ast``: AST-cluster, partition each cluster by owning series, then
-      apply ``variation_mode`` within each series partition.
+    - ``series``: one unit per partition series id (internal first, else public
+      output/input binding series; no cross-series merging).
+    - ``series_ast``: AST-cluster, partition each cluster by owning series id
+      (internal first, else public output/input), then apply ``variation_mode``
+      within each series partition.
     - ``ast``: AST (+ keys) only; series-blind (legacy behavior).
+
+    Missing internal ownership is not the same as an intended singleton: public
+    output (and input override) series ids keep multi-member time sweeps together.
     """
     resolved_bound_keys = _require_bound_address_keys(bound_address_keys)
     resolved_series_ids = _require_address_to_series_id(

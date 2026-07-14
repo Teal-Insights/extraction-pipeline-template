@@ -502,7 +502,11 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         graph_result.output_series,
         graph_result.internal_series,
     )
-    address_to_series_id = build_address_to_series_id(graph_result.internal_series)
+    address_to_series_id = build_address_to_series_id(
+        graph_result.internal_series,
+        output_series=graph_result.output_series,
+        input_series=graph_result.input_series,
+    )
     formula_clusters = cluster_graph_formulas(
         state.refactor_projection,
         bound_address_keys=bound_address_keys,

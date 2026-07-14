@@ -228,11 +228,13 @@ Set `CLUSTERING_MODE` in [workbook_config.py](workbook_config.py) to control how
 
 | Mode | Behavior |
 |---|---|
-| `series_ast` (default) | AST-cluster parallel formula families, partition each cluster by owning internal series, then apply `VARIATION_MODE` within each series partition. |
-| `series` | One refactor unit per internal series (no cross-series merging; `VARIATION_MODE` does not apply). |
+| `series_ast` (default) | AST-cluster parallel formula families, partition each cluster by owning series id (internal first, else public output/input binding series), then apply `VARIATION_MODE` within each series partition. |
+| `series` | One refactor unit per partition series id (internal first, else public output/input; no cross-series merging; `VARIATION_MODE` does not apply). |
 | `ast` | Series-blind AST clustering only (legacy behavior). |
 
 Structural fingerprints include literal numbers, strings, and booleans. Formulas that differ only by cell addresses or binding-key concepts can still share a cluster under `ast` or within a single series under `series_ast`.
+
+Missing internal-series ownership is not the same as an intended singleton refactor unit. Output time-sweep cells that share a public `outputs.bindings.yaml` series id stay in one multi-member cluster so collapse can emit `_ADDRESS_DISPATCH` entries with per-cell binding keys (for example `TIME_PERIOD`).
 
 Override per run on either entry point:
 
