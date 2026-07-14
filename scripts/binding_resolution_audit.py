@@ -2,8 +2,9 @@
 
 Loads the cached dependency graph plus binding sidecars, resolves input/output/
 internal bindings the same way codegen does, and prints Tier-1 failures:
-bind-resolution errors, empty public series, partial bind failures, and sparse
-``column_header`` / ``row_label`` spans without ``fill: true``.
+bind-resolution errors, empty public series, partial bind failures, sparse
+``column_header`` / ``row_label`` spans without ``fill: true``, and internal
+formula cells claimed by more than one internal series.
 
 Run: ``uv run python -m scripts.binding_resolution_audit``
 

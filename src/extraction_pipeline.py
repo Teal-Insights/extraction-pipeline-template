@@ -40,7 +40,9 @@ from src.export_validation_assets import (
 from src.logging_config import configure_logging
 from src.pipeline_config import (
     PipelineConfig,
+    add_clustering_mode_argument,
     add_variation_mode_argument,
+    apply_clustering_mode_cli_override,
     apply_variation_mode_cli_override,
     load_pipeline_config,
     validate_pipeline_config,
@@ -488,7 +490,10 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
     """Cluster formulas and rewrite internals behind the parity gate."""
     from src.formula_clustering import cluster_graph_formulas
     from src.internals_refactor import refactor_internals_all_clusters
-    from src.refactor_bindings import build_bound_address_keys
+    from src.refactor_bindings import (
+        build_address_to_series_id,
+        build_bound_address_keys,
+    )
 
     config = state.config
     graph_result = state.graph_result
@@ -497,10 +502,13 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         graph_result.output_series,
         graph_result.internal_series,
     )
+    address_to_series_id = build_address_to_series_id(graph_result.internal_series)
     formula_clusters = cluster_graph_formulas(
         state.refactor_projection,
         bound_address_keys=bound_address_keys,
         variation_mode=config.variation_mode,
+        clustering_mode=config.clustering_mode,
+        address_to_series_id=address_to_series_id,
         workbook_path=config.workbook_path,
         layout=config.projection_layout,
     )
@@ -604,10 +612,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="Bypass on-disk graph and projection caches for this run.",
     )
     add_variation_mode_argument(parser)
+    add_clustering_mode_argument(parser)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    config = apply_variation_mode_cli_override(
-        load_pipeline_config(), args.variation_mode
+    config = apply_clustering_mode_cli_override(
+        apply_variation_mode_cli_override(load_pipeline_config(), args.variation_mode),
+        args.clustering_mode,
     )
     validate_pipeline_config(config)
     activate_pipeline_config(config)

@@ -32,6 +32,7 @@ def test_cluster_graph_formulas_finds_parallel_engine_row(
     clusters = cluster_graph_formulas(
         synthetic_projection,
         bound_address_keys=synthetic_bound_address_keys,
+        clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
         layout=synthetic_pipeline_config_fixture.projection_layout,
     )
@@ -49,6 +50,7 @@ def test_compute_cluster_refactor_order_respects_dependencies(
     clusters = cluster_graph_formulas(
         synthetic_projection,
         bound_address_keys=synthetic_bound_address_keys,
+        clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
         layout=synthetic_pipeline_config_fixture.projection_layout,
     )
@@ -102,6 +104,7 @@ def test_compute_cluster_refactor_order_includes_all_eligible_clusters(
     clusters = cluster_graph_formulas(
         synthetic_projection,
         bound_address_keys=synthetic_bound_address_keys,
+        clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
         layout=synthetic_pipeline_config_fixture.projection_layout,
     )
@@ -119,6 +122,7 @@ def test_compute_refactor_schedule_dag_matches_cluster_order(
     clusters = cluster_graph_formulas(
         synthetic_projection,
         bound_address_keys=synthetic_bound_address_keys,
+        clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
         layout=synthetic_pipeline_config_fixture.projection_layout,
     )
@@ -183,7 +187,9 @@ def test_cluster_detection_can_create_inter_cluster_cycle_on_acyclic_cell_graph(
         "Engine!C3",
     ]
 
-    clusters = cluster_graph_formulas(graph, bound_address_keys=bindings)
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
     members = {cluster.members for cluster in clusters}
     assert members == {
         ("Engine!B2", "Engine!B3"),

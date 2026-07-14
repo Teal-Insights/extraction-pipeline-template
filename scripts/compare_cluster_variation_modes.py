@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.extraction_pipeline import build_pipeline_graph  # noqa: E402
 from src.formula_clustering import (  # noqa: E402
     BoundAddressKeys,
+    ClusteringMode,
     FormulaCluster,
     VariationMode,
     cluster_graph_formulas,
@@ -28,7 +29,10 @@ from src.formula_clustering import (  # noqa: E402
 from src.workbook_addresses import ProjectionColumnLayout  # noqa: E402
 from src.pipeline_config import load_pipeline_config, validate_pipeline_config  # noqa: E402
 from src.pipeline_context import activate_pipeline_config  # noqa: E402
-from src.refactor_bindings import build_bound_address_keys  # noqa: E402
+from src.refactor_bindings import (  # noqa: E402
+    build_address_to_series_id,
+    build_bound_address_keys,
+)
 from src.subgraph_projection import build_refactor_projection  # noqa: E402
 
 IncludeSection = Literal["changes", "members", "fingerprints"]
@@ -39,6 +43,8 @@ def _cluster_by_mode(
     *,
     variation_mode: VariationMode,
     bound_address_keys: BoundAddressKeys,
+    address_to_series_id: dict[str, str],
+    clustering_mode: ClusteringMode,
     projection,
     workbook_path,
     layout,
@@ -47,6 +53,8 @@ def _cluster_by_mode(
         projection,
         bound_address_keys=bound_address_keys,
         variation_mode=variation_mode,
+        clustering_mode=clustering_mode,
+        address_to_series_id=address_to_series_id,
         workbook_path=workbook_path,
         layout=layout,
     )
@@ -266,11 +274,14 @@ def main() -> None:
         graph_result.output_series,
         graph_result.internal_series,
     )
+    address_to_series_id = build_address_to_series_id(graph_result.internal_series)
     layout = config.projection_layout
 
     independent = _cluster_by_mode(
         variation_mode="independent",
         bound_address_keys=bound_address_keys,
+        address_to_series_id=address_to_series_id,
+        clustering_mode=config.clustering_mode,
         projection=projection,
         workbook_path=config.workbook_path,
         layout=layout,
@@ -278,6 +289,8 @@ def main() -> None:
     dominant_key_only = _cluster_by_mode(
         variation_mode="dominant_key_only",
         bound_address_keys=bound_address_keys,
+        address_to_series_id=address_to_series_id,
+        clustering_mode=config.clustering_mode,
         projection=projection,
         workbook_path=config.workbook_path,
         layout=layout,

@@ -1974,7 +1974,9 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
     from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
 
     graph, bindings = inter_cluster_cycle_graph()
-    clusters = cluster_graph_formulas(graph, bound_address_keys=bindings)
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
     internals_path = tmp_path / "internals.py"
     version_sources = [
         "def cell_engine_b2(ctx):\n    return 1.0\n",
@@ -2134,7 +2136,9 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
     from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
 
     graph, bindings = inter_cluster_cycle_graph()
-    clusters = cluster_graph_formulas(graph, bound_address_keys=bindings)
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(
         "def cell_engine_b2(ctx):\n    return 1.0\n", encoding="utf-8"
