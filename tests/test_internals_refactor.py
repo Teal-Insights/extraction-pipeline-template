@@ -1935,7 +1935,12 @@ def test_refactor_internals_singleton_forwards_shared_index_to_llm(
     ) -> SingletonRefactorResponse:
         seen["internals_index"] = internals_index
         seen["kwargs"] = kwargs
-        return prepare_singleton_refactor_response(SINGLETON_LLM_RESPONSE, _ctx)
+        return prepare_singleton_refactor_response(
+            SINGLETON_LLM_RESPONSE,
+            _ctx,
+            runtime_source="",
+            internals_source=index.source,
+        )
 
     monkeypatch.setattr(module, "llm_refactor_singleton", fake_llm_refactor_singleton)
     monkeypatch.setattr(

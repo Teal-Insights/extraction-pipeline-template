@@ -43,6 +43,13 @@ from src.refactor_contracts import (
     select_cluster_refactor_contract,
 )
 from src.refactor_order import compute_refactor_schedule, refactor_failure_target
+from src.refactor_return_types import (
+    ALLOWED_REFACTOR_RETURN_TYPE_HINTS,
+    KNOWN_RUNTIME_RETURN_HINTS,
+    infer_refactor_return_type_hint,
+    normalize_return_type_hint_for_allowlist,
+    validate_scalar_return_type_hint,
+)
 from src.runtime_symbols import allowed_runtime_symbols
 from src.semantic_naming import (
     BindingRecordHints,
@@ -58,7 +65,7 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 25
+REFACTOR_PROMPT_VERSION = 26
 
 
 def refactor_model() -> str:
@@ -393,7 +400,8 @@ class ClusterRefactorLLMResponse(BaseModel):
         description=(
             "Python function signature, including `def` keyword, `snake_case` "
             "semantic name, `ctx: EvalContext`, typed economic parameters from "
-            "`key_vocabulary`, and return type hint. Null when error is true."
+            "`key_vocabulary`, and parameter type hints. Do not include a return "
+            "type hint; the pipeline injects it mechanically. Null when error is true."
         ),
     )
     symbol_docstring: str | None = Field(
@@ -494,8 +502,9 @@ class SingletonRefactorLLMResponse(BaseModel):
     symbol_signature: str | None = Field(
         description=(
             "Python function signature, including `def` keyword, `snake_case` "
-            "semantic name, a single `ctx: EvalContext` argument, and return type hint. "
-            "Null when error is true."
+            "semantic name, a single `ctx: EvalContext` argument, and parameter "
+            "type hints. Do not include a return type hint; the pipeline injects "
+            "it mechanically. Null when error is true."
         ),
     )
     symbol_docstring: str | None = Field(
@@ -532,7 +541,7 @@ class SingletonRefactorLLMResponse(BaseModel):
         )
 
 
-ALLOWED_SINGLETON_RETURN_TYPE_HINTS = frozenset({"bool", "float", "int", "str"})
+ALLOWED_SINGLETON_RETURN_TYPE_HINTS = ALLOWED_REFACTOR_RETURN_TYPE_HINTS
 ALLOWED_REFACTOR_TYPE_HINT_NAMES = frozenset({"CellValue", "EvalContext"})
 
 SINGLETON_REFACTOR_PROMPT_FIXTURE = (
@@ -1704,18 +1713,15 @@ def assemble_singleton_symbol_source(
     return f'{signature}\n    """{normalized}\n    """\n{body_block}'
 
 
-def parse_singleton_return_type_hint(signature: str) -> str:
-    match = re.search(r"->\s*(.+?)\s*:?\s*$", signature.strip())
-    if match is None:
-        raise ValueError(f"no return type hint in signature: {signature!r}")
-    return match.group(1).strip().removesuffix(":")
+def inject_signature_return_type_hint(signature: str, return_hint: str) -> str:
+    """Replace or append an allowlisted return hint on a function signature line."""
+    stripped = signature.strip()
+    without_return = re.sub(r"\s*->\s*.+$", "", stripped).rstrip(":").rstrip()
+    return f"{without_return} -> {return_hint}:"
 
 
 def validate_singleton_return_type_hint(hint: str) -> None:
-    parts = [part.strip() for part in hint.split("|")]
-    for part in parts:
-        if part not in ALLOWED_SINGLETON_RETURN_TYPE_HINTS:
-            raise ValueError(f"unsupported return type hint: {hint!r}")
+    validate_scalar_return_type_hint(hint)
 
 
 def _parse_symbol_name_from_signature(signature: str) -> str:
@@ -1728,6 +1734,9 @@ def _parse_symbol_name_from_signature(signature: str) -> str:
 def prepare_singleton_refactor_response(
     llm_response: SingletonRefactorLLMResponse,
     ctx: SingletonRefactorContext,
+    *,
+    runtime_source: str,
+    internals_source: str,
 ) -> SingletonRefactorResponse:
     if (
         llm_response.symbol_signature is None
@@ -1737,8 +1746,15 @@ def prepare_singleton_refactor_response(
         raise ValueError(
             "singleton refactor response is missing required success fields"
         )
-    validate_singleton_return_type_hint(
-        parse_singleton_return_type_hint(llm_response.symbol_signature)
+    return_hint = infer_refactor_return_type_hint(
+        python_sources=(ctx.python_source,),
+        runtime_source=runtime_source,
+        internals_source=internals_source,
+        naming_hints=ctx.naming_hints,
+    )
+    signature = inject_signature_return_type_hint(
+        llm_response.symbol_signature,
+        return_hint,
     )
     docstring = strip_python_string_delimiters(llm_response.symbol_docstring)
     docstring = append_refactor_note_section(
@@ -1747,12 +1763,12 @@ def prepare_singleton_refactor_response(
         formula=ctx.normalized_formula,
     )
     symbol_source = assemble_singleton_symbol_source(
-        signature=llm_response.symbol_signature,
+        signature=signature,
         docstring=docstring,
         body=llm_response.symbol_body,
     )
     return SingletonRefactorResponse(
-        symbol_name=_parse_symbol_name_from_signature(llm_response.symbol_signature),
+        symbol_name=_parse_symbol_name_from_signature(signature),
         symbol_docstring=docstring,
         symbol_source=symbol_source,
     )
@@ -1824,16 +1840,6 @@ def _called_function_names(function_source: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def _function_signature_line(function_def: ast.FunctionDef) -> str:
-    args = ast.unparse(function_def.args)
-    returns = (
-        f" -> {ast.unparse(function_def.returns)}"
-        if function_def.returns is not None
-        else ""
-    )
-    return f"def {function_def.name}({args}){returns}:"
-
-
 def _strip_note_section(docstring: str) -> str:
     dedented = textwrap.dedent(docstring).strip()
     for pattern in (r"\n\nNote:\n.*\Z", r"\nNote:\n.*\Z"):
@@ -1843,9 +1849,28 @@ def _strip_note_section(docstring: str) -> str:
     return dedented
 
 
+def _llm_dependency_return_suffix(function_def: ast.FunctionDef) -> str:
+    known = KNOWN_RUNTIME_RETURN_HINTS.get(function_def.name)
+    if known is not None:
+        return f" -> {known}"
+    if function_def.returns is None:
+        return ""
+    hint = ast.unparse(function_def.returns).strip()
+    normalized = normalize_return_type_hint_for_allowlist(hint)
+    if normalized is not None:
+        return f" -> {normalized}"
+    return ""
+
+
+def _llm_dependency_signature_line(function_def: ast.FunctionDef) -> str:
+    args = ast.unparse(function_def.args)
+    return_suffix = _llm_dependency_return_suffix(function_def)
+    return f"def {function_def.name}({args}){return_suffix}:"
+
+
 def _format_runtime_dependency_stub(function_def: ast.FunctionDef) -> str:
     docstring = _function_docstring(function_def)
-    lines = [_function_signature_line(function_def)]
+    lines = [_llm_dependency_signature_line(function_def)]
     if docstring is not None:
         if "\n" in docstring:
             compact = " ".join(docstring.split())
@@ -2029,16 +2054,12 @@ def assemble_cluster_symbol_source(
     )
 
 
-def parse_cluster_return_type_hint(signature: str) -> str:
-    return parse_singleton_return_type_hint(signature)
-
-
-validate_cluster_return_type_hint = validate_singleton_return_type_hint
-
-
 def prepare_cluster_refactor_response(
     llm_response: ClusterRefactorLLMResponse,
     ctx: ClusterRefactorContext,
+    *,
+    runtime_source: str,
+    internals_source: str,
 ) -> ClusterRefactorResponse:
     if (
         llm_response.symbol_signature is None
@@ -2048,8 +2069,15 @@ def prepare_cluster_refactor_response(
         or llm_response.member_keys is None
     ):
         raise ValueError("cluster refactor response is missing required success fields")
-    validate_singleton_return_type_hint(
-        parse_cluster_return_type_hint(llm_response.symbol_signature)
+    return_hint = infer_refactor_return_type_hint(
+        python_sources=tuple(member.python_source for member in ctx.members),
+        runtime_source=runtime_source,
+        internals_source=internals_source,
+        naming_hints=ctx.naming_hints,
+    )
+    signature = inject_signature_return_type_hint(
+        llm_response.symbol_signature,
+        return_hint,
     )
     docstring = strip_python_string_delimiters(llm_response.symbol_docstring)
     covered_addresses = format_cluster_covered_addresses(
@@ -2061,12 +2089,12 @@ def prepare_cluster_refactor_response(
         formula=ctx.canonical_template,
     )
     helper_source = assemble_cluster_symbol_source(
-        signature=llm_response.symbol_signature,
+        signature=signature,
         docstring=docstring,
         body=llm_response.symbol_body,
     )
     return ClusterRefactorResponse(
-        helper_name=_parse_symbol_name_from_signature(llm_response.symbol_signature),
+        helper_name=_parse_symbol_name_from_signature(signature),
         helper_docstring=docstring,
         helper_source=helper_source,
         parameters=llm_response.parameters,
@@ -3530,6 +3558,13 @@ def refactor_internals_all_clusters(
 load_dotenv(repo_root / ".env")
 
 
+def _read_runtime_source(internals_path: Path) -> str:
+    runtime_path = internals_path.parent / "runtime.py"
+    if not runtime_path.is_file():
+        return ""
+    return runtime_path.read_text(encoding="utf-8")
+
+
 def llm_refactor_singleton(
     ctx: SingletonRefactorContext,
     *,
@@ -3544,6 +3579,7 @@ def llm_refactor_singleton(
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     internals_bytes = index.source.encode("utf-8")
     internals_source = index.source
+    runtime_source = _read_runtime_source(internals_path)
     existing_names = _function_names(internals_source, index=index)
     cache = load_refactor_cache()
     cache_key = singleton_refactor_cache_key(ctx, internals_bytes, llm_schema)
@@ -3574,7 +3610,12 @@ def llm_refactor_singleton(
     def _finalize_singleton_from_llm(
         parsed: SingletonRefactorLLMResponse,
     ) -> SingletonRefactorResponse:
-        prepared = prepare_singleton_refactor_response(parsed, ctx)
+        prepared = prepare_singleton_refactor_response(
+            parsed,
+            ctx,
+            runtime_source=runtime_source,
+            internals_source=internals_source,
+        )
         return _apply_singleton_refactor_validation(prepared)
 
     def _validate_cached_singleton_response(
@@ -3643,7 +3684,12 @@ def llm_refactor_singleton(
             kind="singleton",
             target=failure_target,
         )
-        prepared = prepare_singleton_refactor_response(parsed, ctx)
+        prepared = prepare_singleton_refactor_response(
+            parsed,
+            ctx,
+            runtime_source=runtime_source,
+            internals_source=internals_source,
+        )
         last_attempt["prepared_response"] = prepared.model_dump()
         validated_prepared = _apply_singleton_refactor_validation(prepared)
         return parsed
@@ -3730,6 +3776,7 @@ def llm_refactor_cluster(
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     internals_bytes = index.source.encode("utf-8")
     internals_source = index.source
+    runtime_source = _read_runtime_source(internals_path)
     existing_names = _function_names(internals_source, index=index)
     cache = load_refactor_cache()
     cache_key = refactor_cache_key(ctx, internals_bytes, llm_schema)
@@ -3760,7 +3807,12 @@ def llm_refactor_cluster(
     def _finalize_cluster_from_llm(
         parsed: ClusterRefactorLLMResponse,
     ) -> ClusterRefactorResponse:
-        prepared = prepare_cluster_refactor_response(parsed, ctx)
+        prepared = prepare_cluster_refactor_response(
+            parsed,
+            ctx,
+            runtime_source=runtime_source,
+            internals_source=internals_source,
+        )
         return _apply_cluster_refactor_validation(prepared)
 
     def _validate_cached_cluster_response(
@@ -3829,7 +3881,12 @@ def llm_refactor_cluster(
             kind="cluster",
             target=failure_target,
         )
-        prepared = prepare_cluster_refactor_response(parsed, ctx)
+        prepared = prepare_cluster_refactor_response(
+            parsed,
+            ctx,
+            runtime_source=runtime_source,
+            internals_source=internals_source,
+        )
         last_attempt["prepared_response"] = prepared.model_dump()
         validated_prepared = _apply_cluster_refactor_validation(prepared)
         return parsed
