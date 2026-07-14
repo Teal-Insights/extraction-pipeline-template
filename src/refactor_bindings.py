@@ -123,8 +123,15 @@ def internal_series_cell_owners(
     internal_series: Sequence[Mapping[str, Any]],
 ) -> dict[str, tuple[str, ...]]:
     """Map each internal-series cell address to the series ids that claim it."""
+    return series_cell_owners(internal_series)
+
+
+def series_cell_owners(
+    series_list: Sequence[Mapping[str, Any]],
+) -> dict[str, tuple[str, ...]]:
+    """Map each series cell address to the series ids that claim it."""
     owners: dict[str, list[str]] = {}
-    for series in internal_series:
+    for series in series_list:
         series_id = series.get("id")
         if not isinstance(series_id, str) or not series_id:
             continue
@@ -135,11 +142,12 @@ def internal_series_cell_owners(
     return {address: tuple(series_ids) for address, series_ids in owners.items()}
 
 
-def build_address_to_series_id(
-    internal_series: Sequence[Mapping[str, Any]],
+def _unique_series_id_by_address(
+    series_list: Sequence[Mapping[str, Any]],
+    *,
+    ownership_kind: str,
 ) -> dict[str, str]:
-    """Map each internal-series cell address to its owning ``series_id``."""
-    owners_by_address = internal_series_cell_owners(internal_series)
+    owners_by_address = series_cell_owners(series_list)
     duplicates = {
         address: series_ids
         for address, series_ids in owners_by_address.items()
@@ -148,7 +156,7 @@ def build_address_to_series_id(
     if duplicates:
         sample_address, sample_series_ids = sorted(duplicates.items())[0]
         raise ValueError(
-            "internal series cell address must map to exactly one series_id; "
+            f"{ownership_kind} series cell address must map to exactly one series_id; "
             f"got {sample_address!r} in {list(sample_series_ids)}"
             + (
                 f" and {len(duplicates) - 1} more duplicate address(es)"
@@ -161,6 +169,36 @@ def build_address_to_series_id(
         for address, series_ids in owners_by_address.items()
         if len(series_ids) == 1
     }
+
+
+def build_address_to_series_id(
+    internal_series: Sequence[Mapping[str, Any]],
+    *,
+    output_series: Sequence[Mapping[str, Any]] = (),
+    input_series: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, str]:
+    """Map cell addresses to refactor partition series ids.
+
+    Internal ownership wins. Addresses without an internal owner fall back to
+    their public output binding series id, then input binding series id, so
+    ``series_ast`` / ``series`` clustering can keep time-sweep public series
+    together instead of treating missing internal ownership as a singleton.
+    """
+    address_to_series_id = _unique_series_id_by_address(
+        internal_series,
+        ownership_kind="internal",
+    )
+    for ownership_kind, series_list in (
+        ("output", output_series),
+        ("input", input_series),
+    ):
+        public_ids = _unique_series_id_by_address(
+            series_list,
+            ownership_kind=ownership_kind,
+        )
+        for address, series_id in public_ids.items():
+            address_to_series_id.setdefault(address, series_id)
+    return address_to_series_id
 
 
 def _read_engine_time_period(

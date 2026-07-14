@@ -859,3 +859,98 @@ def test_series_aware_clustering_requires_address_to_series_id() -> None:
             bound_address_keys=SHARED_AST_MULTI_SERIES_BINDINGS,
             clustering_mode="series_ast",
         )
+
+
+def _output_time_sweep_graph() -> DependencyGraph:
+    """Public output time-sweep whose members share one AST family."""
+    graph = DependencyGraph()
+    formulas = {
+        "Hot!D11": "=Baseline!D5+1",
+        "Hot!E11": "=Baseline!E5+1",
+        "Hot!F11": "=Baseline!F5+1",
+        "Paris!D11": "=Baseline!D5+1",
+        "Paris!E11": "=Baseline!E5+1",
+    }
+    for address, formula in formulas.items():
+        sheet, column, row = parse_workbook_address(address)
+        graph.add_node(_formula_node(sheet, column, row, formula))
+    return graph
+
+
+OUTPUT_TIME_SWEEP_BINDINGS = {
+    "Hot!D11": {"TIME_PERIOD": 2010},
+    "Hot!E11": {"TIME_PERIOD": 2011},
+    "Hot!F11": {"TIME_PERIOD": 2012},
+    "Paris!D11": {"TIME_PERIOD": 2010},
+    "Paris!E11": {"TIME_PERIOD": 2011},
+    "Baseline!D5": {"TIME_PERIOD": 2010},
+    "Baseline!E5": {"TIME_PERIOD": 2011},
+    "Baseline!F5": {"TIME_PERIOD": 2012},
+}
+
+OUTPUT_TIME_SWEEP_SERIES_IDS = {
+    "Hot!D11": "scenario_gdp_growth_hot",
+    "Hot!E11": "scenario_gdp_growth_hot",
+    "Hot!F11": "scenario_gdp_growth_hot",
+    "Paris!D11": "scenario_gdp_growth_paris",
+    "Paris!E11": "scenario_gdp_growth_paris",
+}
+
+
+def test_series_ast_keeps_output_series_time_sweep_as_multi_member_cluster() -> None:
+    """Output-bound cells without internal owners stay clustered by public series."""
+    graph = _output_time_sweep_graph()
+
+    without_public = cluster_graph_formulas(
+        graph,
+        bound_address_keys=OUTPUT_TIME_SWEEP_BINDINGS,
+        clustering_mode="series_ast",
+        address_to_series_id={},
+    )
+    assert {cluster.members for cluster in without_public} == {
+        ("Hot!D11",),
+        ("Hot!E11",),
+        ("Hot!F11",),
+        ("Paris!D11",),
+        ("Paris!E11",),
+    }
+
+    with_public = cluster_graph_formulas(
+        graph,
+        bound_address_keys=OUTPUT_TIME_SWEEP_BINDINGS,
+        clustering_mode="series_ast",
+        address_to_series_id=OUTPUT_TIME_SWEEP_SERIES_IDS,
+    )
+    member_sets = {cluster.members for cluster in with_public}
+    assert ("Hot!D11", "Hot!E11", "Hot!F11") in member_sets
+    assert ("Paris!D11", "Paris!E11") in member_sets
+
+
+def test_series_ast_does_not_merge_distinct_output_series_sharing_ast() -> None:
+    """Scenario shards keep separate partition ids even when compute names match."""
+    graph = _output_time_sweep_graph()
+    clusters = cluster_graph_formulas(
+        graph,
+        bound_address_keys=OUTPUT_TIME_SWEEP_BINDINGS,
+        clustering_mode="series_ast",
+        address_to_series_id=OUTPUT_TIME_SWEEP_SERIES_IDS,
+    )
+    assert len(clusters) == 2
+    assert {cluster.members for cluster in clusters} == {
+        ("Hot!D11", "Hot!E11", "Hot!F11"),
+        ("Paris!D11", "Paris!E11"),
+    }
+
+
+def test_series_mode_clusters_output_series_without_internal_owner() -> None:
+    graph = _output_time_sweep_graph()
+    clusters = cluster_graph_formulas(
+        graph,
+        bound_address_keys=OUTPUT_TIME_SWEEP_BINDINGS,
+        clustering_mode="series",
+        address_to_series_id=OUTPUT_TIME_SWEEP_SERIES_IDS,
+    )
+    assert {cluster.members for cluster in clusters} == {
+        ("Hot!D11", "Hot!E11", "Hot!F11"),
+        ("Paris!D11", "Paris!E11"),
+    }

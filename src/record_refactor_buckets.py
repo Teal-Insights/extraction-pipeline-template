@@ -63,7 +63,15 @@ from src.refactor_order import compute_refactor_schedule
 from src.subgraph_projection import build_refactor_projection
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
 
-REFACTOR_BUCKETS_SCHEMA_VERSION = "1.3.0"
+REFACTOR_BUCKETS_SCHEMA_VERSION = "1.3.1"
+
+SERIES_PARTITION_NOTE = (
+    "Refactor partitions use internal series ids first, then public output/input "
+    "binding series ids. Cells with no internal-series owner are not automatically "
+    "singleton refactor units: a multi-member public binding series (for example an "
+    "output time sweep) remains one cluster refactor unit so collapse can emit "
+    "_ADDRESS_DISPATCH entries keyed by binding parameters such as TIME_PERIOD."
+)
 DEFAULT_JSON_OUTPUT = Path("artifacts/refactor-buckets.json")
 DEFAULT_MARKDOWN_OUTPUT = Path("artifacts/refactor-buckets.md")
 DEFAULT_JSON_OUTPUT_UNCOMPRESSED = Path("artifacts/refactor-buckets-uncompressed.json")
@@ -121,9 +129,17 @@ def _member_engine_column(
     address: str,
     layout: ProjectionColumnLayout | None,
 ) -> str | None:
-    if layout is None:
-        return None
-    return layout.logical_engine_column(address)
+    """Mirror ``internals_refactor._member_engine_column`` for eligibility checks.
+
+    When no projection layout is configured, fall back to the address column letter
+    so non-engine public series (scenario sheets, etc.) are not false-skipped.
+    """
+    if layout is not None:
+        column = layout.logical_engine_column(address)
+        if column is not None:
+            return column
+    _, column, _row = parse_workbook_address(address)
+    return column
 
 
 def _series_ids_for_members(
@@ -186,26 +202,27 @@ def _cluster_contract_and_skip_reason(
     if eligible_members < 2:
         return None, "cluster_has_fewer_than_two_graph_formula_members"
 
-    if workbook_path is not None and layout is not None:
-        varying = varying_key_concepts(
-            cluster.members,
-            bound_address_keys=bound_address_keys,
-            workbook_path=workbook_path,
-            layout=layout,
-        )
-        contract = select_cluster_refactor_contract(
-            cluster,
-            formula_nodes_for_clustering(graph),
-            bound_address_keys,
-            varying,
-            key_vocabulary=key_vocabulary,
-            workbook_path=workbook_path,
-            layout=layout,
-        )
-        if contract is None:
-            return None, "operand_level_variation_unsupported"
-        return contract, None
-    return None, None
+    if workbook_path is None:
+        return None, None
+
+    varying = varying_key_concepts(
+        cluster.members,
+        bound_address_keys=bound_address_keys,
+        workbook_path=workbook_path,
+        layout=layout,
+    )
+    contract = select_cluster_refactor_contract(
+        cluster,
+        formula_nodes_for_clustering(graph),
+        bound_address_keys,
+        varying,
+        key_vocabulary=key_vocabulary,
+        workbook_path=workbook_path,
+        layout=layout,
+    )
+    if contract is None:
+        return None, "operand_level_variation_unsupported"
+    return contract, None
 
 
 def _external_dependencies(
@@ -410,6 +427,7 @@ def build_refactor_buckets_report(
             if internals_path is not None
             else None
         ),
+        "series_partition_note": SERIES_PARTITION_NOTE,
         "formula_cluster_count": formula_cluster_count,
         "refactor_unit_count": refactor_unit_count,
         "cluster_count": refactor_unit_count,
@@ -437,6 +455,10 @@ def render_refactor_buckets_markdown(report: Mapping[str, Any]) -> str:
                 if report["compression"] == "none"
                 else "Pipeline stopped after codegen and before the LLM internals refactor step."
             ),
+            "",
+            "## Series partition notes",
+            "",
+            str(report.get("series_partition_note", SERIES_PARTITION_NOTE)),
             "",
             "## Summary",
             "",
@@ -551,7 +573,11 @@ def run_record_refactor_buckets(
         graph_result.output_series,
         graph_result.internal_series,
     )
-    address_to_series_id = build_address_to_series_id(graph_result.internal_series)
+    address_to_series_id = build_address_to_series_id(
+        graph_result.internal_series,
+        output_series=graph_result.output_series,
+        input_series=graph_result.input_series,
+    )
     records = record_refactor_buckets(
         config,
         graph=cluster_graph,
