@@ -48,6 +48,7 @@ from src.internals_refactor import (
     refactor_internals_all_clusters,
     refactor_internals_singleton,
     singleton_prompt_payload,
+    substitute_collapse_bindings,
     validate_allowed_global_references,
     validate_cluster_refactor_response,
     validate_parameter_names_match_vocabulary,
@@ -397,6 +398,84 @@ def test_validate_cluster_rejects_disallowed_global_reference() -> None:
         )
 
 
+def test_validate_cluster_allowlist_excludes_cell_star_names() -> None:
+    """``cell_*`` calls are already banned; do not dump them in allowlist errors."""
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        external_dependencies=(
+            "cell_climate_database_z72",
+            "cell_inputs_b6",
+            "shock_active",
+        ),
+    )
+    bad_source = f'''def combined_input_passthrough(ctx, time_period):
+    """{CLUSTER_DOCSTRING}"""
+    return mystery_helper(ctx)
+'''
+    with patch(
+        "src.internals_refactor._resolved_projection_layout",
+        return_value=TEST_LAYOUT,
+    ):
+        with pytest.raises(ValueError, match="disallowed function") as exc_info:
+            validate_cluster_refactor_response(
+                ctx,
+                _cluster_response(helper_source=bad_source),
+                existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+                internals_source=PRISTINE_CLUSTER,
+            )
+    message = str(exc_info.value)
+    assert "cell_climate_database_z72" not in message
+    assert "cell_inputs_b6" not in message
+    assert "cell_engine_c6" not in message
+    assert "cell_engine_d6" not in message
+    assert "shock_active" in message
+    assert "xl_cell" in message
+
+
+def test_validate_singleton_allowlist_excludes_cell_star_names() -> None:
+    docstring = (
+        "Return a value.\n\n"
+        "Args:\n    ctx: Workbook evaluation context.\n\n"
+        "Returns:\n    Projected value.\n"
+    )
+    ctx = SingletonRefactorContext(
+        address="Engine!C20",
+        function_name="cell_engine_c20",
+        canonical_template="=1",
+        normalized_formula="=1",
+        python_source="def cell_engine_c20(ctx):\n    return 1.0\n",
+        dependency_addresses=("Climate Database!Z72",),
+        external_dependencies=(
+            "cell_climate_database_z72",
+            "shock_active",
+        ),
+        semantic_dependencies=(),
+        call_sites=(),
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS,
+        naming_hints={},
+    )
+    bad_source = f'''def projected_debt_to_gdp(ctx):
+    """{docstring}"""
+    return mystery_helper(ctx)
+'''
+    with pytest.raises(ValueError, match="disallowed function") as exc_info:
+        validate_singleton_refactor_response(
+            ctx,
+            SingletonRefactorResponse(
+                symbol_name="projected_debt_to_gdp",
+                symbol_docstring=docstring,
+                symbol_source=bad_source,
+            ),
+            existing_names=frozenset({"cell_engine_c20"}),
+            internals_source="def cell_engine_c20(ctx):\n    return 1.0\n",
+        )
+    message = str(exc_info.value)
+    assert "cell_climate_database_z72" not in message
+    assert "cell_engine_c20" not in message
+    assert "shock_active" in message
+    assert "xl_cell" in message
+
+
 def test_validate_singleton_allowlist_accepts_reader_functions() -> None:
     docstring = (
         "Return the configured shock type.\n\n"
@@ -437,6 +516,37 @@ def test_collapse_bindings_for_response_renders_literal_calls() -> None:
     assert len(bindings) == 2
     assert bindings[0].literal_call == "combined_input_passthrough(ctx, time_period=1)"
     assert bindings[1].literal_call == "combined_input_passthrough(ctx, time_period=2)"
+
+
+def test_substitute_collapse_bindings_parses_source_once() -> None:
+    """Large internals modules must not re-parse once per cluster member."""
+    source = """
+def consumer(ctx):
+    a = cell_engine_c6(ctx)
+    b = cell_engine_d6(ctx)
+    c = xl_eval(ctx, 'Engine!C6', cell_engine_c6)
+    return a + b + c
+"""
+    bindings = collapse_bindings_for_response(_cluster_response())
+    parse_calls = {"count": 0}
+    real_parse = ast.parse
+
+    def counting_parse(
+        source_text: str, *_args: object, **_kwargs: object
+    ) -> ast.Module:
+        parse_calls["count"] += 1
+        return real_parse(source_text)
+
+    with patch("src.internals_refactor.ast.parse", side_effect=counting_parse):
+        updated, rewrite_count = substitute_collapse_bindings(source, bindings)
+
+    assert parse_calls["count"] == 1
+    assert rewrite_count == 3
+    assert "cell_engine_c6(ctx)" not in updated
+    assert "cell_engine_d6(ctx)" not in updated
+    assert "xl_eval(ctx, 'Engine!C6', cell_engine_c6)" not in updated
+    assert updated.count("combined_input_passthrough(ctx, time_period=1)") == 2
+    assert "combined_input_passthrough(ctx, time_period=2)" in updated
 
 
 def test_collapse_bindings_for_dual_period_dimension_ids() -> None:

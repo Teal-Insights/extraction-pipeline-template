@@ -1459,6 +1459,16 @@ def validate_allowed_global_references(
         )
 
 
+def _without_cell_function_names(names: set[str]) -> set[str]:
+    """Drop ``cell_*`` names from refactor allowlists.
+
+    Helper bodies must not reference excel cell wrappers
+    (``validate_no_cell_function_references``), so including those names in the
+    allowlist only inflates validation errors for large range dependencies.
+    """
+    return {name for name in names if not name.startswith("cell_")}
+
+
 def validate_cluster_refactor_response(
     ctx: ClusterRefactorContext,
     response: ClusterRefactorResponse,
@@ -1631,7 +1641,7 @@ def validate_cluster_refactor_response(
     ):
         raise ValueError("helper_source must not contain imports")
 
-    allowed_names = (
+    allowed_names = _without_cell_function_names(
         set(ctx.allowed_runtime_symbols)
         | set(ctx.external_dependencies)
         | {member.function_name for member in ctx.members}
@@ -2494,7 +2504,7 @@ def validate_singleton_refactor_response(
     ):
         raise ValueError("symbol_source must not contain imports")
 
-    allowed_names = (
+    allowed_names = _without_cell_function_names(
         set(ctx.allowed_runtime_symbols)
         | set(ctx.external_dependencies)
         | {ctx.function_name}
@@ -2642,14 +2652,21 @@ def substitute_collapse_bindings(
     source: str,
     bindings: tuple[CollapseBinding, ...],
 ) -> tuple[str, int]:
-    rewrite_count = 0
-    updated = source
-    for binding in bindings:
-        updated, count = _rewrite_xl_eval_collapse_binding(updated, binding)
-        rewrite_count += count
-        updated, count = _rewrite_direct_collapse_binding(updated, binding)
-        rewrite_count += count
-    return updated, rewrite_count
+    if not bindings:
+        return source, 0
+    bindings_by_function = {binding.function_name: binding for binding in bindings}
+    module = ast.parse(source)
+    replacements: list[tuple[int, int, str, str]] = []
+    visitor = _CollapseBindingsRewriteVisitor(
+        bindings_by_function=bindings_by_function,
+        source=source,
+        replacements=replacements,
+    )
+    for function_def in _iter_function_defs(module.body):
+        visitor.visit(function_def)
+    if not replacements:
+        return source, 0
+    return _apply_segment_replacements(source, replacements), len(replacements)
 
 
 def collect_static_cell_function_references(source: str) -> frozenset[str]:
@@ -3237,89 +3254,37 @@ def _xl_eval_matches_collapse(
     return False
 
 
-def _rewrite_xl_eval_collapse_binding(
-    source: str,
-    binding: CollapseBinding,
-) -> tuple[str, int]:
-    module = ast.parse(source)
-    replacements: list[tuple[int, int, str, str]] = []
-    for function_def in _iter_function_defs(module.body):
-        visitor = _XlEvalCollapseRewriteVisitor(
-            binding=binding,
-            source=source,
-            replacements=replacements,
-        )
-        visitor.visit(function_def)
-    if not replacements:
-        return source, 0
-    return _apply_segment_replacements(source, replacements), len(replacements)
+class _CollapseBindingsRewriteVisitor(ast.NodeVisitor):
+    """Rewrite direct and xl_eval call sites for every collapse binding in one walk."""
 
-
-def _rewrite_direct_collapse_binding(
-    source: str,
-    binding: CollapseBinding,
-) -> tuple[str, int]:
-    module = ast.parse(source)
-    replacements: list[tuple[int, int, str, str]] = []
-    for function_def in _iter_function_defs(module.body):
-        visitor = _DirectCollapseRewriteVisitor(
-            binding=binding,
-            source=source,
-            replacements=replacements,
-        )
-        visitor.visit(function_def)
-    if not replacements:
-        return source, 0
-    return _apply_segment_replacements(source, replacements), len(replacements)
-
-
-class _XlEvalCollapseRewriteVisitor(ast.NodeVisitor):
     def __init__(
         self,
         *,
-        binding: CollapseBinding,
+        bindings_by_function: dict[str, CollapseBinding],
         source: str,
         replacements: list[tuple[int, int, str, str]],
     ) -> None:
-        self.binding = binding
+        self.bindings_by_function = bindings_by_function
         self.source = source
         self.replacements = replacements
 
     def visit_Call(self, node: ast.Call) -> None:
-        if _xl_eval_matches_collapse(node, self.binding):
-            segment = ast.get_source_segment(self.source, node)
-            if segment is not None:
-                self.replacements.append(
-                    (
-                        node.lineno,
-                        node.end_lineno or node.lineno,
-                        segment,
-                        self.binding.literal_call,
-                    )
-                )
-        self.generic_visit(node)
-
-
-class _DirectCollapseRewriteVisitor(ast.NodeVisitor):
-    def __init__(
-        self,
-        *,
-        binding: CollapseBinding,
-        source: str,
-        replacements: list[tuple[int, int, str, str]],
-    ) -> None:
-        self.binding = binding
-        self.source = source
-        self.replacements = replacements
-
-    def visit_Call(self, node: ast.Call) -> None:
-        if (
+        binding: CollapseBinding | None = None
+        if isinstance(node.func, ast.Name) and node.func.id == "xl_eval":
+            callee = _xl_eval_callee_function(node)
+            if callee is not None:
+                candidate = self.bindings_by_function.get(callee)
+                if candidate is not None and _xl_eval_matches_collapse(node, candidate):
+                    binding = candidate
+        elif (
             isinstance(node.func, ast.Name)
-            and node.func.id == self.binding.function_name
             and len(node.args) == 1
             and isinstance(node.args[0], ast.Name)
             and node.args[0].id == "ctx"
         ):
+            binding = self.bindings_by_function.get(node.func.id)
+
+        if binding is not None:
             segment = ast.get_source_segment(self.source, node)
             if segment is not None:
                 self.replacements.append(
@@ -3327,7 +3292,7 @@ class _DirectCollapseRewriteVisitor(ast.NodeVisitor):
                         node.lineno,
                         node.end_lineno or node.lineno,
                         segment,
-                        self.binding.literal_call,
+                        binding.literal_call,
                     )
                 )
         self.generic_visit(node)
