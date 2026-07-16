@@ -480,7 +480,14 @@ def test_prepare_cluster_refactor_response_assembles_and_appends_note() -> None:
         "Excel: =IF(Forecast!{col}4>=Assumptions!$C$2,1,0)."
     ) in prepared.helper_docstring
     assert prepared.helper_docstring in prepared.helper_source
-    assert prepared.parameters == GROWTH_THRESHOLD_LLM_RESPONSE.parameters
+    assert prepared.parameters == (
+        HelperParameter(
+            name="reporting_period",
+            dimension_id="REPORTING_PERIOD",
+            dtype="int",
+            concept="REPORTING_PERIOD",
+        ),
+    )
     assert prepared.member_keys == GROWTH_THRESHOLD_LLM_RESPONSE.member_keys
 
 
