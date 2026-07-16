@@ -419,7 +419,9 @@ def test_validate_allowed_global_references_treats_lambda_params_as_locals() -> 
     )
 
 
-def test_validate_allowed_global_references_treats_nested_def_bindings_as_locals() -> None:
+def test_validate_allowed_global_references_treats_nested_def_bindings_as_locals() -> (
+    None
+):
     source = f'''def safe_ratio(ctx, time_period):
     """{CLUSTER_DOCSTRING}"""
     numerator = xl_cell(ctx, 'Inputs!C1')
@@ -453,7 +455,9 @@ def test_validate_allowed_global_references_treats_with_as_targets_as_locals() -
     )
 
 
-def test_validate_allowed_global_references_still_rejects_free_names_in_lambda() -> None:
+def test_validate_allowed_global_references_still_rejects_free_names_in_lambda() -> (
+    None
+):
     source = f'''def safe_ratio(ctx, time_period):
     """{CLUSTER_DOCSTRING}"""
     return (lambda num, den: mystery_helper(num, den))(1, 2)
