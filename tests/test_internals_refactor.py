@@ -2370,6 +2370,72 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
     ]
 
 
+def test_refactor_internals_all_clusters_forwards_bound_address_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Multi-member units must receive caller keys, not the graph-rebuild fallback."""
+    import src.internals_refactor as module
+
+    from src.refactor_order import RefactorUnit
+    from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
+
+    graph, bindings = inter_cluster_cycle_graph()
+    clusters = (
+        FormulaCluster(
+            cluster_id=0,
+            canonical_template="=X",
+            members=("Engine!B2", "Engine!C2"),
+            row=2,
+        ),
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_b2(ctx):\n    return 1.0\n"
+        "def cell_engine_c2(ctx):\n    return 1.0\n",
+        encoding="utf-8",
+    )
+    received: dict[str, object] = {}
+
+    def fake_build_cluster(
+        *_args: object,
+        bound_address_keys: object = None,
+        **_kwargs: object,
+    ) -> None:
+        received["bound_address_keys"] = bound_address_keys
+        return None
+
+    def boom_default_bound_keys() -> dict[str, dict[str, object]]:
+        raise AssertionError("_default_bound_address_keys must not run")
+
+    unit = RefactorUnit(
+        parent_cluster_id=0,
+        refactor_group_id=0,
+        members=("Engine!B2", "Engine!C2"),
+        canonical_template="=X",
+        row=2,
+    )
+    monkeypatch.setattr(module, "compute_refactor_schedule", lambda *_a, **_k: (unit,))
+    monkeypatch.setattr(module, "build_cluster_refactor_context", fake_build_cluster)
+    monkeypatch.setattr(module, "_default_bound_address_keys", boom_default_bound_keys)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", lambda *_a, **_k: None
+    )
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        bound_address_keys=cast(dict[str, dict[str, BindingKeyValue]], bindings),
+        dry_run=True,
+        parity_gate=False,
+    )
+
+    assert received["bound_address_keys"] is bindings
+
+
 def test_sample_indices_for_prompt_keeps_small_sequences() -> None:
     assert sample_indices_for_prompt(12, limit=50) == tuple(range(12))
 

@@ -522,6 +522,7 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         internals_path=state.package_root / "internals.py",
         source_graph=graph_result.graph,
         internal_binding_index=state.internal_binding_index,
+        bound_address_keys=bound_address_keys,
         bindings_path=config.bindings_path,
         workbook_path=config.workbook_path,
     )

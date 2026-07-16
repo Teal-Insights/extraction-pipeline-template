@@ -679,6 +679,12 @@ def _time_period_for_engine_column(
 
 
 def _default_bound_address_keys() -> dict[str, dict[str, BindingKeyValue]]:
+    """Fallback that rebuilds the pipeline graph solely to derive bound keys.
+
+    Prefer passing ``bound_address_keys`` (and ``source_graph``) from the caller
+    that already ran ``build_pipeline_graph``; otherwise a warm pipeline pays a
+    second dependency-graph load plus ``derive_*_series`` work.
+    """
     from src.extraction_pipeline import build_pipeline_graph
     from src.pipeline_context import require_pipeline_config
 
@@ -3647,6 +3653,7 @@ def refactor_internals_all_clusters(
     dry_run: bool = False,
     source_graph: DependencyGraph | None = None,
     internal_binding_index: InternalBindingIndex | None = None,
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]] | None = None,
     parity_gate: bool = True,
     layout: ProjectionColumnLayout | None = None,
 ) -> tuple[ClusterRefactorApplyResult, ...]:
@@ -3655,6 +3662,10 @@ def refactor_internals_all_clusters(
     When ``parity_gate`` is enabled, each refactored helper is checked against the
     pristine pre-refactor cell semantics across several input vectors before its
     transaction is committed; a divergence rolls back and re-prompts the model.
+
+    Pass ``bound_address_keys`` from the extract stage when available so cluster
+    context construction does not call ``_default_bound_address_keys`` (which
+    rebuilds the pipeline graph).
     """
     pristine_source: str | None = None
     input_vectors: Sequence[Mapping[str, object]] | None = None
@@ -3706,6 +3717,7 @@ def refactor_internals_all_clusters(
             internals_path,
             source_graph=source_graph,
             internal_binding_index=internal_binding_index,
+            bound_address_keys=bound_address_keys,
             bindings_path=bindings_path,
             workbook_path=workbook_path,
             layout=layout,
