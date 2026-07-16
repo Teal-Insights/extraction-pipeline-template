@@ -21,7 +21,11 @@ from excel_grapher.grapher.graph import DependencyGraph
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from src.formula_clustering import FormulaCluster
-from src.llm_json import DEFAULT_MAX_ATTEMPTS, generate_validated_json
+from src.llm_json import (
+    DEFAULT_MAX_ATTEMPTS,
+    ValidatedJsonFailure,
+    generate_validated_json,
+)
 from src.llm_providers import build_client, model_from_env, provider_for_model
 from src.pipeline_context import projection_layout as active_projection_layout
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
@@ -131,6 +135,20 @@ def _refactor_failure_target_slug(
     return slug or kind
 
 
+_REFACTOR_FAILURE_COMPATIBILITY_NOTE = (
+    "Top-level llm_response.json, prepared_response.json, and raw_content.json "
+    "remain the last attempt for compatibility. Full retry history is in "
+    "conversation.json and attempts/."
+)
+
+
+def _write_json_artifact(path: Path, payload: object) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
 def write_refactor_failure_diagnostic(
     *,
     kind: Literal["singleton", "cluster"],
@@ -141,10 +159,18 @@ def write_refactor_failure_diagnostic(
     llm_response: Mapping[str, Any] | None = None,
     prepared_response: Mapping[str, Any] | None = None,
     raw_content: str | None = None,
+    conversation: Sequence[Mapping[str, Any]] | None = None,
+    attempts: Sequence[Mapping[str, Any]] | None = None,
     source: Literal["llm", "cache"] = "llm",
     model: str | None = None,
 ) -> Path:
-    """Persist refactor failure artifacts for offline diagnosis."""
+    """Persist refactor failure artifacts for offline diagnosis.
+
+    When ``conversation`` / ``attempts`` are provided (multi-attempt LLM
+    validation failures), the dump includes the full chat history and
+    per-attempt artifacts under ``attempts/NN/``. Legacy top-level response
+    files continue to mirror the final attempt.
+    """
     root = dump_dir if dump_dir is not None else REFACTOR_FAILURE_DUMP_DIR
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     slug = _refactor_failure_target_slug(kind=kind, target=target)
@@ -154,21 +180,16 @@ def write_refactor_failure_diagnostic(
     files: dict[str, str] = {}
     if llm_response is not None:
         files["llm_response"] = "llm_response.json"
-        (failure_dir / files["llm_response"]).write_text(
-            json.dumps(dict(llm_response), indent=2, default=str) + "\n",
-            encoding="utf-8",
-        )
+        _write_json_artifact(failure_dir / files["llm_response"], dict(llm_response))
     if prepared_response is not None:
         files["prepared_response"] = "prepared_response.json"
-        (failure_dir / files["prepared_response"]).write_text(
-            json.dumps(dict(prepared_response), indent=2, default=str) + "\n",
-            encoding="utf-8",
+        _write_json_artifact(
+            failure_dir / files["prepared_response"], dict(prepared_response)
         )
     if raw_content is not None:
         files["raw_content"] = "raw_content.json"
-        (failure_dir / files["raw_content"]).write_text(
-            json.dumps({"content": raw_content}, indent=2) + "\n",
-            encoding="utf-8",
+        _write_json_artifact(
+            failure_dir / files["raw_content"], {"content": raw_content}
         )
     if user_prompt is not None:
         files["user_prompt"] = "user_prompt.md"
@@ -176,12 +197,43 @@ def write_refactor_failure_diagnostic(
             user_prompt,
             encoding="utf-8",
         )
+    if conversation is not None:
+        files["conversation"] = "conversation.json"
+        _write_json_artifact(
+            failure_dir / files["conversation"],
+            [dict(message) for message in conversation],
+        )
+    if attempts is not None:
+        files["attempts"] = "attempts"
+        attempts_root = failure_dir / files["attempts"]
+        attempts_root.mkdir(parents=True, exist_ok=True)
+        for attempt in attempts:
+            attempt_number = int(attempt["attempt"])
+            attempt_dir = attempts_root / f"{attempt_number:02d}"
+            attempt_dir.mkdir(parents=True, exist_ok=True)
+            (attempt_dir / "error.txt").write_text(
+                str(attempt.get("error", "")) + "\n",
+                encoding="utf-8",
+            )
+            raw = attempt.get("raw_content")
+            if isinstance(raw, str):
+                _write_json_artifact(attempt_dir / "raw_content.json", {"content": raw})
+            llm_payload = attempt.get("llm_response")
+            if isinstance(llm_payload, Mapping):
+                _write_json_artifact(
+                    attempt_dir / "llm_response.json", dict(llm_payload)
+                )
+            prepared_payload = attempt.get("prepared_response")
+            if isinstance(prepared_payload, Mapping):
+                _write_json_artifact(
+                    attempt_dir / "prepared_response.json", dict(prepared_payload)
+                )
 
     error_path = "error.txt"
     files["error"] = error_path
     (failure_dir / error_path).write_text(str(error) + "\n", encoding="utf-8")
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "kind": kind,
         "target": target,
         "source": source,
@@ -192,11 +244,91 @@ def write_refactor_failure_diagnostic(
         "timestamp": timestamp,
         "files": files,
     }
+    if conversation is not None or attempts is not None:
+        manifest["schema_version"] = 2
+        manifest["compatibility_note"] = _REFACTOR_FAILURE_COMPATIBILITY_NOTE
     (failure_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n",
         encoding="utf-8",
     )
     return failure_dir
+
+
+def _artifact_matches_raw_content(
+    artifact: Mapping[str, Any], raw_content: str
+) -> bool:
+    llm_response = artifact.get("llm_response")
+    if not isinstance(llm_response, Mapping):
+        return False
+    try:
+        parsed_raw = json.loads(raw_content)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(parsed_raw, dict):
+        return False
+    for key, value in llm_response.items():
+        if key in parsed_raw and parsed_raw[key] != value:
+            return False
+    return bool(parsed_raw) or not llm_response
+
+
+def _attempt_artifacts_from_validated_json_failure(
+    error: ValidatedJsonFailure,
+    *,
+    local_artifacts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge LLM retry records with per-attempt prepared/llm payloads."""
+    unused = list(local_artifacts)
+    merged: list[dict[str, Any]] = []
+    for record in error.attempts:
+        entry: dict[str, Any] = {
+            "attempt": record.attempt,
+            "raw_content": record.raw_content,
+            "error": record.error,
+        }
+        for index, artifact in enumerate(unused):
+            if not _artifact_matches_raw_content(artifact, record.raw_content):
+                continue
+            llm_payload = artifact.get("llm_response")
+            if llm_payload is not None:
+                entry["llm_response"] = llm_payload
+            prepared_payload = artifact.get("prepared_response")
+            if prepared_payload is not None:
+                entry["prepared_response"] = prepared_payload
+            del unused[index]
+            break
+        merged.append(entry)
+    return merged
+
+
+def _dump_validated_json_failure(
+    *,
+    kind: Literal["singleton", "cluster"],
+    target: str,
+    error: ValidatedJsonFailure,
+    user_prompt: str,
+    local_artifacts: Sequence[Mapping[str, Any]],
+    model: str,
+) -> Path:
+    attempts = _attempt_artifacts_from_validated_json_failure(
+        error, local_artifacts=local_artifacts
+    )
+    last_local = local_artifacts[-1] if local_artifacts else {}
+    last_attempt = attempts[-1] if attempts else {}
+    raw_content = last_attempt.get("raw_content")
+    return write_refactor_failure_diagnostic(
+        kind=kind,
+        target=target,
+        error=error,
+        user_prompt=user_prompt,
+        llm_response=last_local.get("llm_response"),
+        prepared_response=last_local.get("prepared_response"),
+        raw_content=raw_content if isinstance(raw_content, str) else None,
+        conversation=error.messages,
+        attempts=attempts,
+        source="llm",
+        model=model,
+    )
 
 
 @dataclass(frozen=True)
@@ -3973,14 +4105,15 @@ def llm_refactor_singleton(
         internals_index=index,
     )
     user_prompt = _prompt_for_singleton_refactor(context_dump)
-    last_attempt: dict[str, Any] = {}
+    attempt_artifacts: list[dict[str, Any]] = []
     validated_prepared: SingletonRefactorResponse | None = None
 
     def _post_validate_singleton_llm(
         parsed: SingletonRefactorLLMResponse,
     ) -> SingletonRefactorLLMResponse:
         nonlocal validated_prepared
-        last_attempt["llm_response"] = parsed.model_dump()
+        artifact: dict[str, Any] = {"llm_response": parsed.model_dump()}
+        attempt_artifacts.append(artifact)
         raise_if_llm_declared_error(
             parsed,
             kind="singleton",
@@ -3992,7 +4125,7 @@ def llm_refactor_singleton(
             runtime_source=runtime_source,
             internals_source=internals_source,
         )
-        last_attempt["prepared_response"] = prepared.model_dump()
+        artifact["prepared_response"] = prepared.model_dump()
         validated_prepared = _apply_singleton_refactor_validation(prepared)
         return parsed
 
@@ -4017,13 +4150,14 @@ def llm_refactor_singleton(
             max_attempts=DEFAULT_MAX_ATTEMPTS,
         )
     except RefactorDeclaredError as error:
+        last_artifact = attempt_artifacts[-1] if attempt_artifacts else {}
         dump_dir = write_refactor_failure_diagnostic(
             kind="singleton",
             target=failure_target,
             error=error,
             user_prompt=user_prompt,
-            llm_response=last_attempt.get("llm_response"),
-            prepared_response=last_attempt.get("prepared_response"),
+            llm_response=last_artifact.get("llm_response"),
+            prepared_response=last_artifact.get("prepared_response"),
             source="llm",
             model=model,
         )
@@ -4034,14 +4168,32 @@ def llm_refactor_singleton(
             dump_dir,
         )
         raise
+    except ValidatedJsonFailure as error:
+        dump_dir = _dump_validated_json_failure(
+            kind="singleton",
+            target=failure_target,
+            error=error,
+            user_prompt=user_prompt,
+            local_artifacts=attempt_artifacts,
+            model=model,
+        )
+        logger.error(
+            "singleton refactor LLM request failed address=%s attempts=%s diagnostic=%s: %s",
+            ctx.address,
+            DEFAULT_MAX_ATTEMPTS,
+            dump_dir,
+            error,
+        )
+        raise
     except RuntimeError as error:
+        last_artifact = attempt_artifacts[-1] if attempt_artifacts else {}
         dump_dir = write_refactor_failure_diagnostic(
             kind="singleton",
             target=failure_target,
             error=error,
             user_prompt=user_prompt,
-            llm_response=last_attempt.get("llm_response"),
-            prepared_response=last_attempt.get("prepared_response"),
+            llm_response=last_artifact.get("llm_response"),
+            prepared_response=last_artifact.get("prepared_response"),
             source="llm",
             model=model,
         )
@@ -4170,14 +4322,15 @@ def llm_refactor_cluster(
         internals_index=index,
     )
     user_prompt = _prompt_for_refactor(context_dump, contract=ctx.contract)
-    last_attempt: dict[str, Any] = {}
+    attempt_artifacts: list[dict[str, Any]] = []
     validated_prepared: ClusterRefactorResponse | None = None
 
     def _post_validate_cluster_llm(
         parsed: ClusterRefactorLLMResponse,
     ) -> ClusterRefactorLLMResponse:
         nonlocal validated_prepared
-        last_attempt["llm_response"] = parsed.model_dump()
+        artifact: dict[str, Any] = {"llm_response": parsed.model_dump()}
+        attempt_artifacts.append(artifact)
         raise_if_llm_declared_error(
             parsed,
             kind="cluster",
@@ -4189,7 +4342,7 @@ def llm_refactor_cluster(
             runtime_source=runtime_source,
             internals_source=internals_source,
         )
-        last_attempt["prepared_response"] = prepared.model_dump()
+        artifact["prepared_response"] = prepared.model_dump()
         validated_prepared = _apply_cluster_refactor_validation(prepared)
         return parsed
 
@@ -4222,13 +4375,14 @@ def llm_refactor_cluster(
             max_attempts=DEFAULT_MAX_ATTEMPTS,
         )
     except RefactorDeclaredError as error:
+        last_artifact = attempt_artifacts[-1] if attempt_artifacts else {}
         dump_dir = write_refactor_failure_diagnostic(
             kind="cluster",
             target=failure_target,
             error=error,
             user_prompt=user_prompt,
-            llm_response=last_attempt.get("llm_response"),
-            prepared_response=last_attempt.get("prepared_response"),
+            llm_response=last_artifact.get("llm_response"),
+            prepared_response=last_artifact.get("prepared_response"),
             source="llm",
             model=model,
         )
@@ -4239,14 +4393,32 @@ def llm_refactor_cluster(
             dump_dir,
         )
         raise
+    except ValidatedJsonFailure as error:
+        dump_dir = _dump_validated_json_failure(
+            kind="cluster",
+            target=failure_target,
+            error=error,
+            user_prompt=user_prompt,
+            local_artifacts=attempt_artifacts,
+            model=model,
+        )
+        logger.error(
+            "cluster refactor LLM request failed cluster_id=%s attempts=%s diagnostic=%s: %s",
+            ctx.cluster_id,
+            DEFAULT_MAX_ATTEMPTS,
+            dump_dir,
+            error,
+        )
+        raise
     except RuntimeError as error:
+        last_artifact = attempt_artifacts[-1] if attempt_artifacts else {}
         dump_dir = write_refactor_failure_diagnostic(
             kind="cluster",
             target=failure_target,
             error=error,
             user_prompt=user_prompt,
-            llm_response=last_attempt.get("llm_response"),
-            prepared_response=last_attempt.get("prepared_response"),
+            llm_response=last_artifact.get("llm_response"),
+            prepared_response=last_artifact.get("prepared_response"),
             source="llm",
             model=model,
         )

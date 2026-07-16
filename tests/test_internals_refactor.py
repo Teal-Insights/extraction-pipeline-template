@@ -63,7 +63,7 @@ from src.internals_refactor import (
     _prompt_for_singleton_refactor,
     _single_function_def,
 )
-from src.llm_json import DEFAULT_MAX_ATTEMPTS
+from src.llm_json import DEFAULT_MAX_ATTEMPTS, ValidatedJsonFailure
 from src.refactor_parity_gate import ParityError
 from excel_grapher.exporter import ProjectionResult
 from src.refactor_bindings import BindingKeyValue, KeyConceptSpec
@@ -273,6 +273,97 @@ def test_write_refactor_failure_diagnostic_persists_response_artifacts(
         (dump_dir / "llm_response.json").read_text(encoding="utf-8")
     )
     assert llm_response["symbol_body"] == "return 1.0"
+
+
+def test_write_refactor_failure_diagnostic_persists_all_attempts(
+    tmp_path: Path,
+) -> None:
+    conversation = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "initial user prompt"},
+        {"role": "assistant", "content": '{"symbol_body": "return 1.0"}'},
+        {"role": "user", "content": "Your previous response failed validation..."},
+        {"role": "assistant", "content": '{"symbol_body": "return 2.0"}'},
+        {"role": "user", "content": "Your previous response failed validation..."},
+        {"role": "assistant", "content": '{"symbol_body": "return 3.0"}'},
+        {"role": "user", "content": "Your previous response failed validation..."},
+    ]
+    attempts = [
+        {
+            "attempt": 1,
+            "raw_content": '{"symbol_body": "return 1.0"}',
+            "error": "first parity mismatch",
+            "llm_response": {"symbol_body": "return 1.0"},
+            "prepared_response": {"symbol_name": "helper", "symbol_body": "return 1.0"},
+        },
+        {
+            "attempt": 2,
+            "raw_content": '{"symbol_body": "return 2.0"}',
+            "error": "second parity mismatch",
+            "llm_response": {"symbol_body": "return 2.0"},
+            "prepared_response": {"symbol_name": "helper", "symbol_body": "return 2.0"},
+        },
+        {
+            "attempt": 3,
+            "raw_content": '{"symbol_body": "return 3.0"}',
+            "error": "third parity mismatch",
+            "llm_response": {"symbol_body": "return 3.0"},
+            "prepared_response": {"symbol_name": "helper", "symbol_body": "return 3.0"},
+        },
+    ]
+
+    dump_dir = write_refactor_failure_diagnostic(
+        kind="singleton",
+        target="Engine!C20",
+        error=RuntimeError("LLM failed after 3 attempts"),
+        dump_dir=tmp_path,
+        user_prompt="initial user prompt",
+        llm_response=attempts[-1]["llm_response"],
+        prepared_response=attempts[-1]["prepared_response"],
+        raw_content=str(attempts[-1]["raw_content"]),
+        conversation=conversation,
+        attempts=attempts,
+        source="llm",
+        model="test-model",
+    )
+
+    manifest = json.loads((dump_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["files"]["conversation"] == "conversation.json"
+    assert manifest["files"]["attempts"] == "attempts"
+    assert "last attempt" in manifest["compatibility_note"].lower()
+
+    saved_conversation = json.loads(
+        (dump_dir / "conversation.json").read_text(encoding="utf-8")
+    )
+    assert saved_conversation[1]["content"] == "initial user prompt"
+    assert saved_conversation[2]["content"] == '{"symbol_body": "return 1.0"}'
+    assert saved_conversation[4]["content"] == '{"symbol_body": "return 2.0"}'
+    assert saved_conversation[6]["content"] == '{"symbol_body": "return 3.0"}'
+
+    for index, attempt in enumerate(attempts, start=1):
+        attempt_dir = dump_dir / "attempts" / f"{index:02d}"
+        assert (attempt_dir / "error.txt").read_text(encoding="utf-8") == (
+            f"{attempt['error']}\n"
+        )
+        raw = json.loads((attempt_dir / "raw_content.json").read_text(encoding="utf-8"))
+        assert raw["content"] == attempt["raw_content"]
+        llm_response = json.loads(
+            (attempt_dir / "llm_response.json").read_text(encoding="utf-8")
+        )
+        assert llm_response == attempt["llm_response"]
+        prepared = json.loads(
+            (attempt_dir / "prepared_response.json").read_text(encoding="utf-8")
+        )
+        assert prepared == attempt["prepared_response"]
+
+    # Legacy top-level fields remain the final attempt.
+    assert (
+        json.loads((dump_dir / "llm_response.json").read_text(encoding="utf-8"))
+        == attempts[-1]["llm_response"]
+    )
+    assert json.loads((dump_dir / "raw_content.json").read_text(encoding="utf-8")) == {
+        "content": attempts[-1]["raw_content"]
+    }
 
 
 def test_prompt_payload_includes_allowed_runtime_symbols() -> None:
@@ -1492,6 +1583,135 @@ def test_llm_refactor_singleton_declared_error_writes_diagnostic_dump(
     )
     assert llm_response["error"] is True
     assert llm_response["error_reason"] == "Ambiguous naming hints; aborting."
+
+
+def test_llm_refactor_singleton_multi_attempt_failure_dumps_full_history(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.internals_refactor as module
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_c20(ctx):\n    return 1.0\n", encoding="utf-8"
+    )
+    ctx = _singleton_refactor_test_context(tmp_path)
+    dump_root = tmp_path / "failures"
+    bodies = ["return 1.0", "return 2.0", "return 3.0"]
+
+    class _FakeMessage:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content: str) -> None:
+            self.message = _FakeMessage(content)
+
+    class _FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.choices = [_FakeChoice(content)]
+
+    class _FakeCompletions:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def create(self, **kwargs: object) -> _FakeResponse:
+            body = bodies[min(self.calls, len(bodies) - 1)]
+            self.calls += 1
+            payload = {
+                "symbol_docstring": (
+                    "Projected debt-to-GDP.\n\n"
+                    "Args:\n    ctx: Workbook evaluation context.\n\n"
+                    "Returns:\n    Projected debt-to-GDP ratio."
+                ),
+                "symbol_body": body,
+                "error": False,
+                "error_reason": None,
+            }
+            return _FakeResponse(json.dumps(payload))
+
+    class _FakeChat:
+        def __init__(self) -> None:
+            self.completions = _FakeCompletions()
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.chat = _FakeChat()
+
+    fake_client = _FakeClient()
+    parity_calls = 0
+
+    def always_fail_parity(**kwargs: object) -> None:
+        nonlocal parity_calls
+        parity_calls += 1
+        raise ParityError(f"parity mismatch on attempt {parity_calls}")
+
+    monkeypatch.setattr(
+        module,
+        "build_client",
+        lambda _model: (
+            fake_client,
+            module.provider_for_model("glm-test"),
+        ),
+    )
+    monkeypatch.setattr(module, "load_refactor_cache", lambda: {})
+    monkeypatch.setattr(module, "save_refactor_cache", lambda _cache: None)
+    monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
+    monkeypatch.setattr(module, "refactor_model", lambda: "glm-test")
+    monkeypatch.setattr(
+        module,
+        "build_singleton_refactor_prompt_context",
+        lambda *_args, **_kwargs: "singleton context prompt",
+    )
+    monkeypatch.setattr(module, "REFACTOR_FAILURE_DUMP_DIR", dump_root)
+    monkeypatch.setattr(
+        "src.refactor_parity_gate.check_singleton_parity",
+        always_fail_parity,
+    )
+
+    with pytest.raises(ValidatedJsonFailure, match="after 3 attempts"):
+        llm_refactor_singleton(
+            ctx,
+            internals_path=internals_path,
+            pristine_source="def cell_engine_c20(ctx):\n    return 1.0\n",
+            input_vectors=[{}],
+        )
+
+    assert parity_calls == 3
+    assert fake_client.chat.completions.calls == 3
+    dumps = list(dump_root.iterdir())
+    assert len(dumps) == 1
+    dump_dir = dumps[0]
+
+    conversation = json.loads(
+        (dump_dir / "conversation.json").read_text(encoding="utf-8")
+    )
+    assert conversation[1]["role"] == "user"
+    assert "singleton context prompt" in conversation[1]["content"]
+    assert conversation[2]["role"] == "assistant"
+    assert "return 1.0" in conversation[2]["content"]
+    assert conversation[3]["role"] == "user"
+    assert "parity mismatch on attempt 1" in conversation[3]["content"]
+    assert "return 2.0" in conversation[4]["content"]
+    assert "parity mismatch on attempt 2" in conversation[5]["content"]
+    assert "return 3.0" in conversation[6]["content"]
+
+    for index, body in enumerate(bodies, start=1):
+        attempt_dir = dump_dir / "attempts" / f"{index:02d}"
+        error_text = (attempt_dir / "error.txt").read_text(encoding="utf-8")
+        assert f"parity mismatch on attempt {index}" in error_text
+        llm_response = json.loads(
+            (attempt_dir / "llm_response.json").read_text(encoding="utf-8")
+        )
+        assert llm_response["symbol_body"] == body
+        prepared = json.loads(
+            (attempt_dir / "prepared_response.json").read_text(encoding="utf-8")
+        )
+        assert body in prepared["symbol_source"]
+
+    # Compatibility: top-level artifacts still reflect the final attempt.
+    final_llm = json.loads((dump_dir / "llm_response.json").read_text(encoding="utf-8"))
+    assert final_llm["symbol_body"] == "return 3.0"
 
 
 # --- Dual cluster-refactor contracts (issue #74) ---

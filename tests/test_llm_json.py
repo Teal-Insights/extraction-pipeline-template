@@ -4,7 +4,7 @@ import pytest
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
 
-from src.llm_json import generate_validated_json
+from src.llm_json import ValidatedJsonFailure, generate_validated_json
 from src.llm_providers import ProviderConfig
 
 JSON_OBJECT_PROVIDER = ProviderConfig(
@@ -198,6 +198,48 @@ def test_raises_after_exhausting_attempts() -> None:
     assert "after 2 attempts" in str(excinfo.value)
     assert excinfo.value.__cause__ is not None
     assert len(fake.chat.completions.calls) == 2
+
+
+def test_exhausted_attempts_raise_validated_json_failure_with_history() -> None:
+    first = '{"title": "T", "bodyy": "first"}'
+    second = '{"title": "T", "bodyy": "second"}'
+    third = '{"title": "T", "bodyy": "third"}'
+    client, fake = _make([first, second, third])
+
+    with pytest.raises(ValidatedJsonFailure) as excinfo:
+        generate_validated_json(
+            client=client,
+            model="m",
+            provider=JSON_OBJECT_PROVIDER,
+            system_prompt="sys",
+            user_prompt="usr",
+            response_model=_Sample,
+            max_attempts=3,
+        )
+
+    failure = excinfo.value
+    assert isinstance(failure, RuntimeError)
+    assert len(failure.attempts) == 3
+    assert [record.raw_content for record in failure.attempts] == [
+        first,
+        second,
+        third,
+    ]
+    assert all(record.error for record in failure.attempts)
+    assert failure.attempts[0].attempt == 1
+    assert failure.attempts[2].attempt == 3
+
+    roles = [message["role"] for message in failure.messages]
+    assert roles[0] == "system"
+    assert roles[1] == "user"
+    assert failure.messages[1]["content"] == "usr"
+    # Each failed attempt appends assistant content + a correction user turn.
+    assert roles[2:] == ["assistant", "user", "assistant", "user", "assistant", "user"]
+    assert failure.messages[2]["content"] == first
+    assert "failed validation" in str(failure.messages[3]["content"])
+    assert failure.messages[4]["content"] == second
+    assert failure.messages[6]["content"] == third
+    assert len(fake.chat.completions.calls) == 3
 
 
 def test_empty_content_raises_without_retry() -> None:
