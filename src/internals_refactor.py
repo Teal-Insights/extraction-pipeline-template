@@ -33,6 +33,7 @@ from src.refactor_bindings import (
     engine_column_from_member_keys,
     expected_member_keys_for_cluster,
     format_binding_key_literal,
+    helper_parameters_for_varying_keys,
     load_key_concept_vocabulary,
     render_literal_helper_call,
     resolve_dimension_key,
@@ -41,6 +42,12 @@ from src.refactor_contracts import (
     ClusterRefactorContract,
     concepts_with_multiple_dimensions,
     select_cluster_refactor_contract,
+)
+from src.refactor_fingerprints import (
+    ClusterFingerprintSummary,
+    SemanticDependencyRef,
+    build_cluster_fingerprint_summary,
+    format_cluster_fingerprint_dump,
 )
 from src.refactor_order import compute_refactor_schedule, refactor_failure_target
 from src.refactor_return_types import (
@@ -65,7 +72,31 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 26
+REFACTOR_PROMPT_VERSION = 27
+CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT = 30
+_FINGERPRINT_FALLBACK_COUNT = 0
+
+
+def fingerprint_fallback_count() -> int:
+    """Return how many clusters fell back to the legacy sampled dump this process."""
+    return _FINGERPRINT_FALLBACK_COUNT
+
+
+def reset_fingerprint_fallback_count() -> None:
+    global _FINGERPRINT_FALLBACK_COUNT
+    _FINGERPRINT_FALLBACK_COUNT = 0
+
+
+def _record_fingerprint_fallback(reason: str, *, cluster_id: int) -> None:
+    global _FINGERPRINT_FALLBACK_COUNT
+    _FINGERPRINT_FALLBACK_COUNT += 1
+    logger.info(
+        "cluster %s fingerprint dump fallback (%s); using legacy sampled sources "
+        "(fallback_count=%s)",
+        cluster_id,
+        reason,
+        _FINGERPRINT_FALLBACK_COUNT,
+    )
 
 
 def refactor_model() -> str:
@@ -215,6 +246,7 @@ class ClusterRefactorContext:
     expected_member_keys: dict[str, dict[str, BindingKeyValue]]
     naming_hints: dict[str, object]
     contract: ClusterRefactorContract = "member_sweep"
+    fingerprint_summary: ClusterFingerprintSummary | None = None
 
 
 class HelperParameter(BaseModel):
@@ -341,6 +373,7 @@ def _validate_llm_response_error_or_success[T: BaseModel](
     response: T,
     *,
     success_fields: tuple[str, ...],
+    optional_ignored_fields: tuple[str, ...] = (),
 ) -> T:
     error = getattr(response, "error")
     error_reason = getattr(response, "error_reason")
@@ -353,6 +386,11 @@ def _validate_llm_response_error_or_success[T: BaseModel](
         populated = [
             name for name in success_fields if getattr(response, name) is not None
         ]
+        populated.extend(
+            name
+            for name in optional_ignored_fields
+            if getattr(response, name, None) is not None
+        )
         if populated:
             raise ValueError(
                 "success fields must be null when error is true: "
@@ -414,15 +452,18 @@ class ClusterRefactorLLMResponse(BaseModel):
         description="Python function body. Null when error is true.",
     )
     parameters: tuple[HelperParameter, ...] | None = Field(
+        default=None,
         description=(
-            "Economic parameters the helper varies along, tied to binding "
-            "dimension ids. Null when error is true."
+            "Deprecated: ignored when present. The pipeline synthesizes parameters "
+            "from varying binding dimensions and key_vocabulary. Null when error "
+            "is true or omitted on success."
         ),
     )
     member_keys: tuple[MemberKeys, ...] | None = Field(
+        default=None,
         description=(
-            "One entry per cluster member with literal key values for that address. "
-            "Null when error is true."
+            "Deprecated: ignored when present. The pipeline synthesizes member_keys "
+            "from expected binding keys. Null when error is true or omitted on success."
         ),
     )
     error: bool | None = Field(
@@ -446,9 +487,8 @@ class ClusterRefactorLLMResponse(BaseModel):
                 "symbol_signature",
                 "symbol_docstring",
                 "symbol_body",
-                "parameters",
-                "member_keys",
             ),
+            optional_ignored_fields=("parameters", "member_keys"),
         )
 
 
@@ -680,7 +720,7 @@ def build_cluster_refactor_context(
     cluster: FormulaCluster,
     internals_path: Path,
     *,
-    bound_address_keys: dict[str, dict[str, BindingKeyValue]] | None = None,
+    bound_address_keys: Mapping[str, Mapping[str, BindingKeyValue]] | None = None,
     key_vocabulary: tuple[KeyConceptSpec, ...] | None = None,
     workbook_path: Path,
     bindings_path: Path,
@@ -688,6 +728,7 @@ def build_cluster_refactor_context(
     internal_binding_index: InternalBindingIndex | None = None,
     layout: ProjectionColumnLayout | None = None,
     internals_index: InternalsSourceIndex | None = None,
+    address_to_series_id: Mapping[str, str] | None = None,
 ) -> ClusterRefactorContext | None:
     if len(cluster.members) < 2:
         return None
@@ -801,6 +842,30 @@ def build_cluster_refactor_context(
         )
     )
 
+    semantic_refs = tuple(
+        SemanticDependencyRef(
+            helper_name=dependency.helper_name,
+            call_form=dependency.call_form,
+            address_template=dependency.address_template,
+            addresses=dependency.addresses,
+        )
+        for dependency in semantic_dependencies
+    )
+    fingerprint_summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected_member_keys,
+        bound_address_keys=resolved_bound_keys,
+        workbook_path=workbook_path,
+        layout=resolved_layout,
+        address_to_series_id=address_to_series_id,
+        semantic_dependencies=semantic_refs,
+    )
+    if fingerprint_summary.fallback_reason is not None:
+        _record_fingerprint_fallback(
+            fingerprint_summary.fallback_reason,
+            cluster_id=cluster.cluster_id,
+        )
+
     return ClusterRefactorContext(
         cluster_id=cluster.cluster_id,
         canonical_template=cluster.canonical_template,
@@ -829,6 +894,7 @@ def build_cluster_refactor_context(
             )
         ),
         contract=contract,
+        fingerprint_summary=fingerprint_summary,
     )
 
 
@@ -2057,6 +2123,46 @@ def assemble_cluster_symbol_source(
     )
 
 
+def synthesize_cluster_parameters(
+    ctx: ClusterRefactorContext,
+) -> tuple[HelperParameter, ...]:
+    """Build helper parameters from varying dimensions × key vocabulary."""
+    dimension_sets = [
+        frozenset(ctx.expected_member_keys[member.address].keys())
+        for member in ctx.members
+    ]
+    if not dimension_sets:
+        return ()
+    if len(set(dimension_sets)) != 1:
+        raise ValueError("cluster members must share one varying key dimension set")
+    varying_dimension_ids = dimension_sets[0]
+    specs = helper_parameters_for_varying_keys(
+        varying_dimension_ids, ctx.key_vocabulary
+    )
+    return tuple(
+        HelperParameter(
+            name=spec.suggested_param_name,
+            dimension_id=spec.dimension_id,
+            dtype=spec.dtype,
+            concept=spec.concept,
+        )
+        for spec in specs
+    )
+
+
+def synthesize_cluster_member_keys(
+    ctx: ClusterRefactorContext,
+    *,
+    parameters: Sequence[HelperParameter],
+) -> tuple[MemberKeys, ...]:
+    """Build full-cluster member_keys from expected binding keys."""
+    return complete_cluster_member_keys_from_expected(
+        (),
+        ctx,
+        parameters=parameters,
+    )
+
+
 def prepare_cluster_refactor_response(
     llm_response: ClusterRefactorLLMResponse,
     ctx: ClusterRefactorContext,
@@ -2068,8 +2174,6 @@ def prepare_cluster_refactor_response(
         llm_response.symbol_signature is None
         or llm_response.symbol_docstring is None
         or llm_response.symbol_body is None
-        or llm_response.parameters is None
-        or llm_response.member_keys is None
     ):
         raise ValueError("cluster refactor response is missing required success fields")
     return_hint = infer_refactor_return_type_hint(
@@ -2096,12 +2200,14 @@ def prepare_cluster_refactor_response(
         docstring=docstring,
         body=llm_response.symbol_body,
     )
+    parameters = synthesize_cluster_parameters(ctx)
+    member_keys = synthesize_cluster_member_keys(ctx, parameters=parameters)
     return ClusterRefactorResponse(
         helper_name=_parse_symbol_name_from_signature(signature),
         helper_docstring=docstring,
         helper_source=helper_source,
-        parameters=llm_response.parameters,
-        member_keys=llm_response.member_keys,
+        parameters=parameters,
+        member_keys=member_keys,
     )
 
 
@@ -2176,11 +2282,25 @@ def format_cluster_refactor_context_dump(
     key_vocabulary: Sequence[KeyConceptSpec],
     member_metadata: Sequence[Mapping[str, object]],
     dependency_stubs: str,
+    shown_member_count: int | None = None,
+    total_member_count: int | None = None,
 ) -> str:
     vocabulary_yaml = _format_key_vocabulary_yaml(key_vocabulary)
     metadata_yaml = _format_member_metadata_yaml(member_metadata)
+    if (
+        shown_member_count is not None
+        and total_member_count is not None
+        and shown_member_count < total_member_count
+    ):
+        heading = (
+            f"Cluster to refactor (showing {shown_member_count} of "
+            f"{total_member_count} members; remaining member_keys are filled "
+            "mechanically):\n\n"
+        )
+    else:
+        heading = "Cluster to refactor:\n\n"
     return (
-        "Cluster to refactor:\n\n"
+        f"{heading}"
         f"```python\n{member_sources.strip()}\n```\n\n"
         "Key vocabulary:\n\n"
         f"```yaml\n{vocabulary_yaml}\n```\n\n"
@@ -2245,6 +2365,68 @@ def _build_cluster_dependency_stubs(
     return "\n\n".join(stubs)
 
 
+def sample_indices_for_prompt(
+    count: int,
+    *,
+    limit: int = CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT,
+) -> tuple[int, ...]:
+    """Return up to ``limit`` indices spaced across ``0..count-1`` inclusive."""
+    if limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
+    if count < 0:
+        raise ValueError(f"count must be >= 0, got {count}")
+    if count <= limit:
+        return tuple(range(count))
+    if limit == 1:
+        return (0,)
+    return tuple(
+        dict.fromkeys(round(i * (count - 1) / (limit - 1)) for i in range(limit))
+    )
+
+
+def sample_members_for_prompt[T](
+    members: Sequence[T],
+    *,
+    limit: int = CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT,
+) -> tuple[T, ...]:
+    """Return a uniformly spaced subset of ``members`` capped at ``limit``."""
+    indices = sample_indices_for_prompt(len(members), limit=limit)
+    return tuple(members[index] for index in indices)
+
+
+def complete_cluster_member_keys_from_expected(
+    member_keys: Sequence[MemberKeys],
+    ctx: ClusterRefactorContext,
+    *,
+    parameters: Sequence[HelperParameter],
+) -> tuple[MemberKeys, ...]:
+    """Fill missing member_keys from expected binding keys for the full cluster."""
+    parameter_dimension_ids = tuple(
+        dict.fromkeys(parameter.dimension_id for parameter in parameters)
+    )
+    by_address = {entry.address: entry for entry in member_keys}
+    completed: list[MemberKeys] = []
+    for member in ctx.members:
+        existing = by_address.get(member.address)
+        if existing is not None:
+            completed.append(existing)
+            continue
+        expected = ctx.expected_member_keys.get(member.address, {})
+        keys = tuple(
+            MemberKeyEntry(dimension_id=dimension_id, value=expected[dimension_id])
+            for dimension_id in parameter_dimension_ids
+            if dimension_id in expected
+        )
+        completed.append(
+            MemberKeys(
+                address=member.address,
+                function_name=member.function_name,
+                keys=keys,
+            )
+        )
+    return tuple(completed)
+
+
 def build_cluster_refactor_context_dump(
     *,
     member_function_names: Sequence[str],
@@ -2252,6 +2434,8 @@ def build_cluster_refactor_context_dump(
     runtime_source: str,
     key_vocabulary: Sequence[KeyConceptSpec],
     member_metadata: Sequence[Mapping[str, object]],
+    shown_member_count: int | None = None,
+    total_member_count: int | None = None,
     index: InternalsSourceIndex | None = None,
     member_function_sources: Mapping[str, str] | None = None,
 ) -> str:
@@ -2289,14 +2473,19 @@ def build_cluster_refactor_context_dump(
         key_vocabulary=key_vocabulary,
         member_metadata=member_metadata,
         dependency_stubs=dependency_stubs,
+        shown_member_count=shown_member_count,
+        total_member_count=total_member_count,
     )
 
 
 def _member_metadata_for_cluster_refactor(
     ctx: ClusterRefactorContext,
+    *,
+    members: Sequence[MemberContext] | None = None,
 ) -> tuple[dict[str, object], ...]:
+    selected_members = ctx.members if members is None else tuple(members)
     entries: list[dict[str, object]] = []
-    for member in ctx.members:
+    for member in selected_members:
         entry: dict[str, object] = {
             "address": member.address,
             "function_name": member.function_name,
@@ -2313,6 +2502,7 @@ def build_cluster_refactor_prompt_context(
     *,
     internals_path: Path,
     runtime_path: Path | None = None,
+    member_limit: int = CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT,
     internals_index: InternalsSourceIndex | None = None,
 ) -> str:
     varying_dimension_ids = frozenset(
@@ -2326,19 +2516,54 @@ def build_cluster_refactor_prompt_context(
         else internals_path.parent / "runtime.py"
     )
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
+    filtered_vocabulary = tuple(
+        item
+        for item in ctx.key_vocabulary
+        if item.dimension_id in varying_dimension_ids
+    )
+    vocabulary_yaml = _format_key_vocabulary_yaml(filtered_vocabulary)
+    runtime_source = resolved_runtime_path.read_text(encoding="utf-8")
+
+    summary = ctx.fingerprint_summary
+    use_fingerprint = summary is not None and summary.fallback_reason is None
+    if use_fingerprint:
+        assert summary is not None
+        exemplars = tuple(group.exemplar for group in summary.groups)
+        member_function_sources = {
+            member.function_name: member.python_source for member in exemplars
+        }
+        dependency_stubs = _build_cluster_dependency_stubs(
+            member_function_names=tuple(member.function_name for member in exemplars),
+            internals_source=index.source,
+            runtime_source=runtime_source,
+            index=index,
+            member_function_sources=member_function_sources,
+        )
+        metadata_yaml = _format_member_metadata_yaml(
+            _member_metadata_for_cluster_refactor(ctx, members=exemplars)
+        )
+        return format_cluster_fingerprint_dump(
+            summary,
+            exemplar_keys_by_address=ctx.expected_member_keys,
+            key_vocabulary_yaml=vocabulary_yaml,
+            member_metadata_yaml=metadata_yaml,
+            dependency_stubs=dependency_stubs,
+        )
+
+    prompt_members = sample_members_for_prompt(ctx.members, limit=member_limit)
     member_function_sources = {
-        member.function_name: member.python_source for member in ctx.members
+        member.function_name: member.python_source for member in prompt_members
     }
     return build_cluster_refactor_context_dump(
-        member_function_names=tuple(member.function_name for member in ctx.members),
+        member_function_names=tuple(member.function_name for member in prompt_members),
         internals_source=index.source,
-        runtime_source=resolved_runtime_path.read_text(encoding="utf-8"),
-        key_vocabulary=tuple(
-            item
-            for item in ctx.key_vocabulary
-            if item.dimension_id in varying_dimension_ids
+        runtime_source=runtime_source,
+        key_vocabulary=filtered_vocabulary,
+        member_metadata=_member_metadata_for_cluster_refactor(
+            ctx, members=prompt_members
         ),
-        member_metadata=_member_metadata_for_cluster_refactor(ctx),
+        shown_member_count=len(prompt_members),
+        total_member_count=len(ctx.members),
         index=index,
         member_function_sources=member_function_sources,
     )
@@ -3897,10 +4122,17 @@ def llm_refactor_cluster(
         validated_prepared = _apply_cluster_refactor_validation(prepared)
         return parsed
 
+    prompt_member_count = len(
+        sample_indices_for_prompt(
+            len(ctx.members), limit=CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT
+        )
+    )
     logger.info(
-        "cluster refactor LLM request cluster_id=%s members=%d model=%s prompt_version=%s",
+        "cluster refactor LLM request cluster_id=%s members=%d prompt_members=%d "
+        "model=%s prompt_version=%s",
         ctx.cluster_id,
         len(ctx.members),
+        prompt_member_count,
         model,
         REFACTOR_PROMPT_VERSION,
     )

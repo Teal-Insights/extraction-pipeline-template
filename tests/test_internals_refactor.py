@@ -37,16 +37,19 @@ from src.internals_refactor import (
     build_singleton_refactor_context,
     build_singleton_refactor_prompt_context,
     collapse_bindings_for_response,
+    complete_cluster_member_keys_from_expected,
     extract_function_source,
     llm_refactor_cluster,
     llm_refactor_singleton,
     load_cluster_refactor_prompt_fixed_portion,
+    prepare_cluster_refactor_response,
     prepare_singleton_refactor_response,
     prompt_payload,
     raise_if_llm_declared_error,
     refactor_cache_key,
     refactor_internals_all_clusters,
     refactor_internals_singleton,
+    sample_indices_for_prompt,
     singleton_prompt_payload,
     validate_allowed_global_references,
     validate_cluster_refactor_response,
@@ -1852,9 +1855,11 @@ def test_build_cluster_prompt_context_uses_shared_index_without_rereads(
             internals_index=index,
         )
     assert extract_calls == []
+    assert "## Fingerprint F1" in dump
     assert "cell_engine_b5" in dump
-    assert "cell_engine_c5" in dump
-    assert "cell_engine_d5" in dump
+    assert "Exemplar translation" in dump
+    assert "Member key space" in dump
+    assert "Reference relations" in dump
 
 
 def test_llm_refactor_singleton_uses_shared_index_without_rereads(
@@ -2253,3 +2258,290 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
         "cluster_0_g2",
         "cluster_1_g3",
     ]
+
+
+def test_sample_indices_for_prompt_keeps_small_sequences() -> None:
+    assert sample_indices_for_prompt(12, limit=50) == tuple(range(12))
+
+
+def test_sample_indices_for_prompt_caps_and_keeps_endpoints() -> None:
+    indices = sample_indices_for_prompt(420, limit=50)
+    assert len(indices) <= 50
+    assert indices[0] == 0
+    assert indices[-1] == 419
+    assert indices == tuple(sorted(indices))
+    assert len(set(indices)) == len(indices)
+
+
+def test_complete_cluster_member_keys_fills_omitted_members() -> None:
+    members = tuple(
+        MemberContext(
+            address=f"Engine!{column}6",
+            function_name=f"cell_engine_{column.lower()}6",
+            engine_column=column,
+            normalized_formula=f"=Inputs!{column}1",
+            python_source=(
+                f"def cell_engine_{column.lower()}6(ctx):\n"
+                f"    return xl_cell(ctx, 'Inputs!{column}1')\n"
+            ),
+            dependency_addresses=(),
+            dependency_functions=(),
+        )
+        for column in ("C", "D", "E")
+    )
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        members=members,
+        expected_member_keys={
+            "Engine!C6": {"TIME_PERIOD": 1},
+            "Engine!D6": {"TIME_PERIOD": 2},
+            "Engine!E6": {"TIME_PERIOD": 3},
+        },
+    )
+    partial = (
+        MemberKeys(
+            address="Engine!C6",
+            function_name="cell_engine_c6",
+            keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
+        ),
+    )
+    completed = complete_cluster_member_keys_from_expected(
+        partial,
+        ctx,
+        parameters=CLUSTER_PARAMETERS,
+    )
+    assert [entry.address for entry in completed] == [
+        "Engine!C6",
+        "Engine!D6",
+        "Engine!E6",
+    ]
+    assert completed[1].keys == (MemberKeyEntry(dimension_id="TIME_PERIOD", value=2),)
+    assert completed[2].function_name == "cell_engine_e6"
+
+
+def test_prepare_cluster_refactor_response_accepts_sampled_member_keys() -> None:
+    members = tuple(
+        MemberContext(
+            address=f"Engine!{column}6",
+            function_name=f"cell_engine_{column.lower()}6",
+            engine_column=column,
+            normalized_formula=f"=Inputs!{column}1",
+            python_source=(
+                f"def cell_engine_{column.lower()}6(ctx):\n    return 1.0\n"
+            ),
+            dependency_addresses=(),
+            dependency_functions=(),
+        )
+        for column in ("C", "D", "E")
+    )
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        members=members,
+        expected_member_keys={
+            "Engine!C6": {"TIME_PERIOD": 1},
+            "Engine!D6": {"TIME_PERIOD": 2},
+            "Engine!E6": {"TIME_PERIOD": 3},
+        },
+    )
+    llm_response = ClusterRefactorLLMResponse(
+        symbol_signature=(
+            "def combined_input_passthrough(ctx: EvalContext, time_period: int) -> float:"
+        ),
+        symbol_docstring=CLUSTER_DOCSTRING,
+        symbol_body="return xl_cell(ctx, f'Inputs!{chr(66 + time_period)}1')",
+        parameters=CLUSTER_PARAMETERS,
+        member_keys=(
+            MemberKeys(
+                address="Engine!C6",
+                function_name="cell_engine_c6",
+                keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
+            ),
+        ),
+        error=None,
+        error_reason=None,
+    )
+    prepared = prepare_cluster_refactor_response(
+        llm_response,
+        ctx,
+        runtime_source="def xl_cell(ctx, address):\n    return 0\n",
+        internals_source="\n\n".join(member.python_source for member in members),
+    )
+    assert [entry.address for entry in prepared.member_keys] == [
+        "Engine!C6",
+        "Engine!D6",
+        "Engine!E6",
+    ]
+    assert prepared.parameters[0].name == "time_period"
+
+
+def test_prepare_cluster_refactor_response_ignores_llm_parameters_and_member_keys() -> (
+    None
+):
+    """LLM-supplied parameters/member_keys are accepted for one version then ignored."""
+    llm_response = ClusterRefactorLLMResponse(
+        symbol_signature=(
+            "def combined_input_passthrough(ctx: EvalContext, time_period: int) -> float:"
+        ),
+        symbol_docstring=CLUSTER_DOCSTRING,
+        symbol_body="return xl_cell(ctx, f'Inputs!{chr(66 + time_period)}1')",
+        parameters=(
+            HelperParameter(
+                name="wrong_name",
+                dimension_id="TIME_PERIOD",
+                dtype="int",
+            ),
+        ),
+        member_keys=(
+            MemberKeys(
+                address="Engine!C6",
+                function_name="cell_engine_c6",
+                keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=99),),
+            ),
+        ),
+        error=None,
+        error_reason=None,
+    )
+    prepared = prepare_cluster_refactor_response(
+        llm_response,
+        CLUSTER_CONTEXT,
+        runtime_source="def xl_cell(ctx, address):\n    return 0\n",
+        internals_source=VALID_CLUSTER_SOURCE,
+    )
+    assert prepared.parameters == (
+        HelperParameter(
+            name="time_period",
+            dimension_id="TIME_PERIOD",
+            dtype="int",
+            concept="TIME_PERIOD",
+        ),
+    )
+    assert prepared.member_keys[0].keys[0].value == 1
+    assert prepared.member_keys[1].keys[0].value == 2
+
+
+def test_build_cluster_refactor_prompt_context_uses_fingerprint_for_large_clusters(
+    tmp_path: Path,
+) -> None:
+    from src.refactor_fingerprints import build_cluster_fingerprint_summary
+
+    members = tuple(
+        MemberContext(
+            address=f"Engine!C{row}",
+            function_name=f"cell_engine_c{row}",
+            engine_column="C",
+            normalized_formula=f"=Inputs!C{row}",
+            python_source=(
+                f"def cell_engine_c{row}(ctx):\n"
+                f"    return xl_cell(ctx, 'Inputs!C{row}')\n"
+            ),
+            dependency_addresses=(),
+            dependency_functions=(),
+        )
+        for row in range(1, 61)
+    )
+    bound_keys = {
+        **{
+            member.address: {"TIME_PERIOD": index + 1}
+            for index, member in enumerate(members)
+        },
+        **{f"Inputs!C{row}": {"TIME_PERIOD": row} for row in range(1, 61)},
+    }
+    expected_member_keys = {
+        member.address: {"TIME_PERIOD": index + 1}
+        for index, member in enumerate(members)
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected_member_keys,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+    )
+    assert summary.fallback_reason is None
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "\n\n".join(member.python_source for member in members),
+        encoding="utf-8",
+    )
+    runtime_path = tmp_path / "runtime.py"
+    runtime_path.write_text(
+        "def xl_cell(ctx, address):\n    return 0\n", encoding="utf-8"
+    )
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        members=members,
+        expected_member_keys=expected_member_keys,
+        fingerprint_summary=summary,
+    )
+    dump = build_cluster_refactor_prompt_context(
+        ctx,
+        internals_path=internals_path,
+        runtime_path=runtime_path,
+        member_limit=5,
+    )
+    assert "showing 5 of 60 members" not in dump
+    assert "60 of 60 members" in dump
+    assert "Exemplar translation" in dump
+    assert dump.count("def cell_engine_c") == 1
+
+
+def test_build_cluster_refactor_prompt_context_falls_back_when_summary_unusable(
+    tmp_path: Path,
+) -> None:
+    from src.refactor_fingerprints import ClusterFingerprintSummary
+
+    members = tuple(
+        MemberContext(
+            address=f"Engine!C{row}",
+            function_name=f"cell_engine_c{row}",
+            engine_column="C",
+            normalized_formula="=Inputs!C1",
+            python_source=(
+                f"def cell_engine_c{row}(ctx):\n    return xl_cell(ctx, 'Inputs!C1')\n"
+            ),
+            dependency_addresses=(),
+            dependency_functions=(),
+        )
+        for row in range(1, 61)
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "\n\n".join(member.python_source for member in members),
+        encoding="utf-8",
+    )
+    runtime_path = tmp_path / "runtime.py"
+    runtime_path.write_text(
+        "def xl_cell(ctx, address):\n    return 0\n", encoding="utf-8"
+    )
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        members=members,
+        expected_member_keys={
+            member.address: {"TIME_PERIOD": index + 1}
+            for index, member in enumerate(members)
+        },
+        fingerprint_summary=ClusterFingerprintSummary(
+            groups=(),
+            key_space={"TIME_PERIOD": tuple(range(1, 61))},
+            key_to_column=None,
+            fallback_reason="missing_ref_key_values",
+        ),
+    )
+    dump = build_cluster_refactor_prompt_context(
+        ctx,
+        internals_path=internals_path,
+        runtime_path=runtime_path,
+        member_limit=5,
+    )
+    assert "showing 5 of 60 members" in dump
+    assert dump.count("def cell_engine_c") == 5
+    assert "cell_engine_c1" in dump
+    assert "cell_engine_c60" in dump
+
+
+def test_cluster_refactor_prompts_document_fingerprint_and_mechanical_fields() -> None:
+    for contract in ("member_sweep", "dimension_aware"):
+        prompt = load_cluster_refactor_prompt_fixed_portion(contract)
+        assert "fingerprint" in prompt.lower() or "Reference relations" in prompt
+        assert "mechanically" in prompt.lower()
+        assert "Do not emit `parameters` or `member_keys`" in prompt
