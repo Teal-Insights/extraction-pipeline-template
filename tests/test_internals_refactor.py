@@ -305,6 +305,20 @@ def test_validate_cluster_accepts_well_formed_response() -> None:
         )
 
 
+def test_validate_cluster_skips_engine_column_check_without_projection_layout() -> None:
+    """Bindings already triangulate members; layout mapping is optional."""
+    with patch(
+        "src.internals_refactor._resolved_projection_layout",
+        return_value=None,
+    ):
+        validate_cluster_refactor_response(
+            CLUSTER_CONTEXT,
+            _cluster_response(),
+            existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+            internals_source=PRISTINE_CLUSTER,
+        )
+
+
 def test_validate_cluster_rejects_duplicate_member_key_combinations() -> None:
     duplicate_member_keys = (
         CLUSTER_MEMBER_KEYS[0],

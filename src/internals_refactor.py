@@ -1568,20 +1568,23 @@ def validate_cluster_refactor_response(
                     f"{dimension_id}={actual_value!r}, "
                     f"expected {expected_value!r}"
                 )
-        engine_column = engine_column_from_member_keys(
-            entry_keys,
-            address=entry.address,
-            layout=_resolved_projection_layout(),
-        )
-        if engine_column is None:
-            raise ValueError(
-                f"member_keys for {entry.address} do not resolve to an engine column"
+        layout = _resolved_projection_layout()
+        if layout is not None:
+            engine_column = engine_column_from_member_keys(
+                entry_keys,
+                address=entry.address,
+                layout=layout,
             )
-        if engine_column != member.engine_column:
-            raise ValueError(
-                f"member_keys for {entry.address} resolve to engine column "
-                f"{engine_column!r}, expected {member.engine_column!r}"
-            )
+            if engine_column is None:
+                raise ValueError(
+                    f"member_keys for {entry.address} do not resolve "
+                    "to an engine column"
+                )
+            if engine_column != member.engine_column:
+                raise ValueError(
+                    f"member_keys for {entry.address} resolve to engine column "
+                    f"{engine_column!r}, expected {member.engine_column!r}"
+                )
 
     if not response.helper_name.isidentifier():
         raise ValueError(
