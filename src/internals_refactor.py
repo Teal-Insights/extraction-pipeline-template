@@ -53,6 +53,7 @@ from src.refactor_order import compute_refactor_schedule, refactor_failure_targe
 from src.refactor_return_types import (
     ALLOWED_REFACTOR_RETURN_TYPE_HINTS,
     KNOWN_RUNTIME_RETURN_HINTS,
+    _binding_dtype_to_python,
     infer_refactor_return_type_hint,
     normalize_return_type_hint_for_allowlist,
     validate_scalar_return_type_hint,
@@ -64,6 +65,7 @@ from src.semantic_naming import (
     cluster_binding_naming_hints,
     semantic_helpers_available_for_calls,
     binding_record_hints_from_cell,
+    sole_series_id_for_addresses,
     validate_semantic_identifier,
 )
 
@@ -72,7 +74,7 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 27
+REFACTOR_PROMPT_VERSION = 28
 CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT = 30
 _FINGERPRINT_FALLBACK_COUNT = 0
 
@@ -245,6 +247,7 @@ class ClusterRefactorContext:
     key_vocabulary: tuple[KeyConceptSpec, ...]
     expected_member_keys: dict[str, dict[str, BindingKeyValue]]
     naming_hints: dict[str, object]
+    expected_helper_name: str
     contract: ClusterRefactorContract = "member_sweep"
     fingerprint_summary: ClusterFingerprintSummary | None = None
 
@@ -434,14 +437,6 @@ def raise_if_llm_declared_error(
 class ClusterRefactorLLMResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    symbol_signature: str | None = Field(
-        description=(
-            "Python function signature, including `def` keyword, `snake_case` "
-            "semantic name, `ctx: EvalContext`, typed economic parameters from "
-            "`key_vocabulary`, and parameter type hints. Do not include a return "
-            "type hint; the pipeline injects it mechanically. Null when error is true."
-        ),
-    )
     symbol_docstring: str | None = Field(
         description=(
             "Google-style docstring. Include Args and Returns sections. "
@@ -484,7 +479,6 @@ class ClusterRefactorLLMResponse(BaseModel):
         return _validate_llm_response_error_or_success(
             self,
             success_fields=(
-                "symbol_signature",
                 "symbol_docstring",
                 "symbol_body",
             ),
@@ -514,6 +508,7 @@ class SingletonRefactorContext:
     call_sites: tuple[CallSite, ...]
     allowed_runtime_symbols: tuple[str, ...]
     naming_hints: dict[str, object]
+    expected_helper_name: str
 
 
 class SingletonRefactorResponse(BaseModel):
@@ -539,14 +534,6 @@ class SingletonRefactorResponse(BaseModel):
 class SingletonRefactorLLMResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    symbol_signature: str | None = Field(
-        description=(
-            "Python function signature, including `def` keyword, `snake_case` "
-            "semantic name, a single `ctx: EvalContext` argument, and parameter "
-            "type hints. Do not include a return type hint; the pipeline injects "
-            "it mechanically. Null when error is true."
-        ),
-    )
     symbol_docstring: str | None = Field(
         description=(
             "Google-style docstring. Include Args and Returns sections. "
@@ -574,7 +561,6 @@ class SingletonRefactorLLMResponse(BaseModel):
         return _validate_llm_response_error_or_success(
             self,
             success_fields=(
-                "symbol_signature",
                 "symbol_docstring",
                 "symbol_body",
             ),
@@ -872,6 +858,19 @@ def build_cluster_refactor_context(
             cluster_id=cluster.cluster_id,
         )
 
+    if address_to_series_id is None:
+        raise ValueError(
+            "address_to_series_id is required to lock cluster helper names"
+        )
+    expected_helper_name = sole_series_id_for_addresses(
+        member_address_list,
+        address_to_series_id,
+    )
+    validate_semantic_identifier(
+        expected_helper_name,
+        existing_names=frozenset(),
+    )
+
     return ClusterRefactorContext(
         cluster_id=cluster.cluster_id,
         canonical_template=cluster.canonical_template,
@@ -899,6 +898,7 @@ def build_cluster_refactor_context(
                 for member in members
             )
         ),
+        expected_helper_name=expected_helper_name,
         contract=contract,
         fingerprint_summary=fingerprint_summary,
     )
@@ -912,6 +912,7 @@ def build_singleton_refactor_context(
     source_graph: DependencyGraph | None = None,
     internal_binding_index: InternalBindingIndex | None = None,
     internals_index: InternalsSourceIndex | None = None,
+    address_to_series_id: Mapping[str, str] | None = None,
 ) -> SingletonRefactorContext | None:
     if len(cluster.members) != 1:
         return None
@@ -941,6 +942,19 @@ def build_singleton_refactor_context(
         )
     )
 
+    if address_to_series_id is None:
+        raise ValueError(
+            "address_to_series_id is required to lock singleton helper names"
+        )
+    expected_helper_name = sole_series_id_for_addresses(
+        (address,),
+        address_to_series_id,
+    )
+    validate_semantic_identifier(
+        expected_helper_name,
+        existing_names=frozenset(),
+    )
+
     return SingletonRefactorContext(
         address=address,
         function_name=function_name,
@@ -960,6 +974,7 @@ def build_singleton_refactor_context(
         naming_hints=_binding_hints_for_address(
             internal_binding_index, address
         ).to_payload(),
+        expected_helper_name=expected_helper_name,
     )
 
 
@@ -1158,6 +1173,7 @@ def prompt_payload(ctx: ClusterRefactorContext) -> dict[str, object]:
             "require_semantic_locals": True,
         },
         "naming_hints": ctx.naming_hints,
+        "expected_helper_name": ctx.expected_helper_name,
     }
 
 
@@ -1548,6 +1564,11 @@ def validate_cluster_refactor_response(
     existing_names: frozenset[str],
     internals_source: str,
 ) -> None:
+    if response.helper_name != ctx.expected_helper_name:
+        raise ValueError(
+            "helper_name must equal locked series_id "
+            f"{ctx.expected_helper_name!r}, got {response.helper_name!r}"
+        )
     validate_semantic_identifier(
         response.helper_name,
         existing_names=existing_names,
@@ -1816,6 +1837,19 @@ def _parse_symbol_name_from_signature(signature: str) -> str:
     return match.group(1)
 
 
+def build_locked_helper_signature(
+    helper_name: str,
+    *,
+    parameters: Sequence[HelperParameter] = (),
+) -> str:
+    """Build ``def {helper_name}(ctx: EvalContext, ...)`` from locked name + params."""
+    parts = ["ctx: EvalContext"]
+    for parameter in parameters:
+        python_type = _binding_dtype_to_python(parameter.dtype) or parameter.dtype
+        parts.append(f"{parameter.name}: {python_type}")
+    return f"def {helper_name}({', '.join(parts)}):"
+
+
 def prepare_singleton_refactor_response(
     llm_response: SingletonRefactorLLMResponse,
     ctx: SingletonRefactorContext,
@@ -1823,11 +1857,7 @@ def prepare_singleton_refactor_response(
     runtime_source: str,
     internals_source: str,
 ) -> SingletonRefactorResponse:
-    if (
-        llm_response.symbol_signature is None
-        or llm_response.symbol_docstring is None
-        or llm_response.symbol_body is None
-    ):
+    if llm_response.symbol_docstring is None or llm_response.symbol_body is None:
         raise ValueError(
             "singleton refactor response is missing required success fields"
         )
@@ -1838,7 +1868,7 @@ def prepare_singleton_refactor_response(
         naming_hints=ctx.naming_hints,
     )
     signature = inject_signature_return_type_hint(
-        llm_response.symbol_signature,
+        build_locked_helper_signature(ctx.expected_helper_name),
         return_hint,
     )
     docstring = strip_python_string_delimiters(llm_response.symbol_docstring)
@@ -1853,7 +1883,7 @@ def prepare_singleton_refactor_response(
         body=llm_response.symbol_body,
     )
     return SingletonRefactorResponse(
-        symbol_name=_parse_symbol_name_from_signature(signature),
+        symbol_name=ctx.expected_helper_name,
         symbol_docstring=docstring,
         symbol_source=symbol_source,
     )
@@ -1887,10 +1917,14 @@ def format_singleton_refactor_context_dump(
     function_source: str,
     cell_metadata: Mapping[str, object],
     dependency_stubs: str,
+    helper_name: str | None = None,
 ) -> str:
     yaml_block = _format_cell_metadata_yaml(cell_metadata)
+    header = "Function to refactor:\n\n"
+    if helper_name is not None:
+        header = f"Function to refactor (helper_name={helper_name}):\n\n"
     return (
-        "Function to refactor:\n\n"
+        f"{header}"
         f"```python\n{function_source.strip()}\n```\n\n"
         "Cell metadata:\n\n"
         f"```yaml\n{yaml_block}\n```\n\n"
@@ -2017,6 +2051,7 @@ def build_singleton_refactor_context_dump(
     cell_metadata: Mapping[str, object],
     index: InternalsSourceIndex | None = None,
     function_source: str | None = None,
+    helper_name: str | None = None,
 ) -> str:
     resolved = (
         index
@@ -2040,6 +2075,7 @@ def build_singleton_refactor_context_dump(
         function_source=resolved_function_source,
         cell_metadata=metadata,
         dependency_stubs=dependency_stubs,
+        helper_name=helper_name,
     )
 
 
@@ -2079,6 +2115,7 @@ def build_singleton_refactor_prompt_context(
         cell_metadata=_cell_metadata_for_singleton_refactor(ctx),
         index=index,
         function_source=ctx.python_source,
+        helper_name=ctx.expected_helper_name,
     )
 
 
@@ -2186,12 +2223,10 @@ def prepare_cluster_refactor_response(
     runtime_source: str,
     internals_source: str,
 ) -> ClusterRefactorResponse:
-    if (
-        llm_response.symbol_signature is None
-        or llm_response.symbol_docstring is None
-        or llm_response.symbol_body is None
-    ):
+    if llm_response.symbol_docstring is None or llm_response.symbol_body is None:
         raise ValueError("cluster refactor response is missing required success fields")
+    parameters = synthesize_cluster_parameters(ctx)
+    member_keys = synthesize_cluster_member_keys(ctx, parameters=parameters)
     return_hint = infer_refactor_return_type_hint(
         python_sources=tuple(member.python_source for member in ctx.members),
         runtime_source=runtime_source,
@@ -2199,7 +2234,10 @@ def prepare_cluster_refactor_response(
         naming_hints=ctx.naming_hints,
     )
     signature = inject_signature_return_type_hint(
-        llm_response.symbol_signature,
+        build_locked_helper_signature(
+            ctx.expected_helper_name,
+            parameters=parameters,
+        ),
         return_hint,
     )
     docstring = strip_python_string_delimiters(llm_response.symbol_docstring)
@@ -2216,10 +2254,8 @@ def prepare_cluster_refactor_response(
         docstring=docstring,
         body=llm_response.symbol_body,
     )
-    parameters = synthesize_cluster_parameters(ctx)
-    member_keys = synthesize_cluster_member_keys(ctx, parameters=parameters)
     return ClusterRefactorResponse(
-        helper_name=_parse_symbol_name_from_signature(signature),
+        helper_name=ctx.expected_helper_name,
         helper_docstring=docstring,
         helper_source=helper_source,
         parameters=parameters,
@@ -2564,6 +2600,7 @@ def build_cluster_refactor_prompt_context(
             key_vocabulary_yaml=vocabulary_yaml,
             member_metadata_yaml=metadata_yaml,
             dependency_stubs=dependency_stubs,
+            helper_name=ctx.expected_helper_name,
         )
 
     prompt_members = sample_members_for_prompt(ctx.members, limit=member_limit)
@@ -2677,6 +2714,7 @@ def singleton_prompt_payload(ctx: SingletonRefactorContext) -> dict[str, object]
             "require_semantic_locals": True,
         },
         "naming_hints": ctx.naming_hints,
+        "expected_helper_name": ctx.expected_helper_name,
     }
 
 
@@ -2687,7 +2725,11 @@ def validate_singleton_refactor_response(
     existing_names: frozenset[str],
     internals_source: str,
 ) -> None:
-    _ = ctx
+    if response.symbol_name != ctx.expected_helper_name:
+        raise ValueError(
+            "symbol_name must equal locked series_id "
+            f"{ctx.expected_helper_name!r}, got {response.symbol_name!r}"
+        )
     validate_semantic_identifier(
         response.symbol_name,
         existing_names=existing_names,
@@ -3650,6 +3692,7 @@ def refactor_internals_all_clusters(
     internals_path: Path,
     bindings_path: Path,
     workbook_path: Path,
+    address_to_series_id: Mapping[str, str],
     dry_run: bool = False,
     source_graph: DependencyGraph | None = None,
     internal_binding_index: InternalBindingIndex | None = None,
@@ -3691,6 +3734,7 @@ def refactor_internals_all_clusters(
                 source_graph=source_graph,
                 internal_binding_index=internal_binding_index,
                 internals_index=internals_index,
+                address_to_series_id=address_to_series_id,
             )
             if ctx is None:
                 continue
@@ -3722,6 +3766,7 @@ def refactor_internals_all_clusters(
             workbook_path=workbook_path,
             layout=layout,
             internals_index=internals_index,
+            address_to_series_id=address_to_series_id,
         )
         if ctx is None:
             continue

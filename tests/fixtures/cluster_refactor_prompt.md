@@ -1,4 +1,4 @@
-You will be provided a fingerprint summary of a cluster of Excel formula cells: one structural skeleton, reference relations for each ref slot, a complete member key space, and a single exemplar mechanical Python translation. Your task is to refactor the cluster into a single domain-aware parameterized Python function.
+You will be provided a fingerprint summary of a cluster of Excel formula cells: one structural skeleton, reference relations for each ref slot, a complete member key space, and a single exemplar mechanical Python translation. Your task is to refactor the cluster into a single domain-aware parameterized Python function. The helper name is locked to `helper_name` from the cluster context (the binding `series_id`); do not invent a function name or emit a `def` line.
 
 ## Output format
 
@@ -8,11 +8,6 @@ Return only JSON matching the response schema:
 {
   "additionalProperties": false,
   "properties": {
-    "symbol_signature": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "Python function signature, including `def` keyword, `snake_case` semantic name, `ctx: EvalContext`, typed economic parameters from `key_vocabulary`, and parameter type hints. Do not include a return type hint. Null when error is true.",
-      "title": "Helper Signature"
-    },
     "symbol_docstring": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
       "description": "Google-style docstring. Include Args and Returns sections. Null when error is true.",
@@ -35,7 +30,6 @@ Return only JSON matching the response schema:
     }
   },
   "required": [
-    "symbol_signature",
     "symbol_docstring",
     "symbol_body",
     "error",
@@ -51,7 +45,7 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
 ## Aborting
 
 - If the cluster is unrefactorable or unrepresentable (for example contradictory membership), set `error` to `true` and provide a concise non-empty `error_reason`.
-- When `error` is `true`, set every success field (`symbol_signature`, `symbol_docstring`, `symbol_body`) to `null`. Do not omit keys.
+- When `error` is `true`, set every success field (`symbol_docstring`, `symbol_body`) to `null`. Do not omit keys.
 - On success, set `error` to `null` or `false`, set `error_reason` to `null`, and populate every success field.
 - Declaring an error stops the pipeline run for human review.
 
@@ -69,10 +63,8 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
 
 ## Signature
 
-- `symbol_signature` must take `ctx: EvalContext` plus one typed parameter per varying binding dimension from `key_vocabulary`.
-- Use `suggested_param_name` from `key_vocabulary` as each parameter's Python name.
-- Choose the function name as a clear `snake_case` semantic identifier informed by naming hints.
-- Do not include a return type hint on `symbol_signature`; the pipeline injects it mechanically from the mechanical member sources.
+- The pipeline synthesizes `def {helper_name}(ctx: EvalContext, …)` mechanically from the locked name and `key_vocabulary`. Emit only docstring and body.
+- Use `suggested_param_name` from `key_vocabulary` as each parameter's Python name in the body and docstring.
 - Series-constant binding keys (`scope: series`) are not parameters; bake them into the helper.
 - The cluster has already been qualified by formula structure and binding-key shape at each reference position. Do not reinterpret its membership or add parameters for individual reference positions.
 
@@ -95,11 +87,10 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
 
 ## Example 1: Unpacking nested calls
 
-Suppose the dump shows fingerprint `=IF(ref_0[REPORTING_PERIOD]>=ref_1,1,0)` over `Forecast!B12:F12` with `REPORTING_PERIOD: 1..5` and engine columns, identity on `ref_0`, and constant `Assumptions!C2` for `ref_1`, plus one exemplar `cell_forecast_b12`. Generalize the exemplar with a period→column table:
+Suppose the dump shows fingerprint `=IF(ref_0[REPORTING_PERIOD]>=ref_1,1,0)` over `Forecast!B12:F12` with locked `helper_name=growth_threshold_met`, `REPORTING_PERIOD: 1..5` and engine columns, identity on `ref_0`, and constant `Assumptions!C2` for `ref_1`, plus one exemplar `cell_forecast_b12`. Generalize the exemplar with a period→column table:
 
 ```json
 {
-  "symbol_signature": "def growth_threshold_met(ctx: EvalContext, reporting_period: int):",
   "symbol_docstring": "Return 1.0 when the observed value meets or exceeds the growth threshold for the reporting period.\n\nArgs:\n    ctx: Workbook evaluation context.\n    reporting_period: Reporting period index (1 through 5).\n\nReturns:\n    1.0 if the observed value is at or above the threshold, else 0.0.",
   "symbol_body": "column_by_period = {1: 'B', 2: 'C', 3: 'D', 4: 'E', 5: 'F'}\ncolumn = column_by_period[reporting_period]\nobserved_value = xl_cell(ctx, f'Forecast!{column}4')\nthreshold = xl_cell(ctx, 'Assumptions!C2')\nmeets_threshold = xl_compare('>=', observed_value, threshold)\nreturn 1.0 if meets_threshold else 0.0",
   "error": null,
@@ -113,7 +104,6 @@ Some formulas read the same indicator at more than one period. Reference relatio
 
 ```json
 {
-  "symbol_signature": "def indicator_change_from_reference_period(ctx: EvalContext, time_period: int, ref_area: str):",
   "symbol_docstring": "Return the change in the observed indicator relative to its area-specific reference period.\n\nArgs:\n    ctx: Workbook evaluation context.\n    time_period: Period index (4 through 7).\n    ref_area: Reference area code ('USA' or 'FRA').\n\nReturns:\n    Current-period value minus the lagged value (lag 1 for USA, lag 3 for FRA).",
   "symbol_body": "source_row_by_area = {'USA': 4, 'FRA': 8}\nlag_by_area = {'USA': 1, 'FRA': 3}\ncolumn_by_period = {1: 'B', 2: 'C', 3: 'D', 4: 'E', 5: 'F', 6: 'G', 7: 'H'}\nsource_row = source_row_by_area[ref_area]\ncurrent_value = xl_number(xl_cell(ctx, f'Data!{column_by_period[time_period]}{source_row}'))\nreference_period = time_period - lag_by_area[ref_area]\nreference_value = xl_number(xl_cell(ctx, f'Data!{column_by_period[reference_period]}{source_row}'))\nreturn current_value - reference_value",
   "error": null,
@@ -125,4 +115,4 @@ Similar conditional selection or switching logic can be applied to solve other c
 
 ## Naming conventions
 
-To support function naming, docstring generation, and parameterization, you will be provided a fingerprint summary (skeleton, reference relations, full key space, exemplar source), `key_vocabulary`, exemplar `expected_keys` / `binding_keys` / `binding_record` naming hints, and dependency stubs. Parameters and per-member keys are filled mechanically; focus on the semantic signature, docstring, and body.
+To support docstring generation and parameterization, you will be provided a fingerprint summary (skeleton, reference relations, full key space, exemplar source), locked `helper_name`, `key_vocabulary`, exemplar `expected_keys` / `binding_keys` / `binding_record` naming hints, and dependency stubs. The function name, parameters, and per-member keys are filled mechanically; focus on the docstring and body.

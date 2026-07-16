@@ -516,6 +516,7 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         bound_address_keys=bound_address_keys,
         bindings_path=config.bindings_path,
         workbook_path=config.workbook_path,
+        address_to_series_id=address_to_series_id,
     )
     return RefactorStageState(config=config)
 

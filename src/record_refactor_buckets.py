@@ -338,6 +338,7 @@ def record_refactor_buckets(
                     cluster,
                     internals_path,
                     internal_binding_index=internal_binding_index,
+                    address_to_series_id=resolved_address_to_series_id,
                 )
             )
         else:
