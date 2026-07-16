@@ -257,6 +257,13 @@ def write_refactor_failure_diagnostic(
 def _artifact_matches_raw_content(
     artifact: Mapping[str, Any], raw_content: str
 ) -> bool:
+    """Return whether ``artifact['llm_response']`` came from ``raw_content``.
+
+    Raw JSON may omit null-valued fields that appear in ``model_dump()``. Every
+    key present in the raw object must agree with the dump, and every non-null
+    dump field must appear in the raw object so unrelated or partial payloads
+    cannot claim a richer prepared/llm artifact.
+    """
     llm_response = artifact.get("llm_response")
     if not isinstance(llm_response, Mapping):
         return False
@@ -264,12 +271,17 @@ def _artifact_matches_raw_content(
         parsed_raw = json.loads(raw_content)
     except json.JSONDecodeError:
         return False
-    if not isinstance(parsed_raw, dict):
+    if not isinstance(parsed_raw, dict) or not parsed_raw:
         return False
-    for key, value in llm_response.items():
-        if key in parsed_raw and parsed_raw[key] != value:
+    for key, value in parsed_raw.items():
+        if key not in llm_response or llm_response[key] != value:
             return False
-    return bool(parsed_raw) or not llm_response
+    for key, value in llm_response.items():
+        if value is None:
+            continue
+        if key not in parsed_raw:
+            return False
+    return True
 
 
 def _attempt_artifacts_from_validated_json_failure(
@@ -309,20 +321,25 @@ def _dump_validated_json_failure(
     user_prompt: str,
     local_artifacts: Sequence[Mapping[str, Any]],
     model: str,
+    dump_dir: Path | None = None,
 ) -> Path:
     attempts = _attempt_artifacts_from_validated_json_failure(
         error, local_artifacts=local_artifacts
     )
-    last_local = local_artifacts[-1] if local_artifacts else {}
     last_attempt = attempts[-1] if attempts else {}
+    llm_response = last_attempt.get("llm_response")
+    prepared_response = last_attempt.get("prepared_response")
     raw_content = last_attempt.get("raw_content")
     return write_refactor_failure_diagnostic(
         kind=kind,
         target=target,
         error=error,
+        dump_dir=dump_dir,
         user_prompt=user_prompt,
-        llm_response=last_local.get("llm_response"),
-        prepared_response=last_local.get("prepared_response"),
+        llm_response=llm_response if isinstance(llm_response, Mapping) else None,
+        prepared_response=(
+            prepared_response if isinstance(prepared_response, Mapping) else None
+        ),
         raw_content=raw_content if isinstance(raw_content, str) else None,
         conversation=error.messages,
         attempts=attempts,

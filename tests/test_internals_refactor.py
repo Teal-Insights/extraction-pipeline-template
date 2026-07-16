@@ -58,12 +58,18 @@ from src.internals_refactor import (
     validate_semantic_local_names,
     validate_singleton_refactor_response,
     write_refactor_failure_diagnostic,
+    _attempt_artifacts_from_validated_json_failure,
+    _dump_validated_json_failure,
     _prepare_cluster_refactor_response,
     _prompt_for_refactor,
     _prompt_for_singleton_refactor,
     _single_function_def,
 )
-from src.llm_json import DEFAULT_MAX_ATTEMPTS, ValidatedJsonFailure
+from src.llm_json import (
+    DEFAULT_MAX_ATTEMPTS,
+    ValidatedJsonFailure,
+    ValidationAttemptRecord,
+)
 from src.refactor_parity_gate import ParityError
 from excel_grapher.exporter import ProjectionResult
 from src.refactor_bindings import BindingKeyValue, KeyConceptSpec
@@ -364,6 +370,119 @@ def test_write_refactor_failure_diagnostic_persists_all_attempts(
     assert json.loads((dump_dir / "raw_content.json").read_text(encoding="utf-8")) == {
         "content": attempts[-1]["raw_content"]
     }
+
+
+def test_attempt_artifact_merge_does_not_attach_to_unrelated_raw_json() -> None:
+    artifact = {
+        "llm_response": {
+            "symbol_docstring": "Doc",
+            "symbol_body": "return 2.0",
+            "error": False,
+            "error_reason": None,
+        },
+        "prepared_response": {"symbol_source": "return 2.0"},
+    }
+    failure = ValidatedJsonFailure(
+        "exhausted",
+        messages=[],
+        attempts=[
+            ValidationAttemptRecord(1, '{"totally": "wrong"}', "schema error"),
+            ValidationAttemptRecord(
+                2,
+                (
+                    '{"symbol_docstring": "Doc", "symbol_body": "return 2.0", '
+                    '"error": false, "error_reason": null}'
+                ),
+                "parity mismatch",
+            ),
+            ValidationAttemptRecord(
+                3, '{"symbol_body": "return 2.0"}', "missing fields"
+            ),
+        ],
+        last_error=None,
+    )
+
+    merged = _attempt_artifacts_from_validated_json_failure(
+        failure, local_artifacts=[artifact]
+    )
+
+    assert "llm_response" not in merged[0]
+    assert "prepared_response" not in merged[0]
+    assert merged[1]["llm_response"] == artifact["llm_response"]
+    assert merged[1]["prepared_response"] == artifact["prepared_response"]
+    assert "llm_response" not in merged[2]
+    assert "prepared_response" not in merged[2]
+
+
+def test_attempt_artifact_merge_allows_omitted_null_fields_in_raw_json() -> None:
+    artifact = {
+        "llm_response": {
+            "symbol_docstring": "Doc",
+            "symbol_body": "return 1.0",
+            "error": False,
+            "error_reason": None,
+        },
+        "prepared_response": {"symbol_source": "return 1.0"},
+    }
+    failure = ValidatedJsonFailure(
+        "exhausted",
+        messages=[],
+        attempts=[
+            ValidationAttemptRecord(
+                1,
+                '{"symbol_docstring": "Doc", "symbol_body": "return 1.0", "error": false}',
+                "parity mismatch",
+            ),
+        ],
+        last_error=None,
+    )
+
+    merged = _attempt_artifacts_from_validated_json_failure(
+        failure, local_artifacts=[artifact]
+    )
+
+    assert merged[0]["prepared_response"] == artifact["prepared_response"]
+
+
+def test_dump_validated_json_failure_top_level_uses_merged_last_attempt(
+    tmp_path: Path,
+) -> None:
+    local_artifacts = [
+        {
+            "llm_response": {"symbol_body": "return 1.0"},
+            "prepared_response": {"symbol_source": "return 1.0"},
+        },
+    ]
+    failure = ValidatedJsonFailure(
+        "after 2 attempts",
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "usr"},
+        ],
+        attempts=[
+            ValidationAttemptRecord(1, '{"symbol_body": "return 1.0"}', "parity"),
+            ValidationAttemptRecord(2, '{"symbol_bodyy": "oops"}', "schema error"),
+        ],
+        last_error=None,
+    )
+
+    dump_dir = _dump_validated_json_failure(
+        kind="singleton",
+        target="Engine!C20",
+        error=failure,
+        user_prompt="usr",
+        local_artifacts=local_artifacts,
+        model="test-model",
+        dump_dir=tmp_path,
+    )
+
+    assert not (dump_dir / "llm_response.json").exists()
+    assert not (dump_dir / "prepared_response.json").exists()
+    assert json.loads((dump_dir / "raw_content.json").read_text(encoding="utf-8")) == {
+        "content": '{"symbol_bodyy": "oops"}'
+    }
+    assert (dump_dir / "attempts" / "01" / "llm_response.json").exists()
+    assert not (dump_dir / "attempts" / "02" / "llm_response.json").exists()
 
 
 def test_prompt_payload_includes_allowed_runtime_symbols() -> None:
