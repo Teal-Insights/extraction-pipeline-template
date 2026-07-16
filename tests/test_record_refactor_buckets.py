@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
 from excel_grapher.exporter import (
     FieldDoc as SeriesFieldDoc,
+    ProjectionResult,
     SeriesFunctionDoc,
     register_series_docstring_callback,
 )
@@ -500,14 +501,14 @@ def test_record_refactor_buckets_allocates_against_semantic_helper_names(
     seen_existing: list[frozenset[str]] = []
 
     def fake_allocate(
-        unit_members: object,
-        address_to_series_id: object,
+        unit_members: Sequence[Sequence[str]],
+        address_to_series_id: Mapping[str, str],
         *,
         existing_names: frozenset[str] = frozenset(),
     ) -> tuple[str, ...]:
+        _ = address_to_series_id
         seen_existing.append(existing_names)
-        count = len(unit_members)  # type: ignore[arg-type]
-        return tuple(f"helper_{index}" for index in range(count))
+        return tuple(f"helper_{index}" for index in range(len(unit_members)))
 
     with (
         patch(
@@ -527,7 +528,7 @@ def test_record_refactor_buckets_allocates_against_semantic_helper_names(
             config,
             graph=graph,
             internals_path=internals_path,
-            refactor_graph=graph,
+            refactor_graph=cast(ProjectionResult, graph),
             internal_binding_index=None,
             layout=None,
             compression="optimal",
