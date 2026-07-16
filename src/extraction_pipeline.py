@@ -16,9 +16,6 @@ from excel_grapher.grapher import (
 from excel_grapher.exporter import CodeGenerator
 from excel_grapher.exporter.codegen import GraphLike
 from excel_grapher.series_bindings import (
-    derive_input_series,
-    derive_internal_series,
-    derive_output_series,
     load_series_bindings,
     validate_series_bindings,
 )
@@ -61,6 +58,7 @@ from src.qmd_python_validation import (
     write_dist_readme,
 )
 from src.graph_cache import get_or_build_dependency_graph
+from src.series_resolution_cache import get_or_build_series_resolution
 from src.subgraph_projection import build_refactor_projection
 
 SeriesResolutionList = Sequence[Mapping[str, Any]]
@@ -344,25 +342,18 @@ def build_pipeline_graph(
                 f"Invalid series bindings: {binding_validation_report['issues']!r}"
             )
 
-    with stage("derive_input_series"):
-        input_series = cast(
-            SeriesResolutionList,
-            derive_input_series(graph, series_bindings, workbook=config.workbook_path),
+    with stage("derive_series"):
+        series_result = get_or_build_series_resolution(
+            graph,
+            series_bindings,
+            workbook_path=config.workbook_path,
+            graph_cache_key=graph_cache_key,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
         )
-
-    with stage("derive_output_series"):
-        output_series = cast(
-            SeriesResolutionList,
-            derive_output_series(graph, series_bindings, workbook=config.workbook_path),
-        )
-
-    with stage("derive_internal_series"):
-        internal_series = cast(
-            SeriesResolutionList,
-            derive_internal_series(
-                graph, series_bindings, workbook=config.workbook_path
-            ),
-        )
+        input_series = series_result.input_series
+        output_series = series_result.output_series
+        internal_series = series_result.internal_series
 
     with stage("classify_leaves"):
         leaf_classification = classify_leaves_from_constraints(
@@ -613,7 +604,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Bypass on-disk graph and projection caches for this run.",
+        help=(
+            "Bypass on-disk graph, projection, and series-resolution caches "
+            "for this run."
+        ),
     )
     add_variation_mode_argument(parser)
     add_clustering_mode_argument(parser)
