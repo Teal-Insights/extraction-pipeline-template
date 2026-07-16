@@ -3486,7 +3486,10 @@ def insert_helper_source(source: str, helper_source: str) -> str:
         raise ValueError("helper_source must contain exactly one FunctionDef")
     helper_name = helper_defs[0].name
     if re.search(rf"^def {re.escape(helper_name)}\(", source, re.MULTILINE):
-        return source
+        raise ValueError(
+            f"helper {helper_name!r} already exists; schedule allocation must "
+            "assign a unique name rather than overwrite"
+        )
     if FORMULA_SECTION_MARKER not in source:
         raise ValueError(f"Missing section marker {FORMULA_SECTION_MARKER!r}")
 
@@ -3616,7 +3619,14 @@ def _iter_function_defs(body: list[ast.stmt]) -> list[ast.FunctionDef]:
 
 
 def validate_refactored_internals(source: str) -> None:
-    ast.parse(source)
+    module = ast.parse(source)
+    seen_names: set[str] = set()
+    for node in module.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name in seen_names:
+            raise ValueError(f"duplicate top-level function definition: {node.name!r}")
+        seen_names.add(node.name)
     compile(source, "internals.py", "exec")
 
 
@@ -3744,9 +3754,7 @@ def refactor_internals_all_clusters(
         input_vectors = build_default_input_vectors()
 
     ordered_units = compute_refactor_schedule(projection, clusters)
-    existing_helper_names = _function_names(
-        internals_index.source, index=internals_index
-    )
+    existing_helper_names = internals_index.semantic_helper_names
     allocated_helper_names = allocate_schedule_helper_names(
         tuple(unit.members for unit in ordered_units),
         address_to_series_id,

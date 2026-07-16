@@ -483,3 +483,61 @@ def test_record_refactor_buckets_schedules_inter_cluster_cycle_mcve(
         ("Engine!B3",),
         ("Engine!C3",),
     ]
+
+
+def test_record_refactor_buckets_allocates_against_semantic_helper_names(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Record and apply paths must share the semantic-helper existing-name set."""
+    graph, bindings = inter_cluster_cycle_graph()
+    config = replace(synthetic_pipeline_config_fixture, clustering_mode="ast")
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def family_b(ctx):\n    return 0.0\ndef not_semantic(x):\n    return x\n",
+        encoding="utf-8",
+    )
+    seen_existing: list[frozenset[str]] = []
+
+    def fake_allocate(
+        unit_members: object,
+        address_to_series_id: object,
+        *,
+        existing_names: frozenset[str] = frozenset(),
+    ) -> tuple[str, ...]:
+        seen_existing.append(existing_names)
+        count = len(unit_members)  # type: ignore[arg-type]
+        return tuple(f"helper_{index}" for index in range(count))
+
+    with (
+        patch(
+            "src.record_refactor_buckets.allocate_schedule_helper_names",
+            side_effect=fake_allocate,
+        ),
+        patch(
+            "src.record_refactor_buckets.build_singleton_refactor_context",
+            return_value=None,
+        ),
+        patch(
+            "src.record_refactor_buckets.build_cluster_refactor_context",
+            return_value=None,
+        ),
+    ):
+        record_refactor_buckets(
+            config,
+            graph=graph,
+            internals_path=internals_path,
+            refactor_graph=graph,
+            internal_binding_index=None,
+            layout=None,
+            compression="optimal",
+            bound_address_keys=bindings,
+            address_to_series_id={
+                "Engine!B2": "family_b",
+                "Engine!C2": "family_c",
+                "Engine!B3": "family_b",
+                "Engine!C3": "family_c",
+            },
+        )
+
+    assert seen_existing == [frozenset({"family_b"})]

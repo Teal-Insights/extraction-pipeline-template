@@ -29,10 +29,13 @@ from src.internals_refactor import (
     SingletonRefactorContext,
     SingletonRefactorLLMResponse,
     SingletonRefactorResponse,
+    FORMULA_SECTION_MARKER,
     apply_cluster_collapse,
     apply_phase_c,
     apply_singleton_refactor_plan,
     build_cluster_refactor_context,
+    insert_helper_source,
+    validate_refactored_internals,
     build_cluster_refactor_prompt_context,
     build_singleton_refactor_context,
     build_singleton_refactor_prompt_context,
@@ -327,6 +330,27 @@ def test_validate_cluster_allows_locked_helper_name_already_in_internals() -> No
             ),
             internals_source=PRISTINE_CLUSTER,
         )
+
+
+def test_validate_refactored_internals_rejects_duplicate_top_level_defs() -> None:
+    source = """
+def shocked_path_internal(ctx):
+    return 1.0
+
+def shocked_path_internal(ctx):
+    return 2.0
+"""
+    with pytest.raises(ValueError, match="duplicate top-level function"):
+        validate_refactored_internals(source)
+
+
+def test_insert_helper_source_rejects_existing_helper_name() -> None:
+    source = (
+        f"{FORMULA_SECTION_MARKER}\n\ndef shocked_path_internal(ctx):\n    return 1.0\n"
+    )
+    helper = "def shocked_path_internal(ctx):\n    return 2.0\n"
+    with pytest.raises(ValueError, match="already exists"):
+        insert_helper_source(source, helper)
 
 
 def test_validate_cluster_skips_engine_column_check_without_projection_layout() -> None:
@@ -2505,6 +2529,142 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
         "cluster_0_g2",
         "cluster_1_g3",
     ]
+
+
+def test_refactor_internals_all_clusters_passes_unique_allocated_helper_names(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Peel schedule units receive distinct expected_helper_name kwargs before LLM."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import FormulaCluster
+    from src.refactor_order import compute_refactor_schedule
+
+    family_a = FormulaCluster(
+        cluster_id=0,
+        members=("Engine!A1", "Engine!A2", "Engine!A3"),
+        canonical_template="=PRIOR",
+        row=None,
+    )
+    family_b = FormulaCluster(
+        cluster_id=1,
+        members=("Engine!B1",),
+        canonical_template="=Engine!A1",
+        row=None,
+    )
+
+    class _ChainWithCrossHingeProjection:
+        def get_dependencies(self, address: str) -> tuple[str, ...]:
+            deps = {
+                "Engine!A1": (),
+                "Engine!B1": ("Engine!A1",),
+                "Engine!A2": ("Engine!A1", "Engine!B1"),
+                "Engine!A3": ("Engine!A2",),
+            }
+            return deps.get(address, ())
+
+    projection = cast(ProjectionResult, _ChainWithCrossHingeProjection())
+    clusters = (family_a, family_b)
+    scheduled = [
+        unit.members for unit in compute_refactor_schedule(projection, clusters)
+    ]
+    assert scheduled == [
+        ("Engine!A1",),
+        ("Engine!B1",),
+        ("Engine!A2", "Engine!A3"),
+    ]
+
+    internals_path = tmp_path / "internals.py"
+    # Existing semantic helper blocks the bare series_id for peels.
+    internals_path.write_text(
+        "def shocked_path_internal(ctx):\n    return 0.0\n"
+        "def not_semantic(x):\n    return x\n",
+        encoding="utf-8",
+    )
+
+    captured: list[tuple[tuple[str, ...], str | None, frozenset[str] | None]] = []
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        captured.append(
+            (
+                cluster.members,
+                cast(str | None, kwargs.get("expected_helper_name")),
+                cast(frozenset[str] | None, kwargs.get("existing_helper_names")),
+            )
+        )
+        return SimpleNamespace(address=cluster.members[0])
+
+    def fake_build_cluster(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        captured.append(
+            (
+                cluster.members,
+                cast(str | None, kwargs.get("expected_helper_name")),
+                cast(frozenset[str] | None, kwargs.get("existing_helper_names")),
+            )
+        )
+        return SimpleNamespace(members=cluster.members)
+
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(module, "build_cluster_refactor_context", fake_build_cluster)
+    monkeypatch.setattr(
+        module,
+        "refactor_internals_singleton",
+        lambda *_a, **_k: object(),
+    )
+    monkeypatch.setattr(
+        module,
+        "refactor_internals_cluster",
+        lambda *_a, **_k: SimpleNamespace(
+            response=None,
+            helper_name="unused",
+            wrappers_applied=(),
+            dry_run=True,
+            source="",
+        ),
+    )
+
+    module.refactor_internals_all_clusters(
+        projection,
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=True,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!A1": "shocked_path_internal",
+            "Engine!A2": "shocked_path_internal",
+            "Engine!A3": "shocked_path_internal",
+            "Engine!B1": "hinge_helper",
+        },
+    )
+
+    helper_names = [name for _members, name, _reserved in captured]
+    assert helper_names == [
+        "shocked_path_internal_2",
+        "hinge_helper",
+        "shocked_path_internal_3",
+    ]
+    assert len(set(helper_names)) == len(helper_names)
+    # Non-semantic `not_semantic` must not participate in schedule allocation blocking.
+    first_reserved = captured[0][2]
+    assert first_reserved is not None
+    assert "not_semantic" not in first_reserved
+    assert "shocked_path_internal" in first_reserved
 
 
 def test_refactor_internals_all_clusters_forwards_bound_address_keys(
