@@ -2753,3 +2753,141 @@ def test_cluster_refactor_prompts_document_fingerprint_and_mechanical_fields() -
         assert "fingerprint" in prompt.lower() or "Reference relations" in prompt
         assert "mechanically" in prompt.lower()
         assert "Do not emit `parameters` or `member_keys`" in prompt
+
+
+_READER_WITH_KWONLY = """\
+def read_primary_balance_baseline(
+    ctx: EvalContext,
+    *,
+    time_period: int,
+) -> CellValue:
+    \"\"\"Return the primary-balance baseline for a projection period.\"\"\"
+    return xl_cell(ctx, f'Inputs!B{time_period}')
+"""
+
+
+def test_singleton_refactor_prompt_includes_reader_stub_with_keyword_only_args(
+    tmp_path: Path,
+) -> None:
+    """Called read_* helpers from _readers.py must appear with real signatures."""
+    cell_source = (
+        "def cell_engine_c20(ctx):\n"
+        "    return read_primary_balance_baseline(ctx, time_period=1)\n"
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(cell_source, encoding="utf-8")
+    (tmp_path / "runtime.py").write_text(
+        "def xl_cell(ctx, address):\n    return 0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "_readers.py").write_text(_READER_WITH_KWONLY, encoding="utf-8")
+    ctx = SingletonRefactorContext(
+        address="Engine!C20",
+        function_name="cell_engine_c20",
+        canonical_template="=Inputs!B1",
+        normalized_formula="=Inputs!B1",
+        python_source=cell_source,
+        dependency_addresses=("Inputs!B1",),
+        external_dependencies=(),
+        semantic_dependencies=(),
+        call_sites=(),
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS
+        + ("read_primary_balance_baseline",),
+        naming_hints={},
+        expected_helper_name="primary_balance_baseline",
+    )
+
+    dump = build_singleton_refactor_prompt_context(
+        ctx,
+        internals_path=internals_path,
+    )
+
+    assert "def read_primary_balance_baseline(" in dump
+    assert "*, time_period: int" in dump
+
+
+def test_cluster_refactor_prompt_includes_reader_stub_with_keyword_only_args(
+    tmp_path: Path,
+) -> None:
+    """Cluster dependency stubs must include called read_* keyword-only signatures."""
+    member_sources = (
+        (
+            "def cell_engine_c6(ctx):\n"
+            "    return read_primary_balance_baseline(ctx, time_period=1)\n"
+        ),
+        (
+            "def cell_engine_d6(ctx):\n"
+            "    return read_primary_balance_baseline(ctx, time_period=2)\n"
+        ),
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text("\n\n".join(member_sources), encoding="utf-8")
+    (tmp_path / "runtime.py").write_text(
+        "def xl_cell(ctx, address):\n    return 0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "_readers.py").write_text(_READER_WITH_KWONLY, encoding="utf-8")
+    members = (
+        replace(
+            CLUSTER_MEMBERS[0],
+            python_source=member_sources[0],
+            normalized_formula="=Inputs!B1",
+        ),
+        replace(
+            CLUSTER_MEMBERS[1],
+            python_source=member_sources[1],
+            normalized_formula="=Inputs!B2",
+        ),
+    )
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        members=members,
+        fingerprint_summary=None,
+    )
+
+    dump = build_cluster_refactor_prompt_context(
+        ctx,
+        internals_path=internals_path,
+    )
+
+    assert "def read_primary_balance_baseline(" in dump
+    assert "*, time_period: int" in dump
+
+
+def test_refactor_prompt_omits_readers_when_readers_module_missing(
+    tmp_path: Path,
+) -> None:
+    """Older exports without _readers.py remain a no-op for prompt stubs."""
+    cell_source = (
+        "def cell_engine_c20(ctx):\n"
+        "    return read_primary_balance_baseline(ctx, time_period=1)\n"
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(cell_source, encoding="utf-8")
+    (tmp_path / "runtime.py").write_text(
+        "def xl_cell(ctx, address):\n    return 0\n",
+        encoding="utf-8",
+    )
+    ctx = SingletonRefactorContext(
+        address="Engine!C20",
+        function_name="cell_engine_c20",
+        canonical_template="=Inputs!B1",
+        normalized_formula="=Inputs!B1",
+        python_source=cell_source,
+        dependency_addresses=("Inputs!B1",),
+        external_dependencies=(),
+        semantic_dependencies=(),
+        call_sites=(),
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS
+        + ("read_primary_balance_baseline",),
+        naming_hints={},
+        expected_helper_name="primary_balance_baseline",
+    )
+
+    dump = build_singleton_refactor_prompt_context(
+        ctx,
+        internals_path=internals_path,
+    )
+
+    dependencies = dump.split("Dependencies:", 1)[1]
+    assert "def read_primary_balance_baseline(" not in dependencies
