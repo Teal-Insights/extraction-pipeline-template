@@ -33,7 +33,7 @@ from src.refactor_bindings import (  # noqa: E402
     build_address_to_series_id,
     build_bound_address_keys,
 )
-from src.refactor_order import compute_refactor_schedule  # noqa: E402
+from src.refactor_order import compute_refactor_schedule_with_diagnostics  # noqa: E402
 from src.subgraph_projection import build_refactor_projection  # noqa: E402
 
 IncludeSection = Literal["changes", "members", "fingerprints"]
@@ -108,7 +108,10 @@ def _print_mode_report(
     member_total = sum(len(cluster.members) for cluster in clusters)
     series_count = _series_count_for_clusters(clusters, address_to_series_id)
     family_count = len(clusters)
-    schedule_units = compute_refactor_schedule(projection, clusters)
+    schedule_units, report = compute_refactor_schedule_with_diagnostics(
+        projection,
+        clusters,
+    )
     slice_count = len(schedule_units)
     singleton_slices = sum(1 for unit in schedule_units if len(unit.members) == 1)
 
@@ -120,11 +123,24 @@ def _print_mode_report(
         f"scheduled slices: {slice_count} "
         f"({slice_count - singleton_slices} multi-member, {singleton_slices} singleton)"
     )
+    print(
+        f"schedule path={report.path}; "
+        f"emits: dag={report.dag_emits} "
+        f"whole_family={report.whole_family_emits} peel={report.peel_emits}"
+    )
     print(f"member cells: {member_total}")
     sizes = sorted((len(cluster.members) for cluster in clusters), reverse=True)
     if sizes:
         top = ", ".join(str(size) for size in sizes[:5])
         print(f"largest families by member count: {top}")
+    worst = report.families_by_unit_count[:5]
+    if worst:
+        worst_bits = ", ".join(
+            f"family {stats.parent_cluster_id}→{stats.unit_count}u"
+            f"/{stats.member_count}m"
+            for stats in worst
+        )
+        print(f"worst family slice fan-out: {worst_bits}")
     print()
     if "members" not in include:
         return
