@@ -7,9 +7,11 @@ excel-grapher version. Rerun after changing the workbook, ``bindings/*.bindings.
 
     uv run python -m scripts.regenerate_graph_cache
 
-Use ``--force`` to rebuild even when current entries already exist. Commit the
-updated ``.cache/dependency-graph`` artifacts when your downstream pipeline
-chooses to vendor the cache (override ``.gitignore`` for that directory).
+Use ``--force`` to rebuild even when current entries already exist. Force also
+clears ``.cache/series-resolution`` before pruning it to keys derived from the
+current graph cache keys. Commit the updated ``.cache/dependency-graph``
+artifacts when your downstream pipeline chooses to vendor the cache (override
+``.gitignore`` for that directory).
 """
 
 from __future__ import annotations
@@ -34,6 +36,12 @@ from src.pipeline_config import (  # noqa: E402
     load_pipeline_config,
     validate_pipeline_config,
 )
+from src.series_resolution_cache import (  # noqa: E402
+    COMMITTED_SERIES_RESOLUTION_CACHE_DIR,
+    clear_series_resolution_cache,
+    prune_stale_series_resolution_cache_entries,
+    series_resolution_cache_key,
+)
 
 
 def graph_cache_target_bundles(config) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -51,6 +59,11 @@ def regenerate_graph_cache(
     config = load_pipeline_config()
     validate_pipeline_config(config)
     dynamic_refs = DynamicRefConfig.from_constraints(config.constraints, {})
+
+    if force:
+        clear_series_resolution_cache(
+            cache_dir=COMMITTED_SERIES_RESOLUTION_CACHE_DIR,
+        )
 
     current_keys: set[str] = set()
     for label, targets in graph_cache_target_bundles(config):
@@ -76,6 +89,16 @@ def regenerate_graph_cache(
         cache_dir=COMMITTED_GRAPH_CACHE_DIR,
     ):
         print(f"pruned stale cache entry: {filename}")
+
+    series_keys = {
+        series_resolution_cache_key(graph_cache_key=cache_key)
+        for cache_key in current_keys
+    }
+    for filename in prune_stale_series_resolution_cache_entries(
+        series_keys,
+        cache_dir=COMMITTED_SERIES_RESOLUTION_CACHE_DIR,
+    ):
+        print(f"pruned stale series-resolution cache entry: {filename}")
     return current_keys
 
 
