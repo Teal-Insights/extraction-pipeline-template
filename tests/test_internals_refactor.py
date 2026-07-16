@@ -309,6 +309,26 @@ def test_validate_cluster_accepts_well_formed_response() -> None:
         )
 
 
+def test_validate_cluster_allows_locked_helper_name_already_in_internals() -> None:
+    """Re-applying the schedule-allocated helper must not look like a foreign collision."""
+    with patch(
+        "src.internals_refactor._resolved_projection_layout",
+        return_value=TEST_LAYOUT,
+    ):
+        validate_cluster_refactor_response(
+            CLUSTER_CONTEXT,
+            _cluster_response(),
+            existing_names=frozenset(
+                {
+                    "cell_engine_c6",
+                    "cell_engine_d6",
+                    CLUSTER_CONTEXT.expected_helper_name,
+                }
+            ),
+            internals_source=PRISTINE_CLUSTER,
+        )
+
+
 def test_validate_cluster_skips_engine_column_check_without_projection_layout() -> None:
     """Bindings already triangulate members; layout mapping is optional."""
     with patch(
@@ -2253,7 +2273,12 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
         workbook_path=tmp_path / "workbook.xlsx",
         dry_run=False,
         parity_gate=False,
-        address_to_series_id={},
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!B3": "family_b",
+            "Engine!C3": "family_c",
+        },
     )
 
     # One initial index + one rebuild per successful singleton apply (4 units).
@@ -2390,7 +2415,12 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
         workbook_path=tmp_path / "workbook.xlsx",
         dry_run=True,
         parity_gate=False,
-        address_to_series_id={},
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!B3": "family_b",
+            "Engine!C3": "family_c",
+        },
     )
 
     assert scheduled_members == [
@@ -2468,7 +2498,10 @@ def test_refactor_internals_all_clusters_forwards_bound_address_keys(
         bound_address_keys=cast(dict[str, dict[str, BindingKeyValue]], bindings),
         dry_run=True,
         parity_gate=False,
-        address_to_series_id={},
+        address_to_series_id={
+            "Engine!B2": "family_bc",
+            "Engine!C2": "family_bc",
+        },
     )
 
     assert received["bound_address_keys"] is bindings
