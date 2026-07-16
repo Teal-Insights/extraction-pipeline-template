@@ -3,7 +3,7 @@ from __future__ import annotations
 import heapq
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from src.formula_clustering import ClusterableGraph, FormulaCluster
@@ -249,13 +249,55 @@ def _decrease_blocker(
         blocker_buckets.setdefault(new_count, set()).add(address)
 
 
+def _within_family_peel(
+    family_id: int,
+    *,
+    family_remaining: set[str],
+    ready: set[str],
+    remaining: set[str],
+    deps: dict[str, tuple[str, ...]],
+    dependents: dict[str, tuple[str, ...]],
+    address_to_parent: dict[str, int],
+) -> tuple[str, ...]:
+    """Leafmost seeds, then upward closure within family until external walls."""
+    if not family_remaining:
+        return ()
+
+    peel: set[str] = {address for address in family_remaining if address in ready}
+    queue: deque[str] = deque(peel)
+    while queue:
+        address = queue.popleft()
+        for dependent in dependents.get(address, ()):
+            if dependent not in family_remaining or dependent in peel:
+                continue
+            outstanding = [dep for dep in deps[dependent] if dep in remaining]
+            if any(address_to_parent.get(dep) != family_id for dep in outstanding):
+                continue
+            if all(dep in peel for dep in outstanding):
+                peel.add(dependent)
+                queue.append(dependent)
+    return tuple(sorted(peel))
+
+
 def _schedule_refactor_units_on_cycle(
     projection: ClusterableGraph,
     eligible: tuple[FormulaCluster, ...],
 ) -> tuple[RefactorUnit, ...]:
+    """Schedule through a stuck inter-family graph by preferring whole families.
+
+    Loop:
+    1. If any remaining family has no outstanding cross-family hinges, schedule
+       that whole remaining family as one unit (``cluster_id`` ascending).
+    2. Otherwise peel one family's within-family ready frontier (leafmost seeds,
+       upward closure stopping at external walls), choosing among peelable
+       families with the unblock heuristic.
+    3. Repeat — peels are only a fallback when no whole family is ready.
+    """
     clusters_by_id = {cluster.cluster_id: cluster for cluster in eligible}
     address_to_parent: dict[str, int] = {}
+    remaining_by_family: dict[int, set[str]] = {}
     for cluster in eligible:
+        remaining_by_family[cluster.cluster_id] = set(cluster.members)
         for address in cluster.members:
             address_to_parent[address] = cluster.cluster_id
 
@@ -264,6 +306,20 @@ def _schedule_refactor_units_on_cycle(
     blocker_count = {
         address: sum(1 for dependency in deps[address] if dependency in remaining)
         for address in remaining
+    }
+    cross_blocker_count = {
+        address: sum(
+            1
+            for dependency in deps[address]
+            if dependency in remaining
+            and address_to_parent.get(dependency) != address_to_parent[address]
+        )
+        for address in remaining
+    }
+    # Members in each family that still have a cross-family hinge.
+    family_cross_blocked: dict[int, int] = {
+        family_id: sum(1 for address in members if cross_blocker_count[address] > 0)
+        for family_id, members in remaining_by_family.items()
     }
     ready: set[str] = set()
     blocker_buckets: dict[int, set[str]] = {}
@@ -276,25 +332,9 @@ def _schedule_refactor_units_on_cycle(
     units: list[RefactorUnit] = []
     refactor_group_id = 0
 
-    while remaining:
-        if not ready:
-            raise ValueError(
-                "No refactor-ready members remain but schedule is incomplete"
-            )
-
-        ready_by_family: dict[int, list[str]] = {}
-        for address in ready:
-            parent_id = address_to_parent[address]
-            ready_by_family.setdefault(parent_id, []).append(address)
-
-        parent_id = _select_ready_parent_cluster(
-            ready_by_family,
-            blocker_buckets=blocker_buckets,
-            deps=deps,
-        )
-        batch = tuple(sorted(ready_by_family[parent_id]))
+    def _emit(parent_id: int, batch: tuple[str, ...]) -> None:
+        nonlocal refactor_group_id
         parent = clusters_by_id[parent_id]
-
         units.append(
             RefactorUnit(
                 parent_cluster_id=parent_id,
@@ -305,9 +345,13 @@ def _schedule_refactor_units_on_cycle(
             )
         )
         refactor_group_id += 1
+        family_remaining = remaining_by_family[parent_id]
         for address in batch:
             remaining.remove(address)
+            family_remaining.discard(address)
             ready.discard(address)
+            if cross_blocker_count[address] > 0:
+                family_cross_blocked[parent_id] -= 1
             for dependent in dependents.get(address, ()):
                 if dependent not in remaining:
                     continue
@@ -317,6 +361,51 @@ def _schedule_refactor_units_on_cycle(
                     blocker_buckets=blocker_buckets,
                     ready=ready,
                 )
+                if address_to_parent[dependent] != address_to_parent[address]:
+                    old_cross = cross_blocker_count[dependent]
+                    cross_blocker_count[dependent] = old_cross - 1
+                    if old_cross == 1:
+                        family_cross_blocked[address_to_parent[dependent]] -= 1
+
+    while remaining:
+        ready_family_ids = sorted(
+            family_id
+            for family_id, members in remaining_by_family.items()
+            if members and family_cross_blocked[family_id] == 0
+        )
+        if ready_family_ids:
+            parent_id = ready_family_ids[0]
+            batch = tuple(sorted(remaining_by_family[parent_id]))
+            _emit(parent_id, batch)
+            continue
+
+        peel_by_family: dict[int, list[str]] = {}
+        for family_id, family_remaining in remaining_by_family.items():
+            if not family_remaining:
+                continue
+            peel = _within_family_peel(
+                family_id,
+                family_remaining=family_remaining,
+                ready=ready,
+                remaining=remaining,
+                deps=deps,
+                dependents=dependents,
+                address_to_parent=address_to_parent,
+            )
+            if peel:
+                peel_by_family[family_id] = list(peel)
+
+        if not peel_by_family:
+            raise ValueError(
+                "No whole family or within-family peel remains but schedule is incomplete"
+            )
+
+        parent_id = _select_ready_parent_cluster(
+            peel_by_family,
+            blocker_buckets=blocker_buckets,
+            deps=deps,
+        )
+        _emit(parent_id, tuple(sorted(peel_by_family[parent_id])))
 
     return tuple(units)
 
@@ -329,8 +418,9 @@ def compute_refactor_schedule(
 
     When the inter-family cluster graph is acyclic, each eligible family is one
     unit in the same order as ``compute_cluster_refactor_order``. When families
-    form a cycle, members are scheduled in ready subsets that respect the
-    cell-level dependency graph.
+    form a cycle, prefer scheduling whole remaining families whenever any is
+    free of cross-family hinges; only then peel a within-family ready frontier
+    to unblock the family DAG.
     """
     eligible = tuple(cluster for cluster in clusters if cluster.members)
     if not eligible:
@@ -355,13 +445,24 @@ def compute_refactor_schedule(
         path = "cycle_split"
 
     elapsed = time.perf_counter() - started
-    singleton_units = sum(1 for unit in units if len(unit.members) == 1)
+    singleton_schedule_units = sum(1 for unit in units if len(unit.members) == 1)
+    multi_member_schedule_units = len(units) - singleton_schedule_units
+    multi_member_families = sum(1 for cluster in eligible if len(cluster.members) > 1)
+    singleton_families = len(eligible) - multi_member_families
     logger.info(
-        "refactor schedule path=%s families=%d units=%d singletons=%d elapsed=%.3fs",
+        "refactor schedule path=%s "
+        "fingerprint_families=%d "
+        "(multi_member_families=%d singleton_families=%d) "
+        "schedule_units=%d "
+        "(multi_member_schedule_units=%d singleton_schedule_units=%d) "
+        "elapsed=%.3fs",
         path,
         len(eligible),
+        multi_member_families,
+        singleton_families,
         len(units),
-        singleton_units,
+        multi_member_schedule_units,
+        singleton_schedule_units,
         elapsed,
     )
     return units
