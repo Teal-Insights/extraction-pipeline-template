@@ -2612,13 +2612,13 @@ def build_cluster_refactor_prompt_context(
     )
 
 
+def _type_hint_runtime_imports(source: str) -> set[str]:
+    """Collect allowlisted type-hint names that appear in refactored source."""
+    return {name for name in ALLOWED_REFACTOR_TYPE_HINT_NAMES if name in source}
+
+
 def _cluster_runtime_imports(response: ClusterRefactorResponse) -> set[str]:
-    imports: set[str] = set()
-    if "EvalContext" in response.helper_source:
-        imports.add("EvalContext")
-    if "CellValue" in response.helper_source:
-        imports.add("CellValue")
-    return imports
+    return _type_hint_runtime_imports(response.helper_source)
 
 
 def ensure_cluster_refactor_imports(
@@ -2632,10 +2632,7 @@ def ensure_cluster_refactor_imports(
 
 
 def _singleton_runtime_imports(response: SingletonRefactorResponse) -> set[str]:
-    imports: set[str] = set()
-    if "EvalContext" in response.symbol_source:
-        imports.add("EvalContext")
-    return imports
+    return _type_hint_runtime_imports(response.symbol_source)
 
 
 def _merge_runtime_imports(source: str, symbols: set[str]) -> str:
