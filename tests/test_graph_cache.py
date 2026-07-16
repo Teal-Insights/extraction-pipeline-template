@@ -28,18 +28,24 @@ from src.projection_cache import (
     projection_cache_key,
     rehydrate_projection_result,
 )
+from src.series_resolution_cache import DEFAULT_SERIES_RESOLUTION_CACHE_DIR
 from src.subgraph_projection import build_refactor_projection
 from tests.fixtures.synthetic_pipeline import (
     CONSTRAINTS,
     synthetic_pipeline_config,
     write_synthetic_workbook,
 )
-from tests.fixtures.test_state import REPO_GRAPH_CACHE_DIR, REPO_PROJECTION_CACHE_DIR
+from tests.fixtures.test_state import (
+    REPO_GRAPH_CACHE_DIR,
+    REPO_PROJECTION_CACHE_DIR,
+    REPO_SERIES_RESOLUTION_CACHE_DIR,
+)
 
 
 def test_pytest_uses_isolated_pipeline_disk_cache() -> None:
     assert DEFAULT_GRAPH_CACHE_DIR != REPO_GRAPH_CACHE_DIR
     assert DEFAULT_PROJECTION_CACHE_DIR != REPO_PROJECTION_CACHE_DIR
+    assert DEFAULT_SERIES_RESOLUTION_CACHE_DIR != REPO_SERIES_RESOLUTION_CACHE_DIR
 
 
 @pytest.fixture
