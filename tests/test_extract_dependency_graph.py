@@ -138,11 +138,39 @@ def _export_generated_package_with_mocked_codegen(
     return refactor
 
 
+def test_export_generated_package_writes_under_isolated_dist_root(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    dist_root = tmp_path / "dist"
+    config = replace(synthetic_pipeline_config_fixture, dist_root=dist_root)
+    repo_pollution = (
+        config.repo_root / "dist" / config.dist_metadata.package_name / "internals.py"
+    )
+    before = repo_pollution.read_bytes() if repo_pollution.is_file() else None
+
+    _export_generated_package_with_mocked_codegen(
+        config,
+        cluster_graph_formulas=MagicMock(return_value=()),
+    )
+
+    written = config.package_root / "internals.py"
+    assert written.is_file()
+    assert written.read_text(encoding="utf-8") == "pass\n"
+    assert written.resolve().is_relative_to(dist_root.resolve())
+    if before is None:
+        assert not repo_pollution.is_file()
+    else:
+        assert repo_pollution.read_bytes() == before
+
+
 def test_export_generated_package_passes_variation_mode_to_cluster_graph_formulas(
     synthetic_pipeline_config_fixture,
+    tmp_path: Path,
 ) -> None:
     config = replace(
         synthetic_pipeline_config_fixture,
+        dist_root=tmp_path / "dist",
         variation_mode="dominant_key_only",
     )
     cluster_graph_formulas = MagicMock(return_value=())
@@ -160,9 +188,11 @@ def test_export_generated_package_passes_variation_mode_to_cluster_graph_formula
 
 def test_export_generated_package_passes_clustering_mode_to_cluster_graph_formulas(
     synthetic_pipeline_config_fixture,
+    tmp_path: Path,
 ) -> None:
     config = replace(
         synthetic_pipeline_config_fixture,
+        dist_root=tmp_path / "dist",
         clustering_mode="ast",
     )
     cluster_graph_formulas = MagicMock(return_value=())
