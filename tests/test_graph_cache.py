@@ -16,6 +16,7 @@ from src.graph_cache import (
     DEFAULT_GRAPH_CACHE_DIR,
     bindings_fingerprint,
     clear_dependency_graph_cache,
+    clear_process_dependency_graph_cache,
     dependency_graph_cache_key,
     get_or_build_dependency_graph,
     load_dependency_graph,
@@ -113,6 +114,74 @@ def test_dependency_graph_cache_no_cache_bypasses_disk(
 
     assert not result.cache_hit
     assert load_dependency_graph(result.cache_key, cache_dir=graph_cache_dir) is None
+
+
+def test_dependency_graph_process_cache_avoids_second_unpickle(
+    synthetic_config,
+    graph_cache_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-process lookup for an unchanged key must reuse the held graph.
+
+    Warm pipeline runs previously paid a second ~10–15s gzip unpickle for the
+    same ``graph_cache_key`` when a later stage reloaded from disk.
+    """
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
+    first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    assert not first.cache_hit
+
+    load_calls = {"count": 0}
+    real_load = load_dependency_graph
+
+    def counting_load(cache_key: str, *, cache_dir: Path | None = None):
+        load_calls["count"] += 1
+        return real_load(cache_key, cache_dir=cache_dir)
+
+    monkeypatch.setattr(
+        "src.graph_cache.load_dependency_graph",
+        counting_load,
+    )
+
+    second = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+
+    assert second.cache_hit
+    assert second.graph is first.graph
+    assert load_calls["count"] == 0
+
+
+def test_dependency_graph_process_cache_bypassed_by_no_cache(
+    synthetic_config,
+    graph_cache_dir: Path,
+) -> None:
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
+    first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    second = _build_graph(
+        synthetic_config,
+        cache_dir=graph_cache_dir,
+        no_cache=True,
+    )
+
+    assert not second.cache_hit
+    assert second.graph is not first.graph
+
+
+def test_dependency_graph_process_cache_bypassed_by_force_rebuild(
+    synthetic_config,
+    graph_cache_dir: Path,
+) -> None:
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
+    first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    second = _build_graph(
+        synthetic_config,
+        cache_dir=graph_cache_dir,
+        force_rebuild=True,
+    )
+
+    assert not second.cache_hit
+    assert second.graph is not first.graph
+    third = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    assert third.cache_hit
+    assert third.graph is second.graph
 
 
 def test_dependency_graph_cache_key_changes_when_targets_change(
@@ -265,6 +334,8 @@ def test_corrupt_dependency_graph_cache_is_rebuilt(
     first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
     payload_path = graph_cache_dir / f"{first.cache_key}.pkl.gz"
     payload_path.write_bytes(b"not-a-valid-gzip-pickle")
+    # Simulate a fresh process that only has the corrupt on-disk entry.
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
 
     second = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
     assert not second.cache_hit
