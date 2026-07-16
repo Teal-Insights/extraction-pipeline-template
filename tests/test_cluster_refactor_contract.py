@@ -606,6 +606,38 @@ def test_ensure_cluster_refactor_imports_injects_eval_context() -> None:
     )
 
 
+def test_ensure_cluster_refactor_imports_injects_cellvalue() -> None:
+    response = ClusterRefactorResponse(
+        helper_name="inputs_passthrough",
+        helper_docstring="Passthrough input.\n\nArgs:\n    ctx: Context.",
+        parameters=(
+            HelperParameter(
+                name="reporting_period",
+                dimension_id="REPORTING_PERIOD",
+                dtype="int",
+            ),
+        ),
+        helper_source=dedent(
+            '''
+            def inputs_passthrough(ctx: EvalContext, reporting_period: int) -> CellValue:
+                """Passthrough input."""
+                columns = {1: "B", 2: "C"}
+                return xl_cell(ctx, f"Forecast!{columns[reporting_period]}4")
+            '''
+        ).strip(),
+        member_keys=(),
+    )
+    updated = ensure_cluster_refactor_imports(
+        INTERNALS_WITHOUT_EVAL_CONTEXT_IMPORT,
+        response,
+    )
+    import_line = next(
+        line for line in updated.splitlines() if line.startswith("from .runtime import")
+    )
+    assert "CellValue" in import_line
+    assert "EvalContext" in import_line
+
+
 def test_strip_python_string_delimiters_shared_with_singleton() -> None:
     raw = '''"""
 Summary line.

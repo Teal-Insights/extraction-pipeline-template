@@ -215,6 +215,18 @@ EVAL_CONTEXT_REFACTOR_RESPONSE = SingletonRefactorResponse(
     ).strip(),
 )
 
+CELLVALUE_REFACTOR_RESPONSE = SingletonRefactorResponse(
+    symbol_name="inputs_c1",
+    symbol_docstring="Inputs cell C1.",
+    symbol_source=dedent(
+        '''
+        def inputs_c1(ctx: EvalContext) -> CellValue:
+            """Inputs cell C1."""
+            return xl_cell(ctx, "Inputs!C1")
+        '''
+    ).strip(),
+)
+
 
 MINIMAL_PROMPT_PAYLOAD: dict[str, object] = {
     "address": "Engine!C20",
@@ -709,3 +721,53 @@ def test_apply_singleton_refactor_plan_injects_eval_context_import() -> None:
     assert "from .runtime import" in applied
     assert "EvalContext" in applied.split("from .runtime import", maxsplit=1)[1]
     assert "def united_states_excess_deaths(ctx: EvalContext) -> float:" in applied
+
+
+def test_ensure_singleton_refactor_imports_injects_cellvalue() -> None:
+    updated = ensure_singleton_refactor_imports(
+        INTERNALS_WITHOUT_EVAL_CONTEXT_IMPORT,
+        CELLVALUE_REFACTOR_RESPONSE,
+    )
+    import_line = next(
+        line for line in updated.splitlines() if line.startswith("from .runtime import")
+    )
+    assert "CellValue" in import_line
+    assert "EvalContext" in import_line
+
+
+def test_apply_singleton_refactor_plan_injects_cellvalue_import() -> None:
+    internals = dedent(
+        """
+        from __future__ import annotations
+
+        from .runtime import xl_cell
+
+        def cell_inputs_c1(ctx):
+            return xl_cell(ctx, "Inputs!C1")
+        """
+    ).strip()
+    ctx = SingletonRefactorContext(
+        address="Inputs!C1",
+        function_name="cell_inputs_c1",
+        canonical_template="=Inputs!C1",
+        normalized_formula="=Inputs!C1",
+        python_source="def cell_inputs_c1(ctx):\n    return xl_cell(ctx, 'Inputs!C1')\n",
+        dependency_addresses=(),
+        external_dependencies=(),
+        semantic_dependencies=(),
+        call_sites=(),
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS,
+        naming_hints={},
+        expected_helper_name="inputs_c1",
+    )
+    applied, _rewrite_count = apply_singleton_refactor_plan(
+        internals,
+        CELLVALUE_REFACTOR_RESPONSE,
+        ctx,
+    )
+    import_line = next(
+        line for line in applied.splitlines() if line.startswith("from .runtime import")
+    )
+    assert "CellValue" in import_line
+    assert "EvalContext" in import_line
+    assert "def inputs_c1(ctx: EvalContext) -> CellValue:" in applied
