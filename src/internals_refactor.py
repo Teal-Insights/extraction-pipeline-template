@@ -74,7 +74,7 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 28
+REFACTOR_PROMPT_VERSION = 29
 CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT = 30
 _FINGERPRINT_FALLBACK_COUNT = 0
 
@@ -2101,17 +2101,12 @@ def build_singleton_refactor_prompt_context(
     runtime_path: Path | None = None,
     internals_index: InternalsSourceIndex | None = None,
 ) -> str:
-    resolved_runtime_path = (
-        runtime_path
-        if runtime_path is not None
-        else internals_path.parent / "runtime.py"
-    )
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     return build_singleton_refactor_context_dump(
         function_name=ctx.function_name,
         address=ctx.address,
         internals_source=index.source,
-        runtime_source=resolved_runtime_path.read_text(encoding="utf-8"),
+        runtime_source=_read_runtime_source(internals_path, runtime_path=runtime_path),
         cell_metadata=_cell_metadata_for_singleton_refactor(ctx),
         index=index,
         function_source=ctx.python_source,
@@ -2562,11 +2557,6 @@ def build_cluster_refactor_prompt_context(
         for keys in ctx.expected_member_keys.values()
         for dimension_id in keys
     )
-    resolved_runtime_path = (
-        runtime_path
-        if runtime_path is not None
-        else internals_path.parent / "runtime.py"
-    )
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     filtered_vocabulary = tuple(
         item
@@ -2574,7 +2564,7 @@ def build_cluster_refactor_prompt_context(
         if item.dimension_id in varying_dimension_ids
     )
     vocabulary_yaml = _format_key_vocabulary_yaml(filtered_vocabulary)
-    runtime_source = resolved_runtime_path.read_text(encoding="utf-8")
+    runtime_source = _read_runtime_source(internals_path, runtime_path=runtime_path)
 
     summary = ctx.fingerprint_summary
     use_fingerprint = summary is not None and summary.fallback_reason is None
@@ -3808,13 +3798,23 @@ def refactor_internals_all_clusters(
 load_dotenv(repo_root / ".env")
 
 
-def _read_runtime_source(internals_path: Path) -> str:
-    """Load runtime (and optional ``_readers``) sources for callee return hints."""
+def _read_runtime_source(
+    internals_path: Path,
+    *,
+    runtime_path: Path | None = None,
+) -> str:
+    """Load runtime (and optional ``_readers``) for dependency stubs and return hints."""
     parts: list[str] = []
-    for filename in ("runtime.py", "_readers.py"):
-        path = internals_path.parent / filename
-        if path.is_file():
-            parts.append(path.read_text(encoding="utf-8"))
+    resolved_runtime = (
+        runtime_path
+        if runtime_path is not None
+        else internals_path.parent / "runtime.py"
+    )
+    if resolved_runtime.is_file():
+        parts.append(resolved_runtime.read_text(encoding="utf-8"))
+    readers_path = internals_path.parent / "_readers.py"
+    if readers_path.is_file():
+        parts.append(readers_path.read_text(encoding="utf-8"))
     return "\n".join(parts)
 
 
