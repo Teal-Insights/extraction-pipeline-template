@@ -1281,6 +1281,8 @@ def test_llm_refactor_singleton_wires_parity_into_post_validate(
 ) -> None:
     import src.internals_refactor as module
 
+    monkeypatch.setenv("MECHANICAL_REFACTOR_BODIES", "0")
+
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(
         "def cell_engine_c20(ctx):\n    return 1.0\n", encoding="utf-8"
@@ -1338,6 +1340,8 @@ def test_llm_refactor_singleton_post_validate_retries_on_parity_error(
     tmp_path: Path,
 ) -> None:
     import src.internals_refactor as module
+
+    monkeypatch.setenv("MECHANICAL_REFACTOR_BODIES", "0")
 
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(
@@ -1478,6 +1482,8 @@ def test_llm_refactor_singleton_aborts_on_declared_error_without_retry(
     tmp_path: Path,
 ) -> None:
     import src.internals_refactor as module
+
+    monkeypatch.setenv("MECHANICAL_REFACTOR_BODIES", "0")
 
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(
@@ -1658,6 +1664,8 @@ def test_llm_refactor_singleton_declared_error_writes_diagnostic_dump(
 ) -> None:
     import src.internals_refactor as module
 
+    monkeypatch.setenv("MECHANICAL_REFACTOR_BODIES", "0")
+
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(
         "def cell_engine_c20(ctx):\n    return 1.0\n", encoding="utf-8"
@@ -1734,6 +1742,8 @@ def test_llm_refactor_singleton_multi_attempt_failure_dumps_full_history(
     tmp_path: Path,
 ) -> None:
     import src.internals_refactor as module
+
+    monkeypatch.setenv("MECHANICAL_REFACTOR_BODIES", "0")
 
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(
@@ -2474,6 +2484,8 @@ def test_llm_refactor_singleton_uses_shared_index_without_rereads(
     tmp_path: Path,
 ) -> None:
     import src.internals_refactor as module
+
+    monkeypatch.setenv("MECHANICAL_REFACTOR_BODIES", "0")
 
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(
