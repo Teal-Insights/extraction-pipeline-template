@@ -35,7 +35,10 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, get_args, get
 from excel_grapher.core.cell_types import Between, RealBetween
 
 from src.pipeline_context import require_pipeline_config
-from src.runtime_symbols import allowed_runtime_symbols
+from src.runtime_symbols import (
+    discover_allowed_reader_symbols,
+    discover_allowed_runtime_symbols,
+)
 
 if TYPE_CHECKING:
     from src.internals_refactor import (
@@ -56,6 +59,11 @@ repo_root = Path(__file__).resolve().parents[1]
 def _runtime_path() -> Path:
     config = require_pipeline_config()
     return config.package_root / "runtime.py"
+
+
+def _readers_path() -> Path:
+    config = require_pipeline_config()
+    return config.package_root / "_readers.py"
 
 
 def _data_path() -> Path:
@@ -96,8 +104,8 @@ def _runtime() -> ModuleType:
     return module
 
 
-def _strip_runtime_import(source: str) -> str:
-    """Remove the ``from .runtime import (...)`` block so the source execs standalone."""
+def _strip_package_relative_imports(source: str) -> str:
+    """Remove ``from .runtime`` / ``from ._readers`` imports for standalone exec."""
     module = ast.parse(source)
     lines = source.splitlines(keepends=True)
     spans = [
@@ -105,21 +113,51 @@ def _strip_runtime_import(source: str) -> str:
         for node in module.body
         if isinstance(node, ast.ImportFrom)
         and node.level == 1
-        and node.module == "runtime"
+        and node.module in {"runtime", "_readers"}
     ]
     for start, end in sorted(spans, reverse=True):
         del lines[start:end]
     return "".join(lines)
 
 
-def exec_internals_module(source: str) -> dict[str, Any]:
-    """Execute an ``internals.py`` source string with runtime symbols injected."""
+@lru_cache(maxsize=1)
+def _readers_namespace() -> dict[str, Any]:
+    """Load exported ``_readers.py`` with runtime symbols injected."""
+    readers_path = _readers_path()
+    reader_names = discover_allowed_reader_symbols(readers_path)
+    if not reader_names:
+        return {}
     runtime = _runtime()
     namespace: dict[str, Any] = {
-        name: getattr(runtime, name) for name in allowed_runtime_symbols()
+        name: getattr(runtime, name)
+        for name in dir(runtime)
+        if not name.startswith("__")
     }
+    namespace["__name__"] = "_exported_readers_parity"
+    source = readers_path.read_text(encoding="utf-8")
+    compiled = compile(
+        _strip_package_relative_imports(source),
+        "<readers-parity>",
+        "exec",
+    )
+    exec(compiled, namespace)
+    return {name: namespace[name] for name in reader_names}
+
+
+def exec_internals_module(source: str) -> dict[str, Any]:
+    """Execute an ``internals.py`` source string with runtime/reader symbols injected."""
+    runtime = _runtime()
+    namespace: dict[str, Any] = {
+        name: getattr(runtime, name)
+        for name in discover_allowed_runtime_symbols(_runtime_path())
+    }
+    namespace.update(_readers_namespace())
     namespace["__name__"] = "_exported_internals_parity"
-    compiled = compile(_strip_runtime_import(source), "<internals-parity>", "exec")
+    compiled = compile(
+        _strip_package_relative_imports(source),
+        "<internals-parity>",
+        "exec",
+    )
     exec(compiled, namespace)
     return namespace
 

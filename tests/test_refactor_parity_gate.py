@@ -224,12 +224,43 @@ def _parity_gate_active_config(parity_gate_dist_root: Path) -> Iterator[None]:
 
 
 def test_allowed_runtime_symbols_exist_on_fixture_runtime() -> None:
-    from src.refactor_parity_gate import _runtime
-    from src.runtime_symbols import allowed_runtime_symbols
+    from src.refactor_parity_gate import _runtime, _runtime_path
+    from src.runtime_symbols import discover_allowed_runtime_symbols
 
     runtime = _runtime()
-    for symbol in allowed_runtime_symbols():
+    for symbol in discover_allowed_runtime_symbols(_runtime_path()):
         assert hasattr(runtime, symbol), symbol
+
+
+def test_exec_internals_injects_reader_symbols(parity_gate_dist_root: Path) -> None:
+    package_name = load_pipeline_config().dist_metadata.package_name
+    readers_path = parity_gate_dist_root / package_name / "_readers.py"
+    readers_path.write_text(
+        "\n".join(
+            [
+                "from .runtime import xl_cell",
+                "",
+                "def read_shock_type(ctx):",
+                "    return xl_cell(ctx, 'Inputs!B1')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    from tests.fixtures.test_state import clear_runtime_caches
+
+    clear_runtime_caches()
+    source = (
+        "from ._readers import read_shock_type\n"
+        "from .runtime import xl_cell\n\n"
+        "def _resolve_formula(ctx, address):\n"
+        "    return None\n\n"
+        "def cell_inputs_b1(ctx):\n"
+        "    return read_shock_type(ctx)\n"
+    )
+    namespace = exec_internals_module(source)
+    assert callable(namespace["read_shock_type"])
+    assert callable(namespace["cell_inputs_b1"])
 
 
 def test_exec_pristine_cluster_source() -> None:

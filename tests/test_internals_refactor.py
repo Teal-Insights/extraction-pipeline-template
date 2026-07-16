@@ -52,6 +52,7 @@ from src.internals_refactor import (
     validate_cluster_refactor_response,
     validate_parameter_names_match_vocabulary,
     validate_semantic_local_names,
+    validate_singleton_refactor_response,
     write_refactor_failure_diagnostic,
     _prepare_cluster_refactor_response,
     _prompt_for_refactor,
@@ -380,6 +381,41 @@ def test_validate_cluster_rejects_disallowed_global_reference() -> None:
             helper_def,
             allowed_names={"xl_cell", "ctx", "time_period"},
         )
+
+
+def test_validate_singleton_allowlist_accepts_reader_functions() -> None:
+    docstring = (
+        "Return the configured shock type.\n\n"
+        "Args:\n    ctx: Workbook evaluation context.\n\n"
+        "Returns:\n    Shock type label.\n"
+    )
+    ctx = SingletonRefactorContext(
+        address="Engine!C20",
+        function_name="cell_engine_c20",
+        canonical_template="=Inputs!B1",
+        normalized_formula="=Inputs!B1",
+        python_source="def cell_engine_c20(ctx):\n    return xl_cell(ctx, 'Inputs!B1')\n",
+        dependency_addresses=("Inputs!B1",),
+        external_dependencies=(),
+        semantic_dependencies=(),
+        call_sites=(),
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS + ("read_shock_type",),
+        naming_hints={},
+    )
+    source = f'''def shock_type(ctx):
+    """{docstring}"""
+    return read_shock_type(ctx)
+'''
+    validate_singleton_refactor_response(
+        ctx,
+        SingletonRefactorResponse(
+            symbol_name="shock_type",
+            symbol_docstring=docstring,
+            symbol_source=source,
+        ),
+        existing_names=frozenset({"cell_engine_c20"}),
+        internals_source="def cell_engine_c20(ctx):\n    return xl_cell(ctx, 'Inputs!B1')\n",
+    )
 
 
 def test_collapse_bindings_for_response_renders_literal_calls() -> None:

@@ -3559,10 +3559,13 @@ load_dotenv(repo_root / ".env")
 
 
 def _read_runtime_source(internals_path: Path) -> str:
-    runtime_path = internals_path.parent / "runtime.py"
-    if not runtime_path.is_file():
-        return ""
-    return runtime_path.read_text(encoding="utf-8")
+    """Load runtime (and optional ``_readers``) sources for callee return hints."""
+    parts: list[str] = []
+    for filename in ("runtime.py", "_readers.py"):
+        path = internals_path.parent / filename
+        if path.is_file():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 def llm_refactor_singleton(
