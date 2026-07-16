@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -294,7 +294,7 @@ def test_write_refactor_failure_diagnostic_persists_all_attempts(
         {"role": "assistant", "content": '{"symbol_body": "return 3.0"}'},
         {"role": "user", "content": "Your previous response failed validation..."},
     ]
-    attempts = [
+    attempts: list[dict[str, Any]] = [
         {
             "attempt": 1,
             "raw_content": '{"symbol_body": "return 1.0"}',
@@ -317,6 +317,7 @@ def test_write_refactor_failure_diagnostic_persists_all_attempts(
             "prepared_response": {"symbol_name": "helper", "symbol_body": "return 3.0"},
         },
     ]
+    last_attempt = attempts[-1]
 
     dump_dir = write_refactor_failure_diagnostic(
         kind="singleton",
@@ -324,9 +325,9 @@ def test_write_refactor_failure_diagnostic_persists_all_attempts(
         error=RuntimeError("LLM failed after 3 attempts"),
         dump_dir=tmp_path,
         user_prompt="initial user prompt",
-        llm_response=attempts[-1]["llm_response"],
-        prepared_response=attempts[-1]["prepared_response"],
-        raw_content=str(attempts[-1]["raw_content"]),
+        llm_response=last_attempt["llm_response"],
+        prepared_response=last_attempt["prepared_response"],
+        raw_content=str(last_attempt["raw_content"]),
         conversation=conversation,
         attempts=attempts,
         source="llm",
