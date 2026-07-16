@@ -302,7 +302,12 @@ def validate_runnable_cell_imports(
 
 def referenced_api_symbols(source: str, allowed: frozenset[str]) -> frozenset[str]:
     """Return allowed API symbols referenced by imports or calls in ``source``."""
-    module = ast.parse(source)
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        # Keep the LLM fix path open for cells that fail validation due to
+        # invalid Python; an empty set falls back to the full signature block.
+        return frozenset()
     found: set[str] = set()
     for node in ast.walk(module):
         if isinstance(node, ast.ImportFrom):

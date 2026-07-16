@@ -354,9 +354,9 @@ def test_fix_python_cell_with_llm_includes_signatures_and_shape_guidance() -> No
     )
 
     assert fixed == "set_example_series(ctx, [1.0, 2.0, 3.0])\n"
-    user_prompt = cast(list[dict[str, str]], fake.chat.completions.calls[0]["messages"])[
-        1
-    ]["content"]
+    user_prompt = cast(
+        list[dict[str, str]], fake.chat.completions.calls[0]["messages"]
+    )[1]["content"]
     assert "positional length mismatch" in user_prompt
     assert "keyed records" in user_prompt
     assert "set_example_series" in user_prompt
@@ -388,6 +388,41 @@ def test_fix_python_cell_with_llm_routes_deepseek_model(
     assert call["model"] == "deepseek-v4-pro"
     assert call["extra_body"] == {"thinking": {"type": "disabled"}}
     assert call["reasoning_effort"] is omit
+
+
+def test_fix_python_cell_with_llm_handles_syntax_error_source() -> None:
+    fake = _FakeClient("set_example_series(ctx, [1.0, 2.0, 3.0])\n")
+    signatures = (
+        "def set_example_series(ctx, records):\n"
+        "    pass\n"
+        "\n"
+        "def set_other(ctx, value):\n"
+        "    pass\n"
+    )
+
+    fixed = fix_python_cell_with_llm(
+        client=cast(OpenAI, fake),
+        model="gpt-5.5",
+        cell_source="set_example_series(ctx, [2.0\n",
+        error_message="SyntaxError: '(' was never closed",
+        qmd_label="01-functional-overview.qmd",
+        cell_number=1,
+        api_policy=PublicApiPolicy(
+            api_import_path="my_model.api",
+            allowed_symbols=frozenset(
+                {"set_example_series", "set_other", "make_context"}
+            ),
+        ),
+        api_signatures=signatures,
+    )
+
+    assert fixed == "set_example_series(ctx, [1.0, 2.0, 3.0])\n"
+    user_prompt = cast(
+        list[dict[str, str]], fake.chat.completions.calls[0]["messages"]
+    )[1]["content"]
+    # Unparseable cells fall back to the full signature block.
+    assert "def set_example_series" in user_prompt
+    assert "def set_other" in user_prompt
 
 
 def test_default_run_uv_script_forces_utf8_stdio(
