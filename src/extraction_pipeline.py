@@ -521,9 +521,13 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
     return RefactorStageState(config=config)
 
 
-def run_validate_stage(state: RefactorStageState) -> None:
+def run_validate_stage(
+    state: RefactorStageState,
+    *,
+    no_cache: bool = False,
+) -> None:
     """Run post-refactor differential and ship reference reports into dist/."""
-    run_post_refactor_differential(config=state.config)
+    run_post_refactor_differential(config=state.config, no_cache=no_cache)
     export_reference_reports(config=state.config)
 
 
@@ -561,7 +565,7 @@ def run_pipeline(
     if stop_after_stage == "refactor":
         return
 
-    run_validate_stage(refactor_state)
+    run_validate_stage(refactor_state, no_cache=no_cache)
     if stop_after_stage == "validate":
         return
 
@@ -607,8 +611,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--no-cache",
         action="store_true",
         help=(
-            "Bypass on-disk graph, projection, and series-resolution caches "
-            "for this run."
+            "Bypass on-disk graph, projection, series-resolution, and "
+            "exported-library differential caches for this run."
         ),
     )
     add_variation_mode_argument(parser)

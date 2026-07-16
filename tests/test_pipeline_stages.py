@@ -121,7 +121,7 @@ def test_run_pipeline_stop_after_validate_skips_document(
         )
 
     refactor.assert_called_once_with(export_state)
-    validate.assert_called_once_with(refactor_state)
+    validate.assert_called_once_with(refactor_state, no_cache=False)
     document.assert_not_called()
 
 
@@ -144,8 +144,34 @@ def test_run_pipeline_default_runs_through_document(
     ):
         run_pipeline(synthetic_pipeline_config_fixture)
 
-    validate.assert_called_once_with(refactor_state)
+    validate.assert_called_once_with(refactor_state, no_cache=False)
     document.assert_called_once_with(synthetic_pipeline_config_fixture)
+
+
+def test_run_pipeline_passes_no_cache_to_validate_stage(
+    synthetic_pipeline_config_fixture,
+) -> None:
+    export_state = object()
+    refactor_state = object()
+    with (
+        patch(
+            "src.extraction_pipeline.run_export_stage",
+            return_value=export_state,
+        ),
+        patch(
+            "src.extraction_pipeline.run_refactor_stage",
+            return_value=refactor_state,
+        ),
+        patch("src.extraction_pipeline.run_validate_stage") as validate,
+        patch("src.documentation_pipeline.run_documentation_pipeline"),
+    ):
+        run_pipeline(
+            synthetic_pipeline_config_fixture,
+            stop_after_stage="validate",
+            no_cache=True,
+        )
+
+    validate.assert_called_once_with(refactor_state, no_cache=True)
 
 
 def test_run_pipeline_rejects_unknown_stage(
