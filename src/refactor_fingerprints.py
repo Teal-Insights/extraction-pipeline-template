@@ -807,6 +807,7 @@ def format_cluster_fingerprint_dump(
     key_vocabulary_yaml: str | None = None,
     member_metadata_yaml: str | None = None,
     dependency_stubs: str | None = None,
+    helper_name: str | None = None,
 ) -> str:
     """Render fingerprint groups for inclusion in a cluster refactor prompt dump."""
     if summary.fallback_reason is not None:
@@ -830,7 +831,10 @@ def format_cluster_fingerprint_dump(
         )
 
     body = "\n\n".join(blocks)
-    sections = ["Cluster to refactor:\n", body]
+    header = "Cluster to refactor:\n"
+    if helper_name is not None:
+        header = f"Cluster to refactor (helper_name={helper_name}):\n"
+    sections = [header, body]
     if key_vocabulary_yaml is not None:
         sections.append(
             f"Key vocabulary:\n\n```yaml\n{key_vocabulary_yaml.strip()}\n```"

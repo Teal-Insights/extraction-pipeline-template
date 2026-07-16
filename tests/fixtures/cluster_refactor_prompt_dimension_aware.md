@@ -1,6 +1,4 @@
-You will be provided a fingerprint summary of a cluster of Excel formula cells: one structural skeleton, reference relations for each ref slot, a complete member key space, and a single exemplar mechanical Python translation. Your task is to refactor the cluster into a single domain-aware parameterized Python function.
-
-This cluster's formula operands vary independently along a shared semantic concept, and the series bindings declare a distinct dimension id for each role (e.g. `REF_AREA` vs `COUNTERPART_REF_AREA`, or `PROJECTION_PERIOD` vs `REFERENCE_PERIOD`, each referencing one shared concept). Parameterize the formula operand structure: declare one parameter per varying binding dimension id in the signature (the pipeline synthesizes the formal `parameters` / `member_keys` payloads mechanically).
+You will be provided a fingerprint summary of a cluster of Excel formula cells: one structural skeleton, reference relations for each ref slot (including counterpart dimensions sharing a concept), a complete member key space, and a single exemplar mechanical Python translation. Your task is to refactor the cluster into a single domain-aware parameterized Python function that selects operands by distinct binding dimension ids. The helper name is locked to `helper_name` from the cluster context (the binding `series_id`); do not invent a function name or emit a `def` line.
 
 ## Output format
 
@@ -10,11 +8,6 @@ Return only JSON matching the response schema:
 {
   "additionalProperties": false,
   "properties": {
-    "symbol_signature": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "Python function signature, including `def` keyword, `snake_case` semantic name, `ctx: EvalContext`, typed economic parameters from `key_vocabulary`, and parameter type hints. Do not include a return type hint. Null when error is true.",
-      "title": "Helper Signature"
-    },
     "symbol_docstring": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
       "description": "Google-style docstring. Include Args and Returns sections. Null when error is true.",
@@ -37,7 +30,6 @@ Return only JSON matching the response schema:
     }
   },
   "required": [
-    "symbol_signature",
     "symbol_docstring",
     "symbol_body",
     "error",
@@ -48,14 +40,14 @@ Return only JSON matching the response schema:
 }
 ```
 
-Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechanically from `key_vocabulary` and the cluster's expected binding keys (including counterpart dimension ids).
+Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechanically from `key_vocabulary` and the cluster's expected binding keys.
 
 ## Aborting
 
-- If the cluster cannot be safely refactored (for example, member keys that cannot triangulate the operand structure, or contradictory membership), set `error` to `true` and provide a concise non-empty `error_reason`.
-- When `error` is `true`, set every success field (`symbol_signature`, `symbol_docstring`, `symbol_body`) to `null`. Do not omit keys.
-- Do not invent a best-effort refactor when the correct outcome is to stop. Declaring an error ends the pipeline for human review.
+- If the cluster is unrefactorable or unrepresentable (for example contradictory membership), set `error` to `true` and provide a concise non-empty `error_reason`.
+- When `error` is `true`, set every success field (`symbol_docstring`, `symbol_body`) to `null`. Do not omit keys.
 - On success, set `error` to `null` or `false`, set `error_reason` to `null`, and populate every success field.
+- Declaring an error stops the pipeline run for human review.
 
 ## Fingerprint context
 
@@ -66,10 +58,8 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
 
 ## Signature
 
-- `symbol_signature` must take `ctx: EvalContext` plus one typed parameter per varying binding dimension id from `key_vocabulary` — including counterpart dimension ids that share a concept with another parameter.
+- The pipeline synthesizes `def {helper_name}(ctx: EvalContext, …)` mechanically from the locked name and `key_vocabulary` — including counterpart dimension ids that share a concept with another parameter. Emit only docstring and body.
 - Use `suggested_param_name` from `key_vocabulary` as each parameter's Python name; counterpart dimension ids yield distinct names (e.g. `ref_area` and `counterpart_ref_area`), so parameter names never collide.
-- Choose the function name as a clear `snake_case` semantic identifier informed by naming hints.
-- Do not include a return type hint on `symbol_signature`; the pipeline injects it mechanically from the mechanical member sources.
 - Series-constant binding keys (`scope: series`) are not parameters; bake them into the helper.
 - The cluster has already been qualified by formula structure and binding-key shape at each reference position. Do not reinterpret its membership.
 
@@ -93,11 +83,10 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
 
 ## Example: bilateral flows with counterpart dimension ids
 
-Suppose the dump shows fingerprint `=ref_0[REF_AREA,TIME_PERIOD]-ref_1[COUNTERPART_REF_AREA,TIME_PERIOD]` with identity relations on each role dim, and exemplar metadata carrying `REF_AREA`, `COUNTERPART_REF_AREA`, and `TIME_PERIOD`. Both operand rows are selected by their own dimension-id parameter.
+Suppose the dump shows fingerprint `=ref_0[REF_AREA,TIME_PERIOD]-ref_1[COUNTERPART_REF_AREA,TIME_PERIOD]` with identity relations on each role dim, locked `helper_name=bilateral_trade_balance`, and exemplar metadata carrying `REF_AREA`, `COUNTERPART_REF_AREA`, and `TIME_PERIOD`. Both operand rows are selected by their own dimension-id parameter.
 
 ```json
 {
-  "symbol_signature": "def bilateral_trade_balance(ctx: EvalContext, time_period: int, ref_area: str, counterpart_ref_area: str):",
   "symbol_docstring": "Return exports minus imports for a reporter-counterpart area pair in a period.\n\nArgs:\n    ctx: Workbook evaluation context.\n    time_period: Period index (1 through 2).\n    ref_area: Reporting area code ('USA' or 'DEU').\n    counterpart_ref_area: Counterpart area code ('CHN' or 'FRA').\n\nReturns:\n    Exports of the reporting area minus imports from the counterpart area.",
   "symbol_body": "exports_row_by_area = {'USA': 4, 'DEU': 5}\nimports_row_by_counterpart = {'CHN': 6, 'FRA': 7}\ncolumn_by_period = {1: 'C', 2: 'D'}\ncolumn = column_by_period[time_period]\nexports_value = xl_number(xl_cell(ctx, f'Data!{column}{exports_row_by_area[ref_area]}'))\nimports_value = xl_number(xl_cell(ctx, f'Data!{column}{imports_row_by_counterpart[counterpart_ref_area]}'))\nreturn exports_value - imports_value",
   "error": null,
@@ -107,4 +96,4 @@ Suppose the dump shows fingerprint `=ref_0[REF_AREA,TIME_PERIOD]-ref_1[COUNTERPA
 
 ## Naming conventions
 
-To support function naming, docstring generation, and parameterization, you will be provided a fingerprint summary (skeleton, reference relations, full key space, exemplar source), `key_vocabulary`, exemplar `expected_keys` / `binding_keys` / `binding_record` naming hints, and dependency stubs. Parameters and per-member keys (including counterpart dimension ids) are filled mechanically; focus on the semantic signature, docstring, and body.
+To support docstring generation and parameterization, you will be provided a fingerprint summary (skeleton, reference relations, full key space, exemplar source), locked `helper_name`, `key_vocabulary`, exemplar `expected_keys` / `binding_keys` / `binding_record` naming hints, and dependency stubs. The function name, parameters, and per-member keys (including counterpart dimension ids) are filled mechanically; focus on the docstring and body.

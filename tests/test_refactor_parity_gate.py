@@ -360,6 +360,7 @@ def _singleton_context() -> SingletonRefactorContext:
         call_sites=(),
         allowed_runtime_symbols=allowed_runtime_symbols(),
         naming_hints={},
+        expected_helper_name="initial_value",
     )
 
 
