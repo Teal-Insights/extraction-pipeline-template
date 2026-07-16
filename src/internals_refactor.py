@@ -62,6 +62,7 @@ from src.runtime_symbols import allowed_runtime_symbols
 from src.semantic_naming import (
     BindingRecordHints,
     _is_semantic_helper_def,
+    allocate_schedule_helper_names,
     cluster_binding_naming_hints,
     semantic_helpers_available_for_calls,
     binding_record_hints_from_cell,
@@ -721,6 +722,8 @@ def build_cluster_refactor_context(
     layout: ProjectionColumnLayout | None = None,
     internals_index: InternalsSourceIndex | None = None,
     address_to_series_id: Mapping[str, str] | None = None,
+    expected_helper_name: str | None = None,
+    existing_helper_names: frozenset[str] | None = None,
 ) -> ClusterRefactorContext | None:
     if len(cluster.members) < 2:
         return None
@@ -858,17 +861,21 @@ def build_cluster_refactor_context(
             cluster_id=cluster.cluster_id,
         )
 
-    if address_to_series_id is None:
-        raise ValueError(
-            "address_to_series_id is required to lock cluster helper names"
+    if expected_helper_name is None:
+        if address_to_series_id is None:
+            raise ValueError(
+                "address_to_series_id is required to lock cluster helper names"
+            )
+        expected_helper_name = sole_series_id_for_addresses(
+            member_address_list,
+            address_to_series_id,
         )
-    expected_helper_name = sole_series_id_for_addresses(
-        member_address_list,
-        address_to_series_id,
+    reserved_names = (
+        existing_helper_names if existing_helper_names is not None else frozenset()
     )
     validate_semantic_identifier(
         expected_helper_name,
-        existing_names=frozenset(),
+        existing_names=reserved_names - {expected_helper_name},
     )
 
     return ClusterRefactorContext(
@@ -913,6 +920,8 @@ def build_singleton_refactor_context(
     internal_binding_index: InternalBindingIndex | None = None,
     internals_index: InternalsSourceIndex | None = None,
     address_to_series_id: Mapping[str, str] | None = None,
+    expected_helper_name: str | None = None,
+    existing_helper_names: frozenset[str] | None = None,
 ) -> SingletonRefactorContext | None:
     if len(cluster.members) != 1:
         return None
@@ -942,17 +951,21 @@ def build_singleton_refactor_context(
         )
     )
 
-    if address_to_series_id is None:
-        raise ValueError(
-            "address_to_series_id is required to lock singleton helper names"
+    if expected_helper_name is None:
+        if address_to_series_id is None:
+            raise ValueError(
+                "address_to_series_id is required to lock singleton helper names"
+            )
+        expected_helper_name = sole_series_id_for_addresses(
+            (address,),
+            address_to_series_id,
         )
-    expected_helper_name = sole_series_id_for_addresses(
-        (address,),
-        address_to_series_id,
+    reserved_names = (
+        existing_helper_names if existing_helper_names is not None else frozenset()
     )
     validate_semantic_identifier(
         expected_helper_name,
-        existing_names=frozenset(),
+        existing_names=reserved_names - {expected_helper_name},
     )
 
     return SingletonRefactorContext(
@@ -1588,12 +1601,13 @@ def validate_cluster_refactor_response(
 ) -> None:
     if response.helper_name != ctx.expected_helper_name:
         raise ValueError(
-            "helper_name must equal locked series_id "
+            "helper_name must equal locked helper name "
             f"{ctx.expected_helper_name!r}, got {response.helper_name!r}"
         )
     validate_semantic_identifier(
         response.helper_name,
         existing_names=existing_names,
+        allow_name=ctx.expected_helper_name,
     )
 
     member_key_addresses = {entry.address for entry in response.member_keys}
@@ -2736,12 +2750,13 @@ def validate_singleton_refactor_response(
 ) -> None:
     if response.symbol_name != ctx.expected_helper_name:
         raise ValueError(
-            "symbol_name must equal locked series_id "
+            "symbol_name must equal locked helper name "
             f"{ctx.expected_helper_name!r}, got {response.symbol_name!r}"
         )
     validate_semantic_identifier(
         response.symbol_name,
         existing_names=existing_names,
+        allow_name=ctx.expected_helper_name,
     )
 
     if not response.symbol_name.isidentifier():
@@ -3729,12 +3744,23 @@ def refactor_internals_all_clusters(
         input_vectors = build_default_input_vectors()
 
     ordered_units = compute_refactor_schedule(projection, clusters)
+    existing_helper_names = _function_names(
+        internals_index.source, index=internals_index
+    )
+    allocated_helper_names = allocate_schedule_helper_names(
+        tuple(unit.members for unit in ordered_units),
+        address_to_series_id,
+        existing_names=existing_helper_names,
+    )
     results: list[ClusterRefactorApplyResult] = []
     responses: list[ClusterRefactorResponse] = []
     refactored_any = False
-    for unit in ordered_units:
+    for unit, helper_name in zip(ordered_units, allocated_helper_names, strict=True):
         cluster = unit.as_formula_cluster()
         diagnostic_target = refactor_failure_target(unit)
+        reserved_for_others = (
+            frozenset(allocated_helper_names) | existing_helper_names
+        ) - {helper_name}
         if len(cluster.members) == 1:
             ctx = build_singleton_refactor_context(
                 projection,
@@ -3744,6 +3770,8 @@ def refactor_internals_all_clusters(
                 internal_binding_index=internal_binding_index,
                 internals_index=internals_index,
                 address_to_series_id=address_to_series_id,
+                expected_helper_name=helper_name,
+                existing_helper_names=reserved_for_others,
             )
             if ctx is None:
                 continue
@@ -3776,6 +3804,8 @@ def refactor_internals_all_clusters(
             layout=layout,
             internals_index=internals_index,
             address_to_series_id=address_to_series_id,
+            expected_helper_name=helper_name,
+            existing_helper_names=reserved_for_others,
         )
         if ctx is None:
             continue
