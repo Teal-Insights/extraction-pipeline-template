@@ -78,6 +78,8 @@ def _seed_fingerprint_inputs(config: PipelineConfig) -> Path:
         "differential_test_exported_library.py",
         "differential_types.py",
         "differential_excel.py",
+        "workbook_labels.py",
+        "differential_scenario_inputs.py",
     ):
         (harness_dir / name).write_text(f"# {name}\n", encoding="utf-8")
     return harness_dir
@@ -207,14 +209,38 @@ def test_differential_cache_key_changes_when_workbook_changes(tmp_path: Path) ->
     assert first != second
 
 
-def test_differential_cache_key_changes_when_harness_changes(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "harness_file",
+    [
+        "differential_test_exported_library.py",
+        "differential_types.py",
+        "differential_excel.py",
+        "workbook_labels.py",
+        "differential_scenario_inputs.py",
+    ],
+)
+def test_differential_cache_key_changes_when_harness_changes(
+    tmp_path: Path, harness_file: str
+) -> None:
     config = _sample_config(tmp_path / "repo")
     harness_dir = _seed_fingerprint_inputs(config)
     first = differential_cache_key(config=config)
-    (harness_dir / "differential_test_exported_library.py").write_text(
-        "# scenarios changed\n", encoding="utf-8"
+    (harness_dir / harness_file).write_text(
+        f"# {harness_file} changed\n", encoding="utf-8"
     )
     second = differential_cache_key(config=config)
+    assert first != second
+
+
+def test_differential_cache_key_changes_when_excel_grapher_version_changes(
+    tmp_path: Path,
+) -> None:
+    config = _sample_config(tmp_path / "repo")
+    _seed_fingerprint_inputs(config)
+    with patch("src.differential_validation.version", return_value="1.0.0"):
+        first = differential_cache_key(config=config)
+    with patch("src.differential_validation.version", return_value="1.0.1"):
+        second = differential_cache_key(config=config)
     assert first != second
 
 
@@ -337,7 +363,7 @@ def test_run_post_refactor_differential_no_cache_bypasses_hit(
     run_test.assert_called_once()
 
 
-def test_run_post_refactor_differential_does_not_cache_failed_exit(
+def test_run_post_refactor_differential_records_failed_exit_without_reuse(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.delenv("CI", raising=False)
@@ -365,3 +391,41 @@ def test_run_post_refactor_differential_does_not_cache_failed_exit(
         report_dir=report_dir,
         cache_key=differential_cache_key(config=config),
     )
+
+
+def test_run_post_refactor_differential_invalidates_cache_on_exception(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    config = _sample_config(tmp_path / "repo")
+    _seed_fingerprint_inputs(config)
+    report_dir = config.repo_root / config.differential_report_dir_rel
+    cache_key = differential_cache_key(config=config)
+    _write_parity_reports(report_dir)
+    save_differential_cache_meta(
+        report_dir=report_dir, cache_key=cache_key, exit_code=0
+    )
+
+    with (
+        patch(f"{_HARNESS}.resolve_config", return_value=MagicMock()),
+        patch(
+            f"{_HARNESS}.run_differential_test",
+            side_effect=RuntimeError("excel unavailable"),
+        ),
+    ):
+        exit_code = run_post_refactor_differential(config=config, no_cache=True)
+
+    assert exit_code is None
+    assert not can_reuse_cached_differential_reports(
+        report_dir=report_dir, cache_key=cache_key
+    )
+
+    with (
+        patch(f"{_HARNESS}.resolve_config", return_value=MagicMock()),
+        patch(f"{_HARNESS}.run_differential_test", return_value=0) as run_test,
+    ):
+        retry_exit = run_post_refactor_differential(config=config)
+
+    assert retry_exit == 0
+    run_test.assert_called_once()

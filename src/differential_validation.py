@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+from importlib.metadata import version
 from pathlib import Path
 
 from src.graph_cache import file_fingerprint, stable_json
@@ -13,13 +14,15 @@ from src.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
-DIFFERENTIAL_CACHE_SCHEMA_VERSION = "1.0.0"
+DIFFERENTIAL_CACHE_SCHEMA_VERSION = "1.1.0"
 PARITY_CACHE_META_FILENAME = "parity_cache.meta.json"
 REFERENCE_REPORT_FILES = ("parity_report.csv", "parity_report.txt")
 EXPORTED_LIBRARY_HARNESS_FILES = (
     "differential_test_exported_library.py",
     "differential_types.py",
     "differential_excel.py",
+    "workbook_labels.py",
+    "differential_scenario_inputs.py",
 )
 
 
@@ -70,6 +73,7 @@ def differential_cache_key(*, config: PipelineConfig) -> str:
         "package_fingerprint": directory_fingerprint(config.package_root),
         "workbook_fingerprint": file_fingerprint(config.workbook_path),
         "harness_fingerprint": harness_fingerprint(harness_dir),
+        "excel_grapher_version": version("excel-grapher"),
     }
     return hashlib.sha256(stable_json(payload).encode()).hexdigest()
 
@@ -90,6 +94,11 @@ def save_differential_cache_meta(
         json.dumps(meta, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def invalidate_differential_cache_meta(*, report_dir: Path) -> None:
+    """Remove cache meta so a later run cannot reuse prior successful reports."""
+    (report_dir / PARITY_CACHE_META_FILENAME).unlink(missing_ok=True)
 
 
 def load_differential_cache_meta(report_dir: Path) -> dict[str, object] | None:
@@ -134,7 +143,8 @@ def run_post_refactor_differential(
     repo. Skips under CI so committed caches can be reused. Locally, skips the
     live harness when the package/workbook/harness fingerprint matches a prior
     successful run (unless ``no_cache``). Non-zero exits and harness exceptions
-    are logged as warnings; they do not abort the pipeline.
+    are logged as warnings; they do not abort the pipeline. Harness exceptions
+    invalidate cache meta so the next run retries instead of reusing a stale hit.
     """
     if running_in_ci():
         logger.warning(
@@ -188,6 +198,7 @@ def run_post_refactor_differential(
         )
         exit_code = run_differential_test(differential_config)
     except Exception:
+        invalidate_differential_cache_meta(report_dir=report_dir)
         logger.exception(
             "Exported-library differential failed with an unhandled exception; "
             "continuing so any existing reports can still be exported"
