@@ -162,6 +162,20 @@ def exec_internals_module(source: str) -> dict[str, Any]:
     return namespace
 
 
+@lru_cache(maxsize=2)
+def _golden_namespace(pristine_source: str) -> dict[str, Any]:
+    """Execute the pristine ``internals.py`` once and reuse its namespace.
+
+    The pristine oracle source is identical for every cluster and singleton in a
+    refactor run, so execing the multi-megabyte module inside each gate call
+    dominated post-response cost (~4 s per call over 800+ rewrites). The returned
+    namespace is only read during evaluation — each parity check builds a fresh
+    :class:`EvalContext` (which owns the per-run memoization ``cache``) bound to
+    ``namespace["_resolve_formula"]`` — so a single cached exec is safe to share.
+    """
+    return exec_internals_module(pristine_source)
+
+
 def make_eval_context(namespace: dict[str, Any], inputs: InputVector) -> Any:
     """Build an ``EvalContext`` bound to a module namespace's resolver."""
     runtime = _runtime()
@@ -295,20 +309,25 @@ def check_cluster_parity(
 
     runtime = _runtime()
     candidate_source = apply_refactor_plan(current_source, response, ctx)
-    golden_ns = exec_internals_module(pristine_source)
+    golden_ns = _golden_namespace(pristine_source)
     candidate_ns, helper = _load_candidate(candidate_source, response.helper_name)
 
     mismatches: list[_Mismatch] = []
     for index, inputs in enumerate(input_vectors):
+        # Build one evaluation context per input vector and share it across all
+        # members. Cluster members are the same formula shape across engine
+        # columns/rows, so they resolve overlapping dependency subtrees; a shared
+        # ``ctx.cache`` memoizes those once instead of once per member. The
+        # resolver is pure for fixed inputs, so cross-member reuse is exact.
+        golden_ctx = make_eval_context(golden_ns, inputs)
+        candidate_ctx = make_eval_context(candidate_ns, inputs)
         for entry in response.member_keys:
             literals = _parameter_literals(response.parameters, entry.keys_dict())
-            golden_ctx = make_eval_context(golden_ns, inputs)
             expected = _evaluate_golden(
                 lambda eval_ctx=golden_ctx, address=entry.address: runtime.xl_cell(
                     eval_ctx, address
                 )
             )
-            candidate_ctx = make_eval_context(candidate_ns, inputs)
             call = _format_call(response.helper_name, literals)
             actual = _evaluate_candidate(
                 lambda fn=helper, eval_ctx=candidate_ctx, kwargs=literals: fn(
@@ -360,7 +379,7 @@ def check_singleton_parity(
 
     runtime = _runtime()
     candidate_source, _ = apply_singleton_refactor_plan(current_source, response, ctx)
-    golden_ns = exec_internals_module(pristine_source)
+    golden_ns = _golden_namespace(pristine_source)
     candidate_ns, symbol = _load_candidate(candidate_source, response.symbol_name)
     call = f"{response.symbol_name}(ctx)"
 

@@ -269,6 +269,48 @@ def test_exec_pristine_cluster_source() -> None:
     assert callable(namespace["cell_engine_c6"])
 
 
+def test_golden_namespace_caches_identical_pristine_source() -> None:
+    from src.refactor_parity_gate import _golden_namespace
+
+    _golden_namespace.cache_clear()
+    first = _golden_namespace(PRISTINE_CLUSTER)
+    second = _golden_namespace(PRISTINE_CLUSTER)
+    assert first is second
+    assert callable(first["_resolve_formula"])
+
+
+def test_cluster_gate_reuses_golden_namespace_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import refactor_parity_gate as gate
+
+    exec_calls: list[str] = []
+    real_exec = gate.exec_internals_module
+
+    def tracking_exec(source: str) -> dict:
+        exec_calls.append(source)
+        return real_exec(source)
+
+    monkeypatch.setattr(gate, "exec_internals_module", tracking_exec)
+    gate._golden_namespace.cache_clear()
+
+    check_cluster_parity(
+        pristine_source=PRISTINE_CLUSTER,
+        current_source=PRISTINE_CLUSTER,
+        response=_cluster_response(CORRECT_CLUSTER_SOURCE),
+        input_vectors=CLUSTER_INPUTS,
+    )
+    check_cluster_parity(
+        pristine_source=PRISTINE_CLUSTER,
+        current_source=PRISTINE_CLUSTER,
+        response=_cluster_response(CORRECT_CLUSTER_SOURCE),
+        input_vectors=CLUSTER_INPUTS,
+    )
+
+    pristine_execs = [source for source in exec_calls if source == PRISTINE_CLUSTER]
+    assert len(pristine_execs) == 1
+
+
 def test_cluster_gate_passes_for_semantics_preserving_refactor() -> None:
     check_cluster_parity(
         pristine_source=PRISTINE_CLUSTER,
