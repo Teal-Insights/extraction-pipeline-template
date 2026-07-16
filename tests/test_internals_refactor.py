@@ -401,6 +401,72 @@ def test_validate_cluster_rejects_disallowed_global_reference() -> None:
         )
 
 
+def test_validate_allowed_global_references_treats_lambda_params_as_locals() -> None:
+    """Lambda parameters must not be reported as disallowed globals (issue #149)."""
+    source = f'''def safe_ratio(ctx, time_period):
+    """{CLUSTER_DOCSTRING}"""
+    numerator = xl_cell(ctx, 'Inputs!C1')
+    denominator = xl_cell(ctx, 'Inputs!C2')
+    return (lambda num, den: num / den if den != 0 else xl_raise(XlError.DIV))(
+        numerator, denominator
+    )
+'''
+    helper_def = _single_function_def(source)
+    assert helper_def is not None
+    validate_allowed_global_references(
+        helper_def,
+        allowed_names={"xl_cell", "xl_raise", "XlError", "ctx", "time_period"},
+    )
+
+
+def test_validate_allowed_global_references_treats_nested_def_bindings_as_locals() -> None:
+    source = f'''def safe_ratio(ctx, time_period):
+    """{CLUSTER_DOCSTRING}"""
+    numerator = xl_cell(ctx, 'Inputs!C1')
+    denominator = xl_cell(ctx, 'Inputs!C2')
+
+    def divide(num, den):
+        return num / den if den != 0 else xl_raise(XlError.DIV)
+
+    return divide(numerator, denominator)
+'''
+    helper_def = _single_function_def(source)
+    assert helper_def is not None
+    validate_allowed_global_references(
+        helper_def,
+        allowed_names={"xl_cell", "xl_raise", "XlError", "ctx", "time_period"},
+    )
+
+
+def test_validate_allowed_global_references_treats_with_as_targets_as_locals() -> None:
+    source = f'''def read_with_temp(ctx, time_period):
+    """{CLUSTER_DOCSTRING}"""
+    with open('/dev/null') as handle:
+        _ = handle.read(0)
+    return xl_cell(ctx, 'Inputs!C1')
+'''
+    helper_def = _single_function_def(source)
+    assert helper_def is not None
+    validate_allowed_global_references(
+        helper_def,
+        allowed_names={"xl_cell", "open", "ctx", "time_period"},
+    )
+
+
+def test_validate_allowed_global_references_still_rejects_free_names_in_lambda() -> None:
+    source = f'''def safe_ratio(ctx, time_period):
+    """{CLUSTER_DOCSTRING}"""
+    return (lambda num, den: mystery_helper(num, den))(1, 2)
+'''
+    helper_def = _single_function_def(source)
+    assert helper_def is not None
+    with pytest.raises(ValueError, match="disallowed global names.*mystery_helper"):
+        validate_allowed_global_references(
+            helper_def,
+            allowed_names={"xl_cell", "ctx", "time_period"},
+        )
+
+
 def test_validate_cluster_allowlist_excludes_cell_star_names() -> None:
     """``cell_*`` calls are already banned; do not dump them in allowlist errors."""
     ctx = replace(

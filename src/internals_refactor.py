@@ -1437,13 +1437,26 @@ def _names_from_target(target: ast.expr) -> set[str]:
     return set()
 
 
+def _argument_names(args: ast.arguments) -> set[str]:
+    names = {arg.arg for arg in args.posonlyargs}
+    names.update(arg.arg for arg in args.args)
+    names.update(arg.arg for arg in args.kwonlyargs)
+    if args.vararg is not None:
+        names.add(args.vararg.arg)
+    if args.kwarg is not None:
+        names.add(args.kwarg.arg)
+    return names
+
+
 def _local_binding_names(function_def: ast.FunctionDef) -> set[str]:
-    parameter_names = {arg.arg for arg in function_def.args.args}
+    parameter_names = _argument_names(function_def.args)
     names: set[str] = set()
     for node in ast.walk(function_def):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 names.update(_names_from_target(target))
+        elif isinstance(node, ast.AnnAssign):
+            names.update(_names_from_target(node.target))
         elif isinstance(node, ast.NamedExpr):
             names.update(_names_from_target(node.target))
         elif isinstance(node, ast.AugAssign):
@@ -1454,6 +1467,15 @@ def _local_binding_names(function_def: ast.FunctionDef) -> set[str]:
             names.update(_names_from_target(node.target))
         elif isinstance(node, ast.ExceptHandler) and node.name is not None:
             names.add(node.name)
+        elif isinstance(node, ast.Lambda):
+            names.update(_argument_names(node.args))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node is function_def:
+                continue
+            names.add(node.name)
+            names.update(_argument_names(node.args))
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            names.update(_names_from_target(node.optional_vars))
     return names - parameter_names
 
 
@@ -1522,7 +1544,7 @@ def validate_allowed_global_references(
     *,
     allowed_names: set[str],
 ) -> None:
-    parameter_names = {arg.arg for arg in function_def.args.args}
+    parameter_names = _argument_names(function_def.args)
     local_names = _local_binding_names(function_def) | parameter_names
     builtin_names = set(dir(builtins))
     disallowed: set[str] = set()
