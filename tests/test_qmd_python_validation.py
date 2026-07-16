@@ -10,6 +10,7 @@ from src.qmd_python_validation import (
     PublicApiPolicy,
     aggregate_python_cells,
     extract_python_cells,
+    filter_api_signatures,
     fix_python_cell_with_llm,
     merge_dev_dependencies,
     parse_missing_package,
@@ -390,6 +391,52 @@ def test_fix_python_cell_with_llm_routes_deepseek_model(
     assert call["reasoning_effort"] is omit
 
 
+def test_filter_api_signatures_returns_empty_when_no_symbols() -> None:
+    signatures = (
+        "def set_example_series(ctx, records):\n"
+        "    pass\n"
+        "\n"
+        "def set_other(ctx, value):\n"
+        "    pass\n"
+    )
+    assert filter_api_signatures(signatures, frozenset()) == ""
+    assert filter_api_signatures(signatures, frozenset({"missing"})) == ""
+
+
+def test_fix_python_cell_with_llm_omits_signatures_without_api_refs() -> None:
+    fake = _FakeClient("print(1)\n")
+    signatures = (
+        "def set_example_series(ctx, records):\n"
+        "    pass\n"
+        "\n"
+        "def set_other(ctx, value):\n"
+        "    pass\n"
+    )
+
+    fix_python_cell_with_llm(
+        client=cast(OpenAI, fake),
+        model="gpt-5.5",
+        cell_source="print(unknown)\n",
+        error_message="NameError: name 'unknown' is not defined",
+        qmd_label="guide.qmd",
+        cell_number=1,
+        api_policy=PublicApiPolicy(
+            api_import_path="my_model.api",
+            allowed_symbols=frozenset(
+                {"set_example_series", "set_other", "make_context"}
+            ),
+        ),
+        api_signatures=signatures,
+    )
+
+    user_prompt = cast(
+        list[dict[str, str]], fake.chat.completions.calls[0]["messages"]
+    )[1]["content"]
+    assert "Relevant my_model.api signatures" not in user_prompt
+    assert "def set_example_series" not in user_prompt
+    assert "def set_other" not in user_prompt
+
+
 def test_fix_python_cell_with_llm_handles_syntax_error_source() -> None:
     fake = _FakeClient("set_example_series(ctx, [1.0, 2.0, 3.0])\n")
     signatures = (
@@ -420,9 +467,9 @@ def test_fix_python_cell_with_llm_handles_syntax_error_source() -> None:
     user_prompt = cast(
         list[dict[str, str]], fake.chat.completions.calls[0]["messages"]
     )[1]["content"]
-    # Unparseable cells fall back to the full signature block.
+    # Unparseable cells keep only allowed names still present in the source text.
     assert "def set_example_series" in user_prompt
-    assert "def set_other" in user_prompt
+    assert "def set_other" not in user_prompt
 
 
 def test_default_run_uv_script_forces_utf8_stdio(

@@ -305,9 +305,11 @@ def referenced_api_symbols(source: str, allowed: frozenset[str]) -> frozenset[st
     try:
         module = ast.parse(source)
     except SyntaxError:
-        # Keep the LLM fix path open for cells that fail validation due to
-        # invalid Python; an empty set falls back to the full signature block.
-        return frozenset()
+        # Keep the LLM fix path open for unparseable cells, but only retain
+        # allowed names that still appear as identifiers in the source text.
+        return frozenset(
+            name for name in allowed if re.search(rf"\b{re.escape(name)}\b", source)
+        )
     found: set[str] = set()
     for node in ast.walk(module):
         if isinstance(node, ast.ImportFrom):
@@ -322,13 +324,17 @@ def referenced_api_symbols(source: str, allowed: frozenset[str]) -> frozenset[st
 
 
 def filter_api_signatures(api_signatures: str, symbols: frozenset[str]) -> str:
-    """Keep only function definitions whose names are in ``symbols``."""
+    """Keep only function definitions whose names are in ``symbols``.
+
+    Returns an empty string when there is nothing to filter to, so large public
+    APIs are never injected wholesale into cell-fix prompts.
+    """
     if not api_signatures.strip() or not symbols:
-        return api_signatures
+        return ""
     try:
         tree = ast.parse(api_signatures)
     except SyntaxError:
-        return api_signatures
+        return ""
     lines = api_signatures.splitlines()
     blocks: list[str] = []
     for node in tree.body:
@@ -337,7 +343,7 @@ def filter_api_signatures(api_signatures: str, symbols: frozenset[str]) -> str:
             if end is None:
                 continue
             blocks.append("\n".join(lines[node.lineno - 1 : end]))
-    return "\n\n".join(blocks) if blocks else api_signatures
+    return "\n\n".join(blocks)
 
 
 def fix_python_cell_with_llm(
