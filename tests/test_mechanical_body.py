@@ -14,7 +14,7 @@ from src.mechanical_body import (
     synthesize_cluster_body,
     synthesize_singleton_body,
 )
-from src.refactor_bindings import KeyConceptSpec
+from src.refactor_bindings import BindingKeyValue, KeyConceptSpec
 from src.refactor_fingerprints import build_cluster_fingerprint_summary
 
 TIME_PERIOD_VOCAB = (
@@ -521,24 +521,20 @@ def test_unmatched_read_site_fails_synthesis() -> None:
         )
 
 
-def test_range_reads_fail_synthesis() -> None:
+# --- Constant-range INDEX/MATCH lookup family (issue #170) -------------------
+
+
+def _constant_range_summary(bodies: tuple[str, str]):
+    """Two members sharing one =SUM(Data!A1:B2) formula with custom bodies."""
     members = (
-        _member(
-            "Data!E20",
-            "=Data!E4",
-            "return xl_number(xl_range(ctx, 'Data!A1:B2'))",
-        ),
-        _member(
-            "Data!F20",
-            "=Data!F4",
-            "return xl_number(xl_range(ctx, 'Data!A1:B2'))",
-        ),
+        _member("Data!E20", "=SUM(Data!A1:B2)", bodies[0]),
+        _member("Data!F20", "=SUM(Data!A1:B2)", bodies[1]),
     )
     bound_keys = {
         "Data!E20": {"TIME_PERIOD": 4},
         "Data!F20": {"TIME_PERIOD": 5},
-        "Data!E4": {"TIME_PERIOD": 4},
-        "Data!F4": {"TIME_PERIOD": 5},
+        "Data!A1": {"LABEL_ROW": 1},
+        "Data!B2": {"LABEL_ROW": 2},
     }
     expected = {
         "Data!E20": {"TIME_PERIOD": 4},
@@ -552,12 +548,271 @@ def test_range_reads_fail_synthesis() -> None:
         layout=None,
     )
     assert summary.fallback_reason is None
-    with pytest.raises(MechanicalSynthesisError):
+    return summary, expected
+
+
+def test_constant_range_read_passes_through_verbatim() -> None:
+    body = "return xl_number(xl_range(ctx, 'Data!A1:B2'))"
+    summary, expected = _constant_range_summary((body, body))
+    draft = synthesize_cluster_body(
+        summary,
+        key_vocabulary=TIME_PERIOD_VOCAB,
+        expected_member_keys=expected,
+        helper_name="observed_value",
+    )
+    assert "xl_range(ctx, 'Data!A1:B2')" in draft.body
+    assert draft.lookup_table_names == ()
+    _assert_body_compiles(draft, ("time_period",))
+
+
+def test_non_literal_range_address_fails_synthesis() -> None:
+    body = "_t1 = read_label(ctx)\nreturn xl_number(xl_range(ctx, _t1))"
+    summary, expected = _constant_range_summary((body, body))
+    with pytest.raises(MechanicalSynthesisError, match="non_literal_range_address"):
         synthesize_cluster_body(
             summary,
             key_vocabulary=TIME_PERIOD_VOCAB,
             expected_member_keys=expected,
             helper_name="observed_value",
+        )
+
+
+def test_range_rows_reads_stay_unsupported() -> None:
+    body = "return xl_range_rows(ctx, 'Data!A1:B2')"
+    summary, expected = _constant_range_summary((body, body))
+    with pytest.raises(
+        MechanicalSynthesisError, match="unsupported_read_callee:xl_range_rows"
+    ):
+        synthesize_cluster_body(
+            summary,
+            key_vocabulary=TIME_PERIOD_VOCAB,
+            expected_member_keys=expected,
+            helper_name="observed_value",
+        )
+
+
+def test_varying_range_endpoints_fail_synthesis() -> None:
+    members = (
+        _member(
+            "Data!E20",
+            "=SUM(Data!A1:B2)",
+            "return xl_number(xl_range(ctx, 'Data!A1:B2'))",
+        ),
+        _member(
+            "Data!F20",
+            "=SUM(Data!C1:D2)",
+            "return xl_number(xl_range(ctx, 'Data!C1:D2'))",
+        ),
+    )
+    bound_keys = {
+        "Data!E20": {"TIME_PERIOD": 4},
+        "Data!F20": {"TIME_PERIOD": 5},
+        "Data!A1": {"TIME_PERIOD": 4},
+        "Data!B2": {"TIME_PERIOD": 4},
+        "Data!C1": {"TIME_PERIOD": 5},
+        "Data!D2": {"TIME_PERIOD": 5},
+    }
+    expected = {
+        "Data!E20": {"TIME_PERIOD": 4},
+        "Data!F20": {"TIME_PERIOD": 5},
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+    )
+    assert summary.fallback_reason is None
+    with pytest.raises(MechanicalSynthesisError, match="range_endpoints_vary"):
+        synthesize_cluster_body(
+            summary,
+            key_vocabulary=TIME_PERIOD_VOCAB,
+            expected_member_keys=expected,
+            helper_name="observed_value",
+        )
+
+
+def _index_family_body(c1: int, c2: int, *, trailing: str = "0.0, 0.0") -> str:
+    return (
+        "_t1 = read_label(ctx)\n"
+        "_t2 = xl_range(ctx, 'DB!A2:A4')\n"
+        "_t3 = xl_match(_t1, _t2, 0.0)\n"
+        f"return xl_offset(ctx, xl_index_ref(('DB', 2, {c1}, 4, {c2}), _t3, 1.0)"
+        f", {trailing})"
+    )
+
+
+def _index_family_summary(
+    formulas: tuple[str, str, str],
+    bodies: tuple[str, str, str],
+    *,
+    base_bound_keys: dict[str, dict[str, BindingKeyValue]],
+):
+    members = tuple(
+        _member(address, formula, body)
+        for address, formula, body in zip(
+            ("Data!B10", "Data!C10", "Data!D10"), formulas, bodies, strict=True
+        )
+    )
+    bound_keys: dict[str, dict[str, BindingKeyValue]] = {
+        "Data!B10": {"TIME_PERIOD": 1},
+        "Data!C10": {"TIME_PERIOD": 2},
+        "Data!D10": {"TIME_PERIOD": 3},
+        "Data!A1": {"COUNTRY": "chile"},
+        "DB!A2": {"LABEL_ROW": 2},
+        "DB!A4": {"LABEL_ROW": 4},
+    }
+    bound_keys.update(base_bound_keys)
+    expected = {
+        "Data!B10": {"TIME_PERIOD": 1},
+        "Data!C10": {"TIME_PERIOD": 2},
+        "Data!D10": {"TIME_PERIOD": 3},
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+        address_to_series_id={"Data!A1": "label"},
+    )
+    assert summary.fallback_reason is None
+    return summary, expected
+
+
+def test_index_match_column_sweep_synthesizes_tuple_lookup_tables() -> None:
+    """The qcraft member shape: constant label range + per-member column sweep."""
+    summary, expected = _index_family_summary(
+        (
+            "=INDEX(DB!C2:E4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(DB!D2:F4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(DB!E2:G4,MATCH(Data!A1,DB!A2:A4,0),1)",
+        ),
+        (
+            _index_family_body(3, 5),
+            _index_family_body(4, 6),
+            _index_family_body(5, 7),
+        ),
+        base_bound_keys={
+            "DB!C2": {"TIME_PERIOD": 1},
+            "DB!D2": {"TIME_PERIOD": 2},
+            "DB!E2": {"TIME_PERIOD": 3},
+            "DB!E4": {"TIME_PERIOD": 1},
+            "DB!F4": {"TIME_PERIOD": 2},
+            "DB!G4": {"TIME_PERIOD": 3},
+        },
+    )
+    draft = synthesize_cluster_body(
+        summary,
+        key_vocabulary=TIME_PERIOD_VOCAB,
+        expected_member_keys=expected,
+        helper_name="climate_lookup",
+    )
+    assert "xl_range(ctx, 'DB!A2:A4')" in draft.body
+    assert "xl_match(_t1, _t2, 0.0)" in draft.body
+    assert "col_start_index_by_time_period = {1: 3, 2: 4, 3: 5}" in draft.body
+    assert "col_end_index_by_time_period = {1: 5, 2: 6, 3: 7}" in draft.body
+    assert (
+        "xl_offset(ctx, xl_index_ref(('DB', 2, "
+        "col_start_index_by_time_period[time_period], 4, "
+        "col_end_index_by_time_period[time_period]), _t3, 1.0), 0.0, 0.0)"
+    ) in draft.body
+    assert "col_start_index_by_time_period" in draft.lookup_table_names
+    assert "col_end_index_by_time_period" in draft.lookup_table_names
+    _assert_body_compiles(draft, ("time_period",))
+
+
+def test_index_ref_tuple_sheet_mismatch_fails_synthesis() -> None:
+    summary, expected = _index_family_summary(
+        (
+            "=INDEX(DB!C2:E4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(Other!D2:F4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(DB!E2:G4,MATCH(Data!A1,DB!A2:A4,0),1)",
+        ),
+        (
+            _index_family_body(3, 5),
+            _index_family_body(4, 6),
+            _index_family_body(5, 7),
+        ),
+        base_bound_keys={
+            "DB!C2": {"TIME_PERIOD": 1},
+            "Other!D2": {"TIME_PERIOD": 2},
+            "DB!E2": {"TIME_PERIOD": 3},
+            "DB!E4": {"TIME_PERIOD": 1},
+            "Other!F4": {"TIME_PERIOD": 2},
+            "DB!G4": {"TIME_PERIOD": 3},
+        },
+    )
+    with pytest.raises(MechanicalSynthesisError, match="index_ref_tuple_mismatch"):
+        synthesize_cluster_body(
+            summary,
+            key_vocabulary=TIME_PERIOD_VOCAB,
+            expected_member_keys=expected,
+            helper_name="climate_lookup",
+        )
+
+
+def test_nonzero_offset_trailing_args_fail_synthesis() -> None:
+    bodies = (
+        _index_family_body(3, 5, trailing="1.0, 0.0"),
+        _index_family_body(4, 6, trailing="1.0, 0.0"),
+        _index_family_body(5, 7, trailing="1.0, 0.0"),
+    )
+    summary, expected = _index_family_summary(
+        (
+            "=INDEX(DB!C2:E4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(DB!D2:F4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(DB!E2:G4,MATCH(Data!A1,DB!A2:A4,0),1)",
+        ),
+        bodies,
+        base_bound_keys={
+            "DB!C2": {"TIME_PERIOD": 1},
+            "DB!D2": {"TIME_PERIOD": 2},
+            "DB!E2": {"TIME_PERIOD": 3},
+            "DB!E4": {"TIME_PERIOD": 1},
+            "DB!F4": {"TIME_PERIOD": 2},
+            "DB!G4": {"TIME_PERIOD": 3},
+        },
+    )
+    with pytest.raises(MechanicalSynthesisError, match="unsupported_offset_shape"):
+        synthesize_cluster_body(
+            summary,
+            key_vocabulary=TIME_PERIOD_VOCAB,
+            expected_member_keys=expected,
+            helper_name="climate_lookup",
+        )
+
+
+def test_bare_index_ref_fails_synthesis() -> None:
+    body = (
+        "_t1 = read_label(ctx)\n"
+        "_t2 = xl_range(ctx, 'DB!A2:A4')\n"
+        "_t3 = xl_match(_t1, _t2, 0.0)\n"
+        "return xl_index_ref(('DB', 2, 3, 4, 5), _t3, 1.0)"
+    )
+    summary, expected = _index_family_summary(
+        (
+            "=INDEX(DB!C2:E4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(DB!D2:F4,MATCH(Data!A1,DB!A2:A4,0),1)",
+            "=INDEX(DB!E2:G4,MATCH(Data!A1,DB!A2:A4,0),1)",
+        ),
+        (body, body, body),
+        base_bound_keys={
+            "DB!C2": {"TIME_PERIOD": 1},
+            "DB!D2": {"TIME_PERIOD": 2},
+            "DB!E2": {"TIME_PERIOD": 3},
+            "DB!E4": {"TIME_PERIOD": 1},
+            "DB!F4": {"TIME_PERIOD": 2},
+            "DB!G4": {"TIME_PERIOD": 3},
+        },
+    )
+    with pytest.raises(MechanicalSynthesisError, match="unsupported_index_ref_shape"):
+        synthesize_cluster_body(
+            summary,
+            key_vocabulary=TIME_PERIOD_VOCAB,
+            expected_member_keys=expected,
+            helper_name="climate_lookup",
         )
 
 
