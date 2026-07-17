@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import copy
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -199,14 +200,20 @@ class _NameRenamer(ast.NodeTransformer):
         return node
 
 
-NamingUnit = tuple[str, MechanicalBodyDraft, ClusterNamingLLMResponse, frozenset[str]]
+@dataclass(frozen=True)
+class NamingUnit:
+    """One mechanically synthesized helper awaiting a naming response apply."""
+
+    helper_name: str
+    draft: MechanicalBodyDraft
+    response: ClusterNamingLLMResponse
+    parameter_names: frozenset[str]
+    forbidden_names: frozenset[str]
 
 
 def apply_naming_responses_to_module(
     source: str,
     units: Sequence[NamingUnit],
-    *,
-    forbidden_names: frozenset[str],
 ) -> str:
     """Apply a batch of naming responses to their helpers in a module.
 
@@ -219,10 +226,9 @@ def apply_naming_responses_to_module(
     """
     unit_by_name: dict[str, NamingUnit] = {}
     for unit in units:
-        helper_name = unit[0]
-        if helper_name in unit_by_name:
-            raise ValueError(f"duplicate naming unit for helper {helper_name!r}")
-        unit_by_name[helper_name] = unit
+        if unit.helper_name in unit_by_name:
+            raise ValueError(f"duplicate naming unit for helper {unit.helper_name!r}")
+        unit_by_name[unit.helper_name] = unit
 
     module = ast.parse(source)
     lines = source.splitlines(keepends=True)
@@ -230,20 +236,20 @@ def apply_naming_responses_to_module(
     for node in module.body:
         if not isinstance(node, ast.FunctionDef) or node.name not in unit_by_name:
             continue
-        _helper_name, draft, response, parameter_names = unit_by_name[node.name]
-        if response.symbol_docstring is None:
+        unit = unit_by_name[node.name]
+        if unit.response.symbol_docstring is None:
             raise ValueError(
                 f"naming response for {node.name!r} must include a docstring"
             )
         named_body = apply_cluster_naming_response(
-            response,
-            draft,
-            parameter_names=parameter_names,
-            forbidden_names=forbidden_names,
+            unit.response,
+            unit.draft,
+            parameter_names=unit.parameter_names,
+            forbidden_names=unit.forbidden_names,
         )
         rebuilt = _rebuild_named_function(
             node,
-            docstring=response.symbol_docstring,
+            docstring=unit.response.symbol_docstring,
             body=named_body,
         )
         start = node.lineno - 1
