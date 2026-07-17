@@ -543,8 +543,8 @@ class ClusterRefactorResponse(BaseModel):
     )
     helper_docstring: str = Field(
         description=(
-            "Google-style docstring for the helper; must match the docstring "
-            "embedded in helper_source exactly. Include Args and Returns sections."
+            "Google-style docstring derived from the docstring embedded in "
+            "helper_source. Include Args and Returns sections."
         )
     )
     parameters: tuple[HelperParameter, ...] = Field(
@@ -733,8 +733,8 @@ class SingletonRefactorResponse(BaseModel):
     )
     symbol_docstring: str = Field(
         description=(
-            "Google-style docstring; must match the docstring embedded in "
-            "symbol_source exactly. Include Args and Returns sections."
+            "Google-style docstring derived from the docstring embedded in "
+            "symbol_source. Include Args and Returns sections."
         )
     )
     symbol_source: str = Field(
@@ -1577,13 +1577,19 @@ def _single_function_def(source: str) -> ast.FunctionDef | None:
     return function_defs[0]
 
 
+def _docstring_from_function_source(source: str) -> str | None:
+    """Return the AST docstring of the sole function in ``source``, if any."""
+    function_def = _single_function_def(source)
+    if function_def is None:
+        return None
+    return _function_docstring(function_def)
+
+
 def _align_cluster_response_docstring(
     response: ClusterRefactorResponse,
 ) -> ClusterRefactorResponse:
-    helper_def = _single_function_def(response.helper_source)
-    if helper_def is None:
-        return response
-    source_docstring = _function_docstring(helper_def)
+    """Set ``helper_docstring`` from ``helper_source`` (source is authoritative)."""
+    source_docstring = _docstring_from_function_source(response.helper_source)
     if source_docstring is None or source_docstring == response.helper_docstring:
         return response
     return response.model_copy(update={"helper_docstring": source_docstring})
@@ -1592,10 +1598,8 @@ def _align_cluster_response_docstring(
 def _align_singleton_response_docstring(
     response: SingletonRefactorResponse,
 ) -> SingletonRefactorResponse:
-    symbol_def = _single_function_def(response.symbol_source)
-    if symbol_def is None:
-        return response
-    source_docstring = _function_docstring(symbol_def)
+    """Set ``symbol_docstring`` from ``symbol_source`` (source is authoritative)."""
+    source_docstring = _docstring_from_function_source(response.symbol_source)
     if source_docstring is None or source_docstring == response.symbol_docstring:
         return response
     return response.model_copy(update={"symbol_docstring": source_docstring})
@@ -1993,10 +1997,6 @@ def validate_cluster_refactor_response(
     if source_docstring is None:
         raise ValueError("helper_source must include a docstring")
     validate_google_style_docstring(source_docstring)
-    if source_docstring != response.helper_docstring:
-        raise ValueError(
-            "helper_docstring must match the docstring embedded in helper_source"
-        )
 
     if require_semantic_locals:
         validate_semantic_local_names(helper_def)
@@ -2166,6 +2166,18 @@ def append_refactor_note_section(
     return f"{docstring.rstrip()}\n\nNote:\n    Covers {address}. Excel: {formula}."
 
 
+def _format_docstring_expression(docstring: str) -> str:
+    """Return Python source for an expression whose value is ``docstring``.
+
+    Prefer a readable triple-quoted literal when embedding cannot reinterpret or
+    truncate the text; otherwise emit an ``ast.unparse``-escaped constant so
+    backslashes and quotes in Excel notes round-trip through ``ast.parse``.
+    """
+    if "\\" not in docstring and '"""' not in docstring:
+        return f'"""{docstring}"""'
+    return ast.unparse(ast.Constant(value=docstring))
+
+
 def assemble_singleton_symbol_source(
     *,
     signature: str,
@@ -2176,7 +2188,11 @@ def assemble_singleton_symbol_source(
     if not normalized:
         raise ValueError("docstring must not be empty")
     body_block = "\n".join(f"    {line}" for line in body.splitlines()) + "\n"
-    return f'{signature}\n    """{normalized}\n    """\n{body_block}'
+    # Close a triple-quoted literal on the same line as the last docstring
+    # content when that form is safe. A newline + indented closing """ would
+    # become part of the AST string value.
+    docstring_expr = _format_docstring_expression(normalized)
+    return f"{signature}\n    {docstring_expr}\n{body_block}"
 
 
 def inject_signature_return_type_hint(signature: str, return_hint: str) -> str:
@@ -2242,9 +2258,12 @@ def prepare_singleton_refactor_response(
         docstring=docstring,
         body=llm_response.symbol_body,
     )
+    source_docstring = _docstring_from_function_source(symbol_source)
+    if source_docstring is None:
+        raise ValueError("assembled symbol_source must include a docstring")
     return SingletonRefactorResponse(
         symbol_name=ctx.expected_helper_name,
-        symbol_docstring=docstring,
+        symbol_docstring=source_docstring,
         symbol_source=symbol_source,
     )
 
@@ -2609,9 +2628,12 @@ def prepare_cluster_refactor_response(
         docstring=docstring,
         body=llm_response.symbol_body,
     )
+    source_docstring = _docstring_from_function_source(helper_source)
+    if source_docstring is None:
+        raise ValueError("assembled helper_source must include a docstring")
     return ClusterRefactorResponse(
         helper_name=ctx.expected_helper_name,
-        helper_docstring=docstring,
+        helper_docstring=source_docstring,
         helper_source=helper_source,
         parameters=parameters,
         member_keys=member_keys,
@@ -3162,10 +3184,6 @@ def validate_singleton_refactor_response(
     if source_docstring is None:
         raise ValueError("symbol_source must include a docstring")
     validate_google_style_docstring(source_docstring)
-    if source_docstring != response.symbol_docstring:
-        raise ValueError(
-            "symbol_docstring must match the docstring embedded in symbol_source"
-        )
 
     if require_semantic_locals:
         validate_semantic_local_names(symbol_def)
