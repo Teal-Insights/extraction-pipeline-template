@@ -88,6 +88,106 @@ def test_identity_sweep_xl_cell_reads_become_column_lookup() -> None:
     _assert_body_compiles(draft, ("time_period",))
 
 
+def test_identity_sweep_xl_eval_reads_become_column_lookup() -> None:
+    """Varying xl_eval addresses use the same templates as xl_cell (issue #67).
+
+    The per-member ``cell_*`` callback cannot be kept as a single exemplar name,
+    so the rewrite evaluates through ``xl_cell`` (resolver) with the templated
+    address — same verification against recorded ref addresses.
+    """
+    members = (
+        _member(
+            "Data!E20",
+            "=Data!E4",
+            "_t1 = xl_eval(ctx, 'Data!E4', cell_data_e4)\nreturn xl_number(_t1)",
+        ),
+        _member(
+            "Data!F20",
+            "=Data!F4",
+            "_t1 = xl_eval(ctx, 'Data!F4', cell_data_f4)\nreturn xl_number(_t1)",
+        ),
+        _member(
+            "Data!G20",
+            "=Data!G4",
+            "_t1 = xl_eval(ctx, 'Data!G4', cell_data_g4)\nreturn xl_number(_t1)",
+        ),
+    )
+    bound_keys = {
+        "Data!E20": {"TIME_PERIOD": 4},
+        "Data!F20": {"TIME_PERIOD": 5},
+        "Data!G20": {"TIME_PERIOD": 6},
+        "Data!E4": {"TIME_PERIOD": 4},
+        "Data!F4": {"TIME_PERIOD": 5},
+        "Data!G4": {"TIME_PERIOD": 6},
+    }
+    expected = {
+        "Data!E20": {"TIME_PERIOD": 4},
+        "Data!F20": {"TIME_PERIOD": 5},
+        "Data!G20": {"TIME_PERIOD": 6},
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+    )
+    assert summary.fallback_reason is None
+    draft = synthesize_cluster_body(
+        summary,
+        key_vocabulary=TIME_PERIOD_VOCAB,
+        expected_member_keys=expected,
+        helper_name="observed_value",
+    )
+    assert "column_by_time_period = {4: 'E', 5: 'F', 6: 'G'}" in draft.body
+    assert "xl_cell(ctx, f'Data!{column_by_time_period[time_period]}4')" in draft.body
+    assert "xl_eval(" not in draft.body
+    assert "column_by_time_period" in draft.lookup_table_names
+    _assert_body_compiles(draft, ("time_period",))
+
+
+def test_constant_address_xl_eval_dependency_is_left_alone() -> None:
+    """Shared xl_eval dependency address stays an xl_eval call (issue #67)."""
+    members = (
+        _member(
+            "Data!E20",
+            "=Data!A1",
+            "_t1 = xl_eval(ctx, 'Data!A1', cell_data_a1)\nreturn xl_number(_t1)",
+        ),
+        _member(
+            "Data!F20",
+            "=Data!A1",
+            "_t1 = xl_eval(ctx, 'Data!A1', cell_data_a1)\nreturn xl_number(_t1)",
+        ),
+    )
+    bound_keys = {
+        "Data!E20": {"TIME_PERIOD": 4},
+        "Data!F20": {"TIME_PERIOD": 5},
+        "Data!A1": {"TIME_PERIOD": 1},
+    }
+    expected = {
+        "Data!E20": {"TIME_PERIOD": 4},
+        "Data!F20": {"TIME_PERIOD": 5},
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+    )
+    assert summary.fallback_reason is None
+    draft = synthesize_cluster_body(
+        summary,
+        key_vocabulary=TIME_PERIOD_VOCAB,
+        expected_member_keys=expected,
+        helper_name="const_dep",
+    )
+    assert "xl_eval(ctx, 'Data!A1', cell_data_a1)" in draft.body
+    assert "xl_cell(" not in draft.body
+    _assert_body_compiles(draft, ("time_period",))
+
+
 def test_accessor_offset_read_becomes_derived_argument() -> None:
     members = (
         _member(
