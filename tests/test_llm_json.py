@@ -114,6 +114,37 @@ def test_retries_with_error_feedback_then_succeeds() -> None:
     assert "failed validation" in second_messages[-1]["content"]
 
 
+def test_post_validate_xl_index_ref_hint_appears_in_reprompt() -> None:
+    """Static xl_index_ref(xl_range(...)) rejection must surface in the retry prompt."""
+    from src.internals_refactor import XL_INDEX_REF_OF_XL_RANGE_HINT
+
+    first = '{"title": "bad", "body": "B"}'
+    second = '{"title": "ok", "body": "B"}'
+    client, fake = _make([first, second])
+
+    def reject_once(parsed: _Sample) -> _Sample:
+        if parsed.title == "bad":
+            raise ValueError(XL_INDEX_REF_OF_XL_RANGE_HINT)
+        return parsed
+
+    parsed, _ = generate_validated_json(
+        client=client,
+        model="m",
+        provider=JSON_OBJECT_PROVIDER,
+        system_prompt="sys",
+        user_prompt="usr",
+        response_model=_Sample,
+        post_validate=reject_once,
+    )
+
+    assert parsed.title == "ok"
+    retry_user = cast(list[dict[str, str]], fake.chat.completions.calls[1]["messages"])[
+        -1
+    ]["content"]
+    assert XL_INDEX_REF_OF_XL_RANGE_HINT in retry_user
+    assert "do not pass xl_range" in retry_user
+
+
 def test_post_validate_failure_triggers_retry() -> None:
     first = '{"title": "bad", "body": "B"}'
     second = '{"title": "ok", "body": "B"}'

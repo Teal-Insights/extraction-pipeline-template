@@ -8,11 +8,13 @@ from src.internals_refactor import MemberContext
 from src.refactor_fingerprints import (
     ClusterFingerprintSummary,
     RefRelation,
+    RefResolution,
     build_cluster_fingerprint_summary,
     classify_ref_relation,
     estimate_fingerprint_dump_tokens,
     estimate_legacy_dump_tokens,
     format_cluster_fingerprint_dump,
+    _format_ref_relation_lines,
 )
 from src.workbook_addresses import ProjectionColumnLayout
 
@@ -422,3 +424,36 @@ def test_token_estimates_fingerprint_smaller_than_legacy_for_large_cluster() -> 
     fingerprint = estimate_fingerprint_dump_tokens(summary)
     assert fingerprint < legacy
     assert isinstance(summary.groups[0].ref_relations[0], RefRelation)
+
+
+def test_format_ref_relation_col_by_includes_numeric_indices() -> None:
+    """Geometry hints must expose 1-based indices matching xl_index_ref tuples."""
+    relation = RefRelation(
+        ref_index=0,
+        tier="constant",
+        series_id=None,
+        fixed_keys={},
+        identity_dims=(),
+        offsets={},
+        lookups={},
+        explicit=None,
+        resolution=RefResolution(
+            kind="xl_cell",
+            sheet="Climate Database",
+            address_template="'Climate Database'!{col}26",
+            col_by_dim=(
+                (
+                    "TIME_PERIOD",
+                    ((2029, "Q"), (2030, "R"), (2039, "AA"), (2090, "BZ")),
+                ),
+            ),
+        ),
+    )
+    text = "\n".join(_format_ref_relation_lines(relation))
+    assert "col by TIME_PERIOD" in text
+    assert "2029: Q=17" in text
+    assert "2030: R=18" in text
+    assert "2039: AA=27" in text
+    assert "2090: BZ=78" in text
+    assert "2029: Q," not in text
+    assert "2029: Q}" not in text

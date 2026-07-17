@@ -15,6 +15,8 @@ from itertools import combinations
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import fastpyxl.utils.cell as xl_cell_utils
+
 from src.formula_clustering import (
     BoundAddressKeys,
     _ClusteringKeyCache,
@@ -761,6 +763,21 @@ def _format_mapping(table: Mapping[LookupKey, object]) -> str:
     return "{" + items + "}"
 
 
+def _format_col_letter_with_index(letter: str) -> str:
+    """Format an Excel column letter with its 1-based index for geometry tuples."""
+    index = xl_cell_utils.column_index_from_string(letter)
+    return f"{letter}={index}"
+
+
+def _format_col_by_mapping(table: Mapping[LookupKey, str]) -> str:
+    """Format ``col by`` maps as ``{key: Letter=N, ...}`` for ``xl_index_ref``."""
+    items = ", ".join(
+        f"{_format_key_value(key)}: {_format_col_letter_with_index(str(value))}"
+        for key, value in table.items()
+    )
+    return "{" + items + "}"
+
+
 def _format_key_space_line(
     dimension_id: str,
     values: Sequence[BindingKeyValue],
@@ -854,7 +871,7 @@ def _format_ref_relation_lines(relation: RefRelation) -> list[str]:
         for dim, pairs in resolution.row_by_dim:
             extras.append(f"row by {dim} {_format_mapping(dict(pairs))}")
         for dim, pairs in resolution.col_by_dim:
-            extras.append(f"col by {dim} {_format_mapping(dict(pairs))}")
+            extras.append(f"col by {dim} {_format_col_by_mapping(dict(pairs))}")
         if extras:
             detail += ", " + ", ".join(extras)
         lines.append(detail)
