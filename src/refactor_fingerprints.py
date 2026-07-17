@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import combinations
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -39,6 +40,8 @@ class SemanticDependencyRef:
 
 
 KeyCombo = tuple[tuple[str, BindingKeyValue], ...]
+LookupKey = BindingKeyValue | tuple[BindingKeyValue, ...]
+"""A lookup-table key: one member key value, or a tuple of them (issue #163)."""
 RelationTier = Literal["constant", "identity", "offset", "lookup", "explicit"]
 ResolutionKind = Literal["semantic_helper", "xl_cell", "self_recurrence", "unresolved"]
 
@@ -66,7 +69,7 @@ class RefRelation:
     fixed_keys: dict[str, BindingKeyValue]
     identity_dims: tuple[str, ...]
     offsets: dict[str, int]
-    lookups: dict[str, dict[BindingKeyValue, BindingKeyValue]]
+    lookups: dict[str, dict[LookupKey, BindingKeyValue]]
     explicit: tuple[tuple[KeyCombo, KeyCombo], ...] | None
     resolution: RefResolution
     lookup_bases: dict[str, str] = field(default_factory=dict)
@@ -76,12 +79,13 @@ class RefRelation:
     member dimension that is lagged (usually the same as ``dim``). Absent for
     direct value lookups (``ref.d == table[member.k]``).
     """
-    lookup_keys: dict[str, str] = field(default_factory=dict)
-    """Map ref-dim -> member dim whose value indexes ``lookups[dim]``.
+    lookup_keys: dict[str, str | tuple[str, ...]] = field(default_factory=dict)
+    """Map ref-dim -> member dim(s) whose value indexes ``lookups[dim]``.
 
     For a lag lookup this is the dimension whose value selects the lag delta;
     for a direct value lookup it is the dimension whose value selects the ref
-    key. Present for every entry in ``lookups``.
+    key. A tuple names jointly determining dimensions whose value tuple keys
+    ``lookups[dim]`` (issue #163). Present for every entry in ``lookups``.
     """
 
 
@@ -170,6 +174,62 @@ def _single_valued_table(
     return table
 
 
+def _as_lookup_table(
+    table: Mapping[BindingKeyValue, BindingKeyValue],
+) -> dict[LookupKey, BindingKeyValue]:
+    """Widen a scalar-keyed table to the ``LookupKey``-keyed schema."""
+    widened: dict[LookupKey, BindingKeyValue] = {}
+    for key, value in table.items():
+        widened[key] = value
+    return widened
+
+
+def _subset_routing_lookup(
+    dimension_id: str,
+    addresses: Sequence[str],
+    member_keys: Mapping[str, Mapping[str, BindingKeyValue]],
+    ref_keys_by_member: Mapping[str, Mapping[str, BindingKeyValue]],
+    member_dims: Sequence[str],
+) -> tuple[str | tuple[str, ...], dict[LookupKey, BindingKeyValue]] | None:
+    """Find the smallest member-dim subset whose value table routes ``dimension_id``.
+
+    Fallback for ref dims the strict single-dim tiers cannot express (issue
+    #163): search subsets of ascending arity for a single-valued table over the
+    recorded per-member ref keys — the ground truth for how the original graph
+    routed each call site. Unlike the strict search, restating tables are
+    accepted; per-member verification in mechanical synthesis keeps them exact.
+    Returns ``(key_dims, table)`` with a scalar key dim (and scalar-keyed
+    table) at arity 1, tuples otherwise; ``None`` when even the full member
+    tuple is not single-valued (duplicate member key combos with conflicting
+    refs).
+    """
+    usable_dims = [
+        dim
+        for dim in member_dims
+        if all(dim in member_keys[address] for address in addresses)
+    ]
+    for arity in range(1, len(usable_dims) + 1):
+        for combo in combinations(usable_dims, arity):
+            table: dict[LookupKey, BindingKeyValue] = {}
+            single_valued = True
+            for address in addresses:
+                key: LookupKey = (
+                    member_keys[address][combo[0]]
+                    if arity == 1
+                    else tuple(member_keys[address][dim] for dim in combo)
+                )
+                value = ref_keys_by_member[address][dimension_id]
+                existing = table.get(key)
+                if existing is None:
+                    table[key] = value
+                elif existing != value:
+                    single_valued = False
+                    break
+            if single_valued:
+                return (combo[0] if arity == 1 else combo), table
+    return None
+
+
 def classify_ref_relation(
     ref_index: int,
     member_keys: Mapping[str, Mapping[str, BindingKeyValue]],
@@ -196,9 +256,9 @@ def classify_ref_relation(
     fixed_keys: dict[str, BindingKeyValue] = {}
     identity_dims: list[str] = []
     offsets: dict[str, int] = {}
-    lookups: dict[str, dict[BindingKeyValue, BindingKeyValue]] = {}
+    lookups: dict[str, dict[LookupKey, BindingKeyValue]] = {}
     lookup_bases: dict[str, str] = {}
-    lookup_keys: dict[str, str] = {}
+    lookup_keys: dict[str, str | tuple[str, ...]] = {}
     needs_explicit = False
 
     for dimension_id in ref_dims:
@@ -256,7 +316,7 @@ def classify_ref_relation(
                         lag_candidates.append((key_dim, table))
                 if len(lag_candidates) == 1:
                     key_dim, table = lag_candidates[0]
-                    lookups[dimension_id] = table
+                    lookups[dimension_id] = _as_lookup_table(table)
                     lookup_bases[dimension_id] = dimension_id
                     lookup_keys[dimension_id] = key_dim
                     continue
@@ -283,7 +343,7 @@ def classify_ref_relation(
                 value_candidates.append((key_dim, table))
         if len(value_candidates) == 1:
             key_dim, table = value_candidates[0]
-            lookups[dimension_id] = table
+            lookups[dimension_id] = _as_lookup_table(table)
             lookup_keys[dimension_id] = key_dim
             continue
         if len(value_candidates) > 1:
@@ -291,11 +351,20 @@ def classify_ref_relation(
             non_self = [c for c in value_candidates if c[0] != dimension_id]
             if len(non_self) == 1:
                 key_dim, table = non_self[0]
-                lookups[dimension_id] = table
+                lookups[dimension_id] = _as_lookup_table(table)
                 lookup_keys[dimension_id] = key_dim
                 continue
-            needs_explicit = True
-            break
+
+        # No (unambiguous) single-dim relation: search member-dim subsets of
+        # ascending arity for a single-valued routing table (issue #163).
+        subset = _subset_routing_lookup(
+            dimension_id, addresses, member_keys, ref_keys_by_member, member_dims
+        )
+        if subset is not None:
+            key_dims, routing_table = subset
+            lookups[dimension_id] = routing_table
+            lookup_keys[dimension_id] = key_dims
+            continue
 
         needs_explicit = True
         break
@@ -675,7 +744,9 @@ def build_cluster_fingerprint_summary(
     return summary
 
 
-def _format_key_value(value: BindingKeyValue) -> str:
+def _format_key_value(value: LookupKey) -> str:
+    if isinstance(value, tuple):
+        return "(" + ", ".join(_format_key_value(item) for item in value) + ")"
     if isinstance(value, str):
         return value
     if isinstance(value, bool):
@@ -683,7 +754,7 @@ def _format_key_value(value: BindingKeyValue) -> str:
     return str(value)
 
 
-def _format_mapping(table: Mapping[BindingKeyValue, object]) -> str:
+def _format_mapping(table: Mapping[LookupKey, object]) -> str:
     items = ", ".join(
         f"{_format_key_value(key)}: {value}" for key, value in table.items()
     )
@@ -706,7 +777,7 @@ def _format_key_space_line(
         span = "[" + ", ".join(_format_key_value(value) for value in values) + "]"
     suffix = ""
     if key_to_column and any(value in key_to_column for value in values):
-        engine = {
+        engine: dict[LookupKey, object] = {
             value: key_to_column[value] for value in values if value in key_to_column
         }
         suffix = f"   (engine columns: {_format_mapping(engine)})"
@@ -744,8 +815,13 @@ def _format_ref_relation_lines(relation: RefRelation) -> list[str]:
             key_dim_candidates = [
                 dim for dim in relation.identity_dims if dim != dimension_id
             ]
-            key_label = relation.lookup_keys.get(
+            key_dims = relation.lookup_keys.get(
                 dimension_id, key_dim_candidates[0] if key_dim_candidates else "keys"
+            )
+            key_label = (
+                "(" + ", ".join(key_dims) + ")"
+                if isinstance(key_dims, tuple)
+                else key_dims
             )
             parts.append(
                 f"{dimension_id} = table[{key_label}] {_format_mapping(table)}"
