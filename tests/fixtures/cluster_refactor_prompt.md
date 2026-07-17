@@ -58,8 +58,13 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
   - `DIM = member.DIM - lag, lag by KEY {…}` — ragged lag keyed by another member dimension
   - `DIM = value` — constant across the cluster
   - `explicit member keys -> ref keys` — irregular fallback table
-- `reads:` lines say how to resolve the referenced cells (`xl_cell` address templates, semantic helpers, or in-cluster self-recurrence).
-- The exemplar translation is one concrete `cell_*` body. Generalize from the relations + exemplar; do not assume other members are shown as source.
+- `reads:` lines are resolution hints for where each `ref_N` points:
+  - `semantic helper …` / `in-cluster self-recurrence` — call that helper (or this helper).
+  - `xl_cell 'Sheet!{col}{row}'` plus optional `row by …` / `col by …` — the referenced addresses are unbound workbook cells whose A1 geometry varies with member keys. Those maps describe address variation only; they are not a required call shape. `col by` entries are `Letter=N` (Excel letter and 1-based index); use `N` when parameterizing geometry tuples.
+- The exemplar translation is the authoritative mechanical call pattern. Generalize that body using member parameters and the relation/address maps. In particular:
+  - If the exemplar uses `xl_index_ref((sheet, row, col, …), …)` (or other geometry tuples), parameterize those numeric coordinates from the `col by` / `row by` maps (use the 1-based indices from `Letter=N`). Do not rebuild the range with `xl_range(...)` and pass it to `xl_index_ref`.
+  - Only emit `xl_cell(...)` for a slot when the exemplar already reads that slot via `xl_cell`.
+  - Do not assume other members are shown as source.
 
 ## Signature
 
@@ -82,6 +87,7 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
 - Where appropriate, directly pass through parameters in function calls; e.g. `prior_period_total(ctx, reporting_period=reporting_period)`.
 - Rename local temporaries to domain-meaningful `snake_case` informed by naming hints.
 - Leave `xl_cell(ctx, 'Sheet!Address')` calls unchanged; this helper reads input/constant values. (Assigning the return value to a semantic local temporary is okay!)
+- Prefer the exemplar's call pattern over `reads:` formatting. Address maps may use Excel column letters even when the exemplar uses 1-based column indices in tuples.
 - Prefer concise lookup tables over verbose `if`/`elif` ladders.
 - Derive lagged or offset periods inside the body from member parameters and the stated reference relations; do not invent extra parameters for operand positions.
 

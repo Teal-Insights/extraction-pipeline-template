@@ -57,6 +57,7 @@ from src.internals_refactor import (
     substitute_collapse_bindings,
     validate_allowed_global_references,
     validate_cluster_refactor_response,
+    validate_no_xl_index_ref_of_xl_range,
     validate_parameter_names_match_vocabulary,
     validate_semantic_local_names,
     validate_singleton_refactor_response,
@@ -521,6 +522,100 @@ def test_validate_cluster_accepts_well_formed_response() -> None:
             existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
             internals_source=PRISTINE_CLUSTER,
         )
+
+
+_INDEX_REF_HINT = "xl_index_ref expects a geometry tuple"
+
+
+def test_validate_no_xl_index_ref_of_xl_range_rejects_nested_call() -> None:
+    source = '''def helper(ctx, time_period):
+    """Doc.
+
+Args:
+    ctx: Context.
+    time_period: Period.
+
+Returns:
+    Value.
+"""
+    return xl_index_ref(xl_range(ctx, "'Sheet'!A1:B2"), 1.0, 1.0)
+'''
+    helper_def = _single_function_def(source)
+    assert helper_def is not None
+    with pytest.raises(ValueError, match=_INDEX_REF_HINT) as exc_info:
+        validate_no_xl_index_ref_of_xl_range(helper_def)
+    assert "xl_range" in str(exc_info.value)
+    assert "do not pass xl_range" in str(exc_info.value).lower()
+
+
+def test_validate_no_xl_index_ref_of_xl_range_rejects_bound_local() -> None:
+    """Catch the cluster_12 pattern: bind xl_range then pass the name to xl_index_ref."""
+    source = '''def helper(ctx, time_period):
+    """Doc.
+
+Args:
+    ctx: Context.
+    time_period: Period.
+
+Returns:
+    Value.
+"""
+    data_range = xl_range(ctx, f"'Sheet'!A{time_period}:B10")
+    return xl_offset(ctx, xl_index_ref(data_range, 1.0, 1.0), 0.0, 0.0)
+'''
+    helper_def = _single_function_def(source)
+    assert helper_def is not None
+    with pytest.raises(ValueError, match=_INDEX_REF_HINT):
+        validate_no_xl_index_ref_of_xl_range(helper_def)
+
+
+def test_validate_no_xl_index_ref_of_xl_range_accepts_geometry_tuple() -> None:
+    source = '''def helper(ctx, time_period):
+    """Doc.
+
+Args:
+    ctx: Context.
+    time_period: Period.
+
+Returns:
+    Value.
+"""
+    start_col = {1: 3, 2: 4}[time_period]
+    return xl_offset(
+        ctx,
+        xl_index_ref(("Sheet", 1, start_col, 10, start_col), 1.0, 1.0),
+        0.0,
+        0.0,
+    )
+'''
+    helper_def = _single_function_def(source)
+    assert helper_def is not None
+    validate_no_xl_index_ref_of_xl_range(helper_def)
+
+
+def test_validate_cluster_rejects_xl_index_ref_of_xl_range() -> None:
+    ctx = replace(
+        CLUSTER_CONTEXT,
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS
+        + ("xl_index_ref", "xl_range", "xl_offset"),
+    )
+    bad_source = f'''def combined_input_passthrough(ctx, time_period):
+    """{CLUSTER_DOCSTRING}"""
+    data_range = xl_range(ctx, f"Inputs!A{{time_period}}:B10")
+    return xl_offset(ctx, xl_index_ref(data_range, 1.0, 1.0), 0.0, 0.0)
+'''
+    with patch(
+        "src.internals_refactor._resolved_projection_layout",
+        return_value=TEST_LAYOUT,
+    ):
+        with pytest.raises(ValueError, match=_INDEX_REF_HINT) as exc_info:
+            validate_cluster_refactor_response(
+                ctx,
+                _cluster_response(helper_source=bad_source),
+                existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+                internals_source=PRISTINE_CLUSTER,
+            )
+    assert "do not pass xl_range" in str(exc_info.value).lower()
 
 
 def test_validate_cluster_allows_locked_helper_name_already_in_internals() -> None:

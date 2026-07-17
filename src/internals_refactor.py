@@ -89,7 +89,7 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 30
+REFACTOR_PROMPT_VERSION = 31
 CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT = 30
 _FINGERPRINT_FALLBACK_COUNT = 0
 
@@ -1773,6 +1773,70 @@ def validate_no_cell_function_references(function_def: ast.FunctionDef) -> None:
         )
 
 
+def _is_xl_range_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "xl_range"
+    )
+
+
+def _names_bound_to_xl_range(function_def: ast.FunctionDef) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(function_def):
+        if isinstance(node, ast.Assign) and _is_xl_range_call(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+            and _is_xl_range_call(node.value)
+        ):
+            names.add(node.target.id)
+    return names
+
+
+def _xl_index_ref_ref_arg(call: ast.Call) -> ast.AST | None:
+    if call.args:
+        return call.args[0]
+    for keyword in call.keywords:
+        if keyword.arg == "ref":
+            return keyword.value
+    return None
+
+
+XL_INDEX_REF_OF_XL_RANGE_HINT = (
+    "do not pass xl_range(...) into xl_index_ref; xl_index_ref expects a "
+    "geometry tuple (sheet, row, col[, end_row, end_col]) or ExcelRange, not a "
+    "Range from xl_range. Parameterize numeric coordinates from the exemplar's "
+    "xl_index_ref((...), ...) call pattern"
+)
+
+
+def validate_no_xl_index_ref_of_xl_range(function_def: ast.FunctionDef) -> None:
+    """Reject ``xl_index_ref(xl_range(...))`` and the bound-local equivalent.
+
+    ``xl_range`` returns a lazy ``Range``; ``xl_index_ref`` only accepts
+    geometry tuples or ``ExcelRange``. Passing a ``Range`` yields ``#VALUE!``
+    at parity time.
+    """
+    xl_range_names = _names_bound_to_xl_range(function_def)
+    for node in ast.walk(function_def):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "xl_index_ref":
+            continue
+        ref_arg = _xl_index_ref_ref_arg(node)
+        if ref_arg is None:
+            continue
+        if _is_xl_range_call(ref_arg) or (
+            isinstance(ref_arg, ast.Name) and ref_arg.id in xl_range_names
+        ):
+            raise ValueError(XL_INDEX_REF_OF_XL_RANGE_HINT)
+
+
 def _suggested_param_name_by_dimension_id(
     key_vocabulary: tuple[KeyConceptSpec, ...],
 ) -> dict[str, str]:
@@ -2001,6 +2065,7 @@ def validate_cluster_refactor_response(
     if require_semantic_locals:
         validate_semantic_local_names(helper_def)
     validate_no_cell_function_references(helper_def)
+    validate_no_xl_index_ref_of_xl_range(helper_def)
     validate_parameter_names_match_vocabulary(ctx, response)
 
     arg_names = [arg.arg for arg in helper_def.args.args]
@@ -3188,6 +3253,7 @@ def validate_singleton_refactor_response(
     if require_semantic_locals:
         validate_semantic_local_names(symbol_def)
     validate_no_cell_function_references(symbol_def)
+    validate_no_xl_index_ref_of_xl_range(symbol_def)
 
     arg_names = [arg.arg for arg in symbol_def.args.args]
     if arg_names != ["ctx"]:
