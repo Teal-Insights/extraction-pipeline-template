@@ -774,6 +774,21 @@ class _GroupSynthesizer:
             if resolution.kind == "self_recurrence":
                 self.replacements[id(site.node)] = self._self_recurrence_call(slot)
                 return
+            if resolution.kind == "xl_cell":
+                address_expr = self._address_template_expr(slot)
+                if address_expr is not None:
+                    # Varying dependency addresses already carry an
+                    # address_template from fingerprint resolution. The
+                    # exemplar's cell_* callback is member-specific and cannot
+                    # be kept, so evaluate through xl_cell (resolver) with the
+                    # templated address — verified against recorded ref
+                    # addresses like xl_cell sites.
+                    self.replacements[id(site.node)] = ast.Call(
+                        func=ast.Name(id="xl_cell", ctx=ast.Load()),
+                        args=[site.node.args[0], address_expr],
+                        keywords=[],
+                    )
+                return
             slot_addresses = {
                 self.ref_addresses[member][slot] for member in self.group.members
             }
