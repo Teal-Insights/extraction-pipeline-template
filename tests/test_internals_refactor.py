@@ -2710,6 +2710,8 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
     monkeypatch.setattr(
         module, "build_cluster_refactor_context", lambda *_a, **_k: None
     )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: None)
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
 
     refactor_internals_all_clusters(
         cast(ProjectionResult, graph),
@@ -2852,6 +2854,8 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
     monkeypatch.setattr(
         module, "build_cluster_refactor_context", lambda *_a, **_k: None
     )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: None)
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, graph),
@@ -2988,6 +2992,8 @@ def test_refactor_internals_all_clusters_passes_unique_allocated_helper_names(
             source="",
         ),
     )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: None)
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
 
     module.refactor_internals_all_clusters(
         projection,

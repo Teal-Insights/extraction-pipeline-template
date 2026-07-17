@@ -360,6 +360,62 @@ def test_cluster_gate_surfaces_missing_symbol_as_retryable_parity_error() -> Non
     assert "KeyError" in message
 
 
+def _mechanical_cluster_module(helper_source: str) -> str:
+    return RUNTIME_IMPORT + "\n" + helper_source + "\n" + RESOLVER_SECTION
+
+
+def test_batched_mechanical_parity_passes_for_correct_units() -> None:
+    from src.refactor_parity_gate import (
+        MechanicalParityUnit,
+        check_batched_mechanical_parity,
+    )
+
+    units = (
+        MechanicalParityUnit(
+            unit_id="cluster:1",
+            helper_name="combined_input_passthrough",
+            kind="cluster",
+            member_checks=(
+                ("Engine!C6", {"time_period": 1}),
+                ("Engine!D6", {"time_period": 2}),
+            ),
+        ),
+    )
+    check_batched_mechanical_parity(
+        pristine_source=PRISTINE_CLUSTER,
+        mechanical_source=_mechanical_cluster_module(CORRECT_CLUSTER_SOURCE),
+        units=units,
+        input_vectors=CLUSTER_INPUTS,
+    )
+
+
+def test_batched_mechanical_parity_names_failing_unit() -> None:
+    from src.refactor_parity_gate import (
+        MechanicalParityUnit,
+        check_batched_mechanical_parity,
+    )
+
+    units = (
+        MechanicalParityUnit(
+            unit_id="cluster:1",
+            helper_name="combined_input_passthrough",
+            kind="cluster",
+            member_checks=(
+                ("Engine!C6", {"time_period": 1}),
+                ("Engine!D6", {"time_period": 2}),
+            ),
+        ),
+    )
+    with pytest.raises(ParityError) as excinfo:
+        check_batched_mechanical_parity(
+            pristine_source=PRISTINE_CLUSTER,
+            mechanical_source=_mechanical_cluster_module(BROKEN_CLUSTER_SOURCE),
+            units=units,
+            input_vectors=CLUSTER_INPUTS,
+        )
+    assert "cluster:1" in str(excinfo.value)
+
+
 SINGLETON_DOCSTRING = (
     "Return the initial value.\n\n"
     "Args:\n    ctx: Workbook evaluation context.\n\n"
