@@ -28,12 +28,18 @@ from src.dependency_graph_viz import (
 )
 from src.internal_bindings import binding_node_labels, build_internal_binding_index
 from src.internal_binding_coverage import enforce_internal_binding_coverage
+from src.codegen_cache import (
+    get_or_build_codegen_modules,
+    guide_fingerprint,
+    write_generated_modules,
+)
 from src.docstring_callback import configure_docstring_callback
 from src.differential_validation import run_post_refactor_differential
 from src.export_validation_assets import (
     export_reference_reports,
     seed_validation_harness,
 )
+from src.projection_cache import projection_cache_key
 from src.logging_config import configure_logging
 from src.pipeline_config import (
     PipelineConfig,
@@ -418,32 +424,44 @@ def run_export_stage(
         no_cache=no_cache,
         force_rebuild=force_rebuild,
     )
-    callback_name = configure_docstring_callback(config)
+    proj_cache_key = projection_cache_key(graph_cache_key=graph_cache_key)
+    targets = list(config.targets)
+    unpack_return = True
+    docstring_renderer = "google"
+    callback_name = config.docstring_callback_name
 
-    print("codegen: generating modules…", flush=True)
-    codegen_started = time.perf_counter()
-    with CodeGenerator(
-        cast(GraphLike, refactor_projection), unpack_return=True
-    ) as generator:
-        modules = generator.generate_modules(
-            list(config.targets),
-            series_bindings=series_bindings,
-            bindings_workbook=config.workbook_path,
-            series_docstring_callback=callback_name,
-            docstring_renderer="google",
-        )
+    def _build_modules() -> dict[str, str]:
+        configure_docstring_callback(config)
+        with CodeGenerator(
+            cast(GraphLike, refactor_projection), unpack_return=unpack_return
+        ) as generator:
+            return generator.generate_modules(
+                targets,
+                series_bindings=series_bindings,
+                bindings_workbook=config.workbook_path,
+                series_docstring_callback=callback_name,
+                docstring_renderer=docstring_renderer,
+            )
+
+    codegen_result = get_or_build_codegen_modules(
+        projection_cache_key=proj_cache_key,
+        targets=targets,
+        unpack_return=unpack_return,
+        docstring_renderer=docstring_renderer,
+        series_docstring_callback=callback_name,
+        guide_sha256=guide_fingerprint(config.guide_path),
+        build_modules=_build_modules,
+        no_cache=no_cache,
+        force_rebuild=force_rebuild,
+    )
+    modules = codegen_result.modules
 
     package_root = config.package_root
-    package_root.mkdir(parents=True, exist_ok=True)
+    write_generated_modules(package_root, modules)
 
     generated_module_names = frozenset(
         {"__init__.py", "api.py", "data.py", "runtime.py", "internals.py"}
     )
-
-    for filepath, code in modules.items():
-        output_path = package_root / filepath
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(code, encoding="utf-8", newline="\n")
 
     for stale_module in generated_module_names:
         stale_path = config.dist_root / stale_module
@@ -472,7 +490,7 @@ tests/results/local/
 
     seed_validation_harness(config=config)
     print(
-        f"codegen: {len(modules)} modules ({time.perf_counter() - codegen_started:.1f}s)",
+        f"codegen: {len(modules)} modules ({codegen_result.elapsed_seconds:.1f}s)",
         flush=True,
     )
 
@@ -636,8 +654,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--no-cache",
         action="store_true",
         help=(
-            "Bypass on-disk graph, projection, series-resolution, and "
-            "exported-library differential caches for this run."
+            "Bypass on-disk graph, projection, series-resolution, codegen, "
+            "and exported-library differential caches for this run."
         ),
     )
     add_variation_mode_argument(parser)
