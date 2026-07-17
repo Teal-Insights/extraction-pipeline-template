@@ -200,6 +200,186 @@ def test_self_recurrence_with_anchor_group_routes_by_period() -> None:
     _assert_body_compiles(draft, ("time_period",))
 
 
+def test_tuple_lookup_accessor_read_becomes_tuple_subscript() -> None:
+    """A ref key jointly determined by two member dims routes via a tuple table."""
+    vocabulary = (
+        KeyConceptSpec(
+            dimension_id="INDICATOR",
+            concept="INDICATOR",
+            dtype="str",
+            suggested_param_name="indicator",
+        ),
+        KeyConceptSpec(
+            dimension_id="TIME_PERIOD",
+            concept="TIME_PERIOD",
+            dtype="int",
+            suggested_param_name="time_period",
+        ),
+    )
+    members = (
+        _member(
+            "Data!B10",
+            "=Hist!B2",
+            "_t1 = read_hist(ctx, indicator_year='1991_nominal')\n"
+            "return xl_number(_t1)",
+        ),
+        _member(
+            "Data!B11",
+            "=Hist!B3",
+            "_t1 = read_hist(ctx, indicator_year='1991_real')\nreturn xl_number(_t1)",
+        ),
+        _member(
+            "Data!C10",
+            "=Hist!C2",
+            "_t1 = read_hist(ctx, indicator_year='1992_nominal')\n"
+            "return xl_number(_t1)",
+        ),
+        _member(
+            "Data!C11",
+            "=Hist!C3",
+            "_t1 = read_hist(ctx, indicator_year='1992_real')\nreturn xl_number(_t1)",
+        ),
+    )
+    bound_keys = {
+        "Data!B10": {"INDICATOR": "nominal_gdp", "TIME_PERIOD": 1},
+        "Data!B11": {"INDICATOR": "real_gdp", "TIME_PERIOD": 1},
+        "Data!C10": {"INDICATOR": "nominal_gdp", "TIME_PERIOD": 2},
+        "Data!C11": {"INDICATOR": "real_gdp", "TIME_PERIOD": 2},
+        "Hist!B2": {"INDICATOR_YEAR": "1991_nominal"},
+        "Hist!B3": {"INDICATOR_YEAR": "1991_real"},
+        "Hist!C2": {"INDICATOR_YEAR": "1992_nominal"},
+        "Hist!C3": {"INDICATOR_YEAR": "1992_real"},
+    }
+    expected = {
+        address: bound_keys[address]
+        for address in ("Data!B10", "Data!B11", "Data!C10", "Data!C11")
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+        address_to_series_id={
+            "Hist!B2": "hist",
+            "Hist!B3": "hist",
+            "Hist!C2": "hist",
+            "Hist!C3": "hist",
+        },
+    )
+    assert summary.fallback_reason is None
+    draft = synthesize_cluster_body(
+        summary,
+        key_vocabulary=vocabulary,
+        expected_member_keys=expected,
+        helper_name="historical_value",
+    )
+    assert (
+        "indicator_year_by_indicator_time_period = "
+        "{('nominal_gdp', 1): '1991_nominal', ('nominal_gdp', 2): '1992_nominal', "
+        "('real_gdp', 1): '1991_real', ('real_gdp', 2): '1992_real'}"
+    ) in draft.body
+    assert (
+        "read_hist(ctx, indicator_year="
+        "indicator_year_by_indicator_time_period[indicator, time_period])"
+    ) in draft.body
+    assert "indicator_year_by_indicator_time_period" in draft.lookup_table_names
+    _assert_body_compiles(draft, ("indicator", "time_period"))
+
+
+def test_self_recurrence_with_tuple_derived_period_routes_by_pair() -> None:
+    """Self-recurrence whose target period depends on (scenario, period) pairs."""
+    vocabulary = (
+        KeyConceptSpec(
+            dimension_id="SCENARIO",
+            concept="SCENARIO",
+            dtype="str",
+            suggested_param_name="scenario",
+        ),
+        KeyConceptSpec(
+            dimension_id="TIME_PERIOD",
+            concept="TIME_PERIOD",
+            dtype="int",
+            suggested_param_name="time_period",
+        ),
+    )
+    members = (
+        _member("Data!C20", "=Data!C4", "return xl_number(xl_cell(ctx, 'Data!C4'))"),
+        _member("Data!C21", "=Data!C5", "return xl_number(xl_cell(ctx, 'Data!C5'))"),
+        _member(
+            "Data!D20",
+            "=Data!C20+1",
+            "_t1 = xl_eval(ctx, 'Data!C20', cell_data_c20)\n"
+            "return (xl_number(_t1) + xl_number(1.0))",
+        ),
+        _member(
+            "Data!D21",
+            "=Data!C21+1",
+            "_t1 = xl_eval(ctx, 'Data!C21', cell_data_c21)\n"
+            "return (xl_number(_t1) + xl_number(1.0))",
+        ),
+        _member(
+            "Data!E20",
+            "=Data!D20+1",
+            "_t1 = xl_eval(ctx, 'Data!D20', cell_data_d20)\n"
+            "return (xl_number(_t1) + xl_number(1.0))",
+        ),
+        _member(
+            "Data!E21",
+            "=Data!C21+1",
+            "_t1 = xl_eval(ctx, 'Data!C21', cell_data_c21)\n"
+            "return (xl_number(_t1) + xl_number(1.0))",
+        ),
+    )
+    bound_keys = {
+        "Data!C20": {"SCENARIO": "A", "TIME_PERIOD": 1},
+        "Data!C21": {"SCENARIO": "B", "TIME_PERIOD": 1},
+        "Data!D20": {"SCENARIO": "A", "TIME_PERIOD": 2},
+        "Data!D21": {"SCENARIO": "B", "TIME_PERIOD": 2},
+        "Data!E20": {"SCENARIO": "A", "TIME_PERIOD": 3},
+        "Data!E21": {"SCENARIO": "B", "TIME_PERIOD": 3},
+        "Data!C4": {"SCENARIO": "A", "TIME_PERIOD": 1},
+        "Data!C5": {"SCENARIO": "B", "TIME_PERIOD": 1},
+    }
+    expected = {
+        address: bound_keys[address]
+        for address in (
+            "Data!C20",
+            "Data!C21",
+            "Data!D20",
+            "Data!D21",
+            "Data!E20",
+            "Data!E21",
+        )
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+    )
+    assert summary.fallback_reason is None
+    assert len(summary.groups) == 2
+    draft = synthesize_cluster_body(
+        summary,
+        key_vocabulary=vocabulary,
+        expected_member_keys=expected,
+        helper_name="debt_path",
+    )
+    assert "if time_period == 1:" in draft.body
+    assert (
+        "time_period_by_scenario_time_period = "
+        "{('A', 2): 1, ('A', 3): 2, ('B', 2): 1, ('B', 3): 1}"
+    ) in draft.body
+    assert (
+        "debt_path(ctx, scenario=scenario, "
+        "time_period=time_period_by_scenario_time_period[scenario, time_period])"
+    ) in draft.body
+    assert "time_period_by_scenario_time_period" in draft.lookup_table_names
+    _assert_body_compiles(draft, ("scenario", "time_period"))
+
+
 def test_unmatched_read_site_fails_synthesis() -> None:
     members = (
         _member(

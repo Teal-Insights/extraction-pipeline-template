@@ -27,6 +27,7 @@ from src.refactor_bindings import BindingKeyValue, KeyConceptSpec
 from src.refactor_fingerprints import (
     ClusterFingerprintSummary,
     FingerprintGroup,
+    LookupKey,
     RefRelation,
 )
 
@@ -209,7 +210,9 @@ def synthesize_singleton_body(
     )
 
 
-def _sort_key(value: BindingKeyValue) -> tuple[int, object]:
+def _sort_key(value: LookupKey) -> tuple[int, object]:
+    if isinstance(value, tuple):
+        return (4, tuple(_sort_key(item) for item in value))
     if isinstance(value, bool):
         return (3, value)
     if isinstance(value, (int, float)):
@@ -219,17 +222,23 @@ def _sort_key(value: BindingKeyValue) -> tuple[int, object]:
     return (2, str(value))
 
 
+def _table_key_expr(key: LookupKey) -> ast.expr:
+    if isinstance(key, tuple):
+        return ast.Tuple(
+            elts=[ast.Constant(value=item) for item in key], ctx=ast.Load()
+        )
+    return ast.Constant(value=key)
+
+
 @dataclass
 class _TableRegistry:
     """Allocates deterministic names for mechanical lookup-table dict literals."""
 
-    tables: dict[str, dict[BindingKeyValue, BindingKeyValue]] = field(
-        default_factory=dict
-    )
+    tables: dict[str, dict[LookupKey, BindingKeyValue]] = field(default_factory=dict)
     order: list[str] = field(default_factory=list)
 
     def register(
-        self, base_name: str, content: Mapping[BindingKeyValue, BindingKeyValue]
+        self, base_name: str, content: Mapping[LookupKey, BindingKeyValue]
     ) -> str:
         frozen = dict(content)
         name = base_name
@@ -252,7 +261,7 @@ class _TableRegistry:
                 ast.Assign(
                     targets=[ast.Name(id=name, ctx=ast.Store())],
                     value=ast.Dict(
-                        keys=[ast.Constant(value=key) for key in keys],
+                        keys=[_table_key_expr(key) for key in keys],
                         values=[ast.Constant(value=content[key]) for key in keys],
                     ),
                 )
@@ -366,7 +375,7 @@ class _GroupSynthesizer:
         return param
 
     def _register_table(
-        self, base_name: str, content: Mapping[BindingKeyValue, BindingKeyValue]
+        self, base_name: str, content: Mapping[LookupKey, BindingKeyValue]
     ) -> str:
         name = self.tables.register(base_name, content)
         if name not in self.table_names:
@@ -384,8 +393,21 @@ class _GroupSynthesizer:
             key_dim = relation.lookup_keys.get(dim)
             if key_dim is None:
                 raise MechanicalSynthesisError(f"lookup_without_key_dim:{dim}")
-            key_param = self._dim_param(key_dim)
             table = relation.lookups[dim]
+            if isinstance(key_dim, tuple):
+                key_params = [self._dim_param(key) for key in key_dim]
+                table_name = self._register_table(
+                    f"{dim.lower()}_by_{'_'.join(key_params)}", table
+                )
+                return ast.Subscript(
+                    value=_param_expr(table_name),
+                    slice=ast.Tuple(
+                        elts=[_param_expr(param) for param in key_params],
+                        ctx=ast.Load(),
+                    ),
+                    ctx=ast.Load(),
+                )
+            key_param = self._dim_param(key_dim)
             if dim in relation.lookup_bases:
                 table_name = self._register_table(
                     f"{self._dim_param(dim)}_lag_by_{key_param}", table
@@ -424,9 +446,18 @@ class _GroupSynthesizer:
             return value + relation.offsets[dim]
         if dim in relation.lookups:
             key_dim = relation.lookup_keys.get(dim)
-            if key_dim is None or key_dim not in member_keys:
+            if key_dim is None:
                 raise MechanicalSynthesisError(f"lookup_without_key_dim:{dim}")
             table = relation.lookups[dim]
+            if isinstance(key_dim, tuple):
+                if any(key not in member_keys for key in key_dim):
+                    raise MechanicalSynthesisError(f"lookup_without_key_dim:{dim}")
+                tuple_key: LookupKey = tuple(member_keys[key] for key in key_dim)
+                if tuple_key not in table:
+                    raise MechanicalSynthesisError(f"lookup_key_not_covered:{dim}")
+                return table[tuple_key]
+            if key_dim not in member_keys:
+                raise MechanicalSynthesisError(f"lookup_without_key_dim:{dim}")
             key_value = member_keys[key_dim]
             if key_value not in table:
                 raise MechanicalSynthesisError(f"lookup_key_not_covered:{dim}")

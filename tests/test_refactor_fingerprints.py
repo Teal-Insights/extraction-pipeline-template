@@ -128,25 +128,148 @@ def test_classify_ragged_lag_lookup_by_row_dim() -> None:
     assert relation.lookup_keys == {"TIME_PERIOD": "REF_AREA"}
 
 
-def test_classify_irregular_falls_back_to_explicit() -> None:
+def test_classify_tuple_lookup_for_jointly_determined_ref_key() -> None:
+    """A ref key jointly determined by two member dims becomes a tuple lookup.
+
+    No single member dimension yields a single-valued table (TIME_PERIOD 1 maps
+    to both 1991_nominal and 1991_real; INDICATOR nominal_gdp maps to both
+    1991_nominal and 1992_nominal), but the (INDICATOR, TIME_PERIOD) pair
+    routes every member unambiguously.
+    """
+    member_keys = {
+        "Sheet!B10": {"TIME_PERIOD": 1, "INDICATOR": "nominal_gdp"},
+        "Sheet!B11": {"TIME_PERIOD": 1, "INDICATOR": "real_gdp"},
+        "Sheet!C10": {"TIME_PERIOD": 2, "INDICATOR": "nominal_gdp"},
+        "Sheet!C11": {"TIME_PERIOD": 2, "INDICATOR": "real_gdp"},
+    }
+    ref_keys_by_member = {
+        "Sheet!B10": {"INDICATOR_YEAR": "1991_nominal"},
+        "Sheet!B11": {"INDICATOR_YEAR": "1991_real"},
+        "Sheet!C10": {"INDICATOR_YEAR": "1992_nominal"},
+        "Sheet!C11": {"INDICATOR_YEAR": "1992_real"},
+    }
+    relation = classify_ref_relation(0, member_keys, ref_keys_by_member)
+    assert relation.tier == "lookup"
+    assert relation.lookup_keys == {"INDICATOR_YEAR": ("INDICATOR", "TIME_PERIOD")}
+    assert relation.lookups == {
+        "INDICATOR_YEAR": {
+            ("nominal_gdp", 1): "1991_nominal",
+            ("real_gdp", 1): "1991_real",
+            ("nominal_gdp", 2): "1992_nominal",
+            ("real_gdp", 2): "1992_real",
+        }
+    }
+    assert relation.lookup_bases == {}
+    assert relation.explicit is None
+
+
+def test_dump_renders_tuple_lookup_table() -> None:
+    members = (
+        _member("Data!B10", "=Hist!B2"),
+        _member("Data!B11", "=Hist!B3"),
+        _member("Data!C10", "=Hist!C2"),
+        _member("Data!C11", "=Hist!C3"),
+    )
+    bound_keys = {
+        "Data!B10": {"INDICATOR": "nominal_gdp", "TIME_PERIOD": 1},
+        "Data!B11": {"INDICATOR": "real_gdp", "TIME_PERIOD": 1},
+        "Data!C10": {"INDICATOR": "nominal_gdp", "TIME_PERIOD": 2},
+        "Data!C11": {"INDICATOR": "real_gdp", "TIME_PERIOD": 2},
+        "Hist!B2": {"INDICATOR_YEAR": "1991_nominal"},
+        "Hist!B3": {"INDICATOR_YEAR": "1991_real"},
+        "Hist!C2": {"INDICATOR_YEAR": "1992_nominal"},
+        "Hist!C3": {"INDICATOR_YEAR": "1992_real"},
+    }
+    expected = {
+        address: bound_keys[address]
+        for address in ("Data!B10", "Data!B11", "Data!C10", "Data!C11")
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+    )
+    assert summary.fallback_reason is None
+    assert summary.relation_tiers == ("lookup",)
+    dump = format_cluster_fingerprint_dump(summary)
+    assert "INDICATOR_YEAR = table[(INDICATOR, TIME_PERIOD)]" in dump
+    assert "(nominal_gdp, 1): 1991_nominal" in dump
+
+
+def test_classify_same_dimension_lookup_for_cross_reads() -> None:
+    """Cross-reads along the members' own dimension derive a same-dim lookup.
+
+    The strict single-dim search rejects the table because it merely restates a
+    unique-per-member key; the subset fallback accepts it since the recorded
+    routing is ground truth for synthesis.
+    """
+    member_keys = {
+        "Sheet!B10": {"INDICATOR": "debt"},
+        "Sheet!B11": {"INDICATOR": "revenue"},
+        "Sheet!B12": {"INDICATOR": "expenditure"},
+    }
+    ref_keys_by_member = {
+        "Sheet!B10": {"INDICATOR": "revenue"},
+        "Sheet!B11": {"INDICATOR": "gdp"},
+        "Sheet!B12": {"INDICATOR": "gdp"},
+    }
+    relation = classify_ref_relation(0, member_keys, ref_keys_by_member)
+    assert relation.tier == "lookup"
+    assert relation.lookup_keys == {"INDICATOR": "INDICATOR"}
+    assert relation.lookups == {
+        "INDICATOR": {"debt": "revenue", "revenue": "gdp", "expenditure": "gdp"}
+    }
+    assert relation.explicit is None
+
+
+def test_classify_irregular_routing_derives_smallest_single_valued_subset() -> None:
+    """The previously-explicit irregular fixture now derives scalar lookups.
+
+    TIME_PERIOD is unique per member, so single-dim tables keyed by it are
+    single-valued but non-compressing; the strict search rejects them and the
+    subset fallback accepts them (smallest subset first, so no tuple needed).
+    """
     member_keys = {
         "Sheet!B10": {"TIME_PERIOD": 1, "REF_AREA": "USA"},
         "Sheet!C10": {"TIME_PERIOD": 2, "REF_AREA": "USA"},
         "Sheet!D10": {"TIME_PERIOD": 3, "REF_AREA": "FRA"},
     }
-    # No consistent relation (neither offset nor single-dim lookup).
     ref_keys_by_member = {
         "Sheet!B10": {"TIME_PERIOD": 9, "REF_AREA": "JPN"},
         "Sheet!C10": {"TIME_PERIOD": 1, "REF_AREA": "CAN"},
         "Sheet!D10": {"TIME_PERIOD": 7, "REF_AREA": "MEX"},
     }
     relation = classify_ref_relation(0, member_keys, ref_keys_by_member)
+    assert relation.tier == "lookup"
+    assert relation.lookup_keys == {
+        "REF_AREA": "TIME_PERIOD",
+        "TIME_PERIOD": "TIME_PERIOD",
+    }
+    assert relation.lookups["REF_AREA"] == {1: "JPN", 2: "CAN", 3: "MEX"}
+    assert relation.lookups["TIME_PERIOD"] == {1: 9, 2: 1, 3: 7}
+    assert relation.explicit is None
+
+
+def test_classify_irregular_falls_back_to_explicit() -> None:
+    # Two members share the same key combo but route to different refs, so no
+    # table over member dims — not even the full tuple — is single-valued.
+    member_keys = {
+        "Sheet!B10": {"TIME_PERIOD": 1},
+        "Sheet!C10": {"TIME_PERIOD": 1},
+    }
+    ref_keys_by_member = {
+        "Sheet!B10": {"REF_AREA": "JPN"},
+        "Sheet!C10": {"REF_AREA": "CAN"},
+    }
+    relation = classify_ref_relation(0, member_keys, ref_keys_by_member)
     assert relation.tier == "explicit"
     assert relation.explicit is not None
-    assert len(relation.explicit) == 3
+    assert len(relation.explicit) == 2
     first_member, first_ref = relation.explicit[0]
-    assert ("REF_AREA", "USA") in first_member
     assert ("TIME_PERIOD", 1) in first_member
+    assert ("REF_AREA", "JPN") in first_ref
 
 
 def test_build_summary_uniform_sweep_single_group() -> None:
