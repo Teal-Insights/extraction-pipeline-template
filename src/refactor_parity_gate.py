@@ -412,6 +412,115 @@ def check_singleton_parity(
         )
 
 
+@dataclass(frozen=True)
+class MechanicalParityUnit:
+    """A single mechanical helper to check against the pristine oracle.
+
+    ``member_checks`` pairs each covered cell address with the keyword arguments
+    used to invoke the helper for that member. A singleton has exactly one
+    member check with empty kwargs; a cluster has one per collapsed member.
+    """
+
+    unit_id: str
+    helper_name: str
+    kind: Literal["cluster", "singleton"]
+    member_checks: tuple[tuple[str, Mapping[str, object]], ...]
+
+
+def check_batched_mechanical_parity(
+    *,
+    pristine_source: str,
+    mechanical_source: str,
+    units: Sequence[MechanicalParityUnit],
+    input_vectors: Sequence[InputVector],
+    atol: float = PARITY_ATOL,
+) -> None:
+    """Verify every mechanically refactored helper against the pristine oracle.
+
+    Pass 1 rewrites all mechanical units into ``internals.py`` before any LLM
+    naming runs, so their behavioral parity can be checked in one batch: the
+    mechanical module is exec'd once and each unit's helper is compared against
+    the pristine cell semantics across all input vectors. A divergence is a
+    mechanical-synthesis defect, not an LLM mistake, so it raises loudly (naming
+    the failing units) with no retry.
+    """
+    if not units:
+        return
+    runtime = _runtime()
+    golden_ns = _golden_namespace(pristine_source)
+    try:
+        candidate_ns = exec_internals_module(mechanical_source)
+    except Exception as error:
+        raise ParityError(
+            "mechanically refactored internals.py could not be loaded: "
+            f"{type(error).__name__}: {error}. Mechanical synthesis must emit a "
+            "module that parses, imports, and execs cleanly."
+        ) from error
+
+    mismatches_by_unit: dict[str, list[_Mismatch]] = {}
+    total_checks = 0
+    for index, inputs in enumerate(input_vectors):
+        golden_ctx = make_eval_context(golden_ns, inputs)
+        candidate_ctx = make_eval_context(candidate_ns, inputs)
+        for unit in units:
+            helper = candidate_ns.get(unit.helper_name)
+            if helper is None:
+                raise ParityError(
+                    f"mechanical helper {unit.helper_name!r} for unit "
+                    f"{unit.unit_id!r} is missing from the refactored module"
+                )
+            for address, kwargs in unit.member_checks:
+                total_checks += 1
+                literals = dict(kwargs)
+                expected = _evaluate_golden(
+                    lambda eval_ctx=golden_ctx, addr=address: runtime.xl_cell(
+                        eval_ctx, addr
+                    )
+                )
+                call = _format_call(unit.helper_name, literals)
+                try:
+                    actual = _evaluate_candidate(
+                        lambda fn=helper, eval_ctx=candidate_ctx, kw=literals: fn(
+                            eval_ctx, **kw
+                        ),
+                        call=call,
+                    )
+                except ParityError as error:
+                    raise ParityError(
+                        f"mechanical unit {unit.unit_id!r}: {error}"
+                    ) from error
+                if not _values_close(expected, actual, atol):
+                    mismatches_by_unit.setdefault(unit.unit_id, []).append(
+                        _Mismatch(
+                            address=address,
+                            call=call,
+                            expected=expected,
+                            actual=actual,
+                            vector_index=index,
+                        )
+                    )
+
+    if mismatches_by_unit:
+        failing_unit_ids = sorted(mismatches_by_unit)
+        lines = [
+            "mechanical refactor diverges from the original cell semantics for "
+            f"unit(s) {failing_unit_ids}:"
+        ]
+        for unit_id in failing_unit_ids:
+            for mismatch in mismatches_by_unit[unit_id][:_MAX_REPORTED_MISMATCHES]:
+                lines.append(
+                    f"  [{unit_id}] {mismatch.address} via {mismatch.call}: "
+                    f"got {mismatch.actual!r}, expected {mismatch.expected!r} "
+                    f"[input vector #{mismatch.vector_index}]"
+                )
+        lines.append(
+            f"Checked {total_checks} member/vector combinations (atol={atol:g}). "
+            "Mechanical synthesis must reproduce each cell's pristine value; this "
+            "is a synthesis defect, not an LLM naming error."
+        )
+        raise ParityError("\n".join(lines))
+
+
 @lru_cache(maxsize=1)
 def _dist_data() -> ModuleType:
     """Load the exported ``data.py`` (DEFAULT_INPUTS/CONSTANTS) in isolation."""

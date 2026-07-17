@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import builtins
 import hashlib
 import json
@@ -21,12 +22,21 @@ from excel_grapher.grapher.graph import DependencyGraph
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from src.formula_clustering import FormulaCluster
+from src.mechanical_body import MechanicalBodyDraft
+from src.mechanical_naming import ClusterNamingLLMResponse
 from src.llm_json import (
     DEFAULT_MAX_ATTEMPTS,
     ValidatedJsonFailure,
     generate_validated_json,
+    generate_validated_json_async,
 )
-from src.llm_providers import build_client, model_from_env, provider_for_model
+from src.llm_providers import (
+    build_async_client,
+    build_client,
+    get_llm_semaphore,
+    model_from_env,
+    provider_for_model,
+)
 from src.pipeline_context import projection_layout as active_projection_layout
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
 from src.internal_bindings import InternalBindingIndex, internal_binding_for_address
@@ -79,7 +89,7 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 29
+REFACTOR_PROMPT_VERSION = 30
 CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT = 30
 _FINGERPRINT_FALLBACK_COUNT = 0
 
@@ -225,7 +235,7 @@ def write_refactor_failure_diagnostic(
     root = dump_dir if dump_dir is not None else REFACTOR_FAILURE_DUMP_DIR
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     slug = _refactor_failure_target_slug(kind=kind, target=target)
-    failure_dir = root / f"{timestamp}_{slug}"
+    failure_dir = root / slug
     failure_dir.mkdir(parents=True, exist_ok=True)
 
     files: dict[str, str] = {}
@@ -1833,6 +1843,7 @@ def validate_cluster_refactor_response(
     *,
     existing_names: frozenset[str],
     internals_source: str,
+    require_semantic_locals: bool = True,
 ) -> None:
     if response.helper_name != ctx.expected_helper_name:
         raise ValueError(
@@ -1987,7 +1998,8 @@ def validate_cluster_refactor_response(
             "helper_docstring must match the docstring embedded in helper_source"
         )
 
-    validate_semantic_local_names(helper_def)
+    if require_semantic_locals:
+        validate_semantic_local_names(helper_def)
     validate_no_cell_function_references(helper_def)
     validate_parameter_names_match_vocabulary(ctx, response)
 
@@ -2051,6 +2063,83 @@ def singleton_refactor_cache_key(
         ).hexdigest(),
     }
     return hashlib.sha256(stable_json(payload).encode()).hexdigest()
+
+
+def semantic_naming_cache_payload(
+    *,
+    kind: Literal["cluster", "singleton"],
+    unit_id: str,
+    canonical_template: str,
+    mechanical_body: str,
+    response_schema: dict[str, object],
+    member_fingerprints: Sequence[Sequence[object]],
+    contract: str | None = None,
+) -> dict[str, object]:
+    """Build the cache payload for a pass-2 semantic naming request.
+
+    The payload is keyed to what actually determines the naming answer: the
+    model, prompt version, the mechanical body being named, the response schema,
+    and per-member fingerprints. It deliberately omits ``internals_sha256`` so a
+    naming result survives unrelated edits elsewhere in ``internals.py`` — the
+    mechanical body already encodes everything the semantic layer depends on.
+    """
+    payload: dict[str, object] = {
+        "model": refactor_model(),
+        "prompt_version": REFACTOR_PROMPT_VERSION,
+        "kind": kind,
+        "unit_id": unit_id,
+        "canonical_template": canonical_template,
+        "mechanical_body_sha256": hashlib.sha256(mechanical_body.encode()).hexdigest(),
+        "response_schema_sha256": hashlib.sha256(
+            stable_json(response_schema).encode()
+        ).hexdigest(),
+        "member_fingerprints": [list(entry) for entry in member_fingerprints],
+    }
+    if kind == "cluster":
+        payload["contract"] = contract
+    return payload
+
+
+def semantic_naming_cache_key(
+    *,
+    kind: Literal["cluster", "singleton"],
+    unit_id: str,
+    canonical_template: str,
+    mechanical_body: str,
+    response_schema: dict[str, object],
+    member_fingerprints: Sequence[Sequence[object]],
+    contract: str | None = None,
+) -> str:
+    """Return the sha256 hex of the stable-JSON semantic naming payload."""
+    payload = semantic_naming_cache_payload(
+        kind=kind,
+        unit_id=unit_id,
+        canonical_template=canonical_template,
+        mechanical_body=mechanical_body,
+        response_schema=response_schema,
+        member_fingerprints=member_fingerprints,
+        contract=contract,
+    )
+    return hashlib.sha256(stable_json(payload).encode()).hexdigest()
+
+
+def mechanical_placeholder_docstring(parameter_names: Sequence[str]) -> str:
+    """Return a valid Google-style placeholder docstring for a mechanical body.
+
+    Pass 1 must materialize a validated helper before the LLM has named it, so
+    the body carries this deterministic placeholder documentation until pass 2
+    replaces it with the model's docstring.
+    """
+    lines = [
+        "Mechanically synthesized helper pending semantic naming.",
+        "",
+        "Args:",
+        "    ctx: Workbook evaluation context.",
+    ]
+    for name in parameter_names:
+        lines.append(f"    {name}: Projection key parameter.")
+    lines.extend(["", "Returns:", "    Cell value."])
+    return "\n".join(lines)
 
 
 def load_singleton_refactor_prompt_fixed_portion() -> str:
@@ -2529,6 +2618,62 @@ def prepare_cluster_refactor_response(
     )
 
 
+def build_mechanical_cluster_response(
+    ctx: ClusterRefactorContext,
+    draft: MechanicalBodyDraft,
+    *,
+    runtime_source: str,
+    internals_source: str,
+) -> ClusterRefactorResponse:
+    """Assemble a pass-1 cluster response from a verified mechanical draft body.
+
+    The draft body still uses mechanical local names (``_t1`` ...); the semantic
+    layer (docstring and local names) is deferred to pass 2. A deterministic
+    placeholder docstring keeps the helper valid until then.
+    """
+    parameters = synthesize_cluster_parameters(ctx)
+    llm_response = ClusterRefactorLLMResponse(
+        symbol_docstring=mechanical_placeholder_docstring(
+            [parameter.name for parameter in parameters]
+        ),
+        symbol_body=draft.body,
+        error=None,
+        error_reason=None,
+    )
+    return prepare_cluster_refactor_response(
+        llm_response,
+        ctx,
+        runtime_source=runtime_source,
+        internals_source=internals_source,
+    )
+
+
+def build_mechanical_singleton_response(
+    ctx: SingletonRefactorContext,
+    draft: MechanicalBodyDraft,
+    *,
+    runtime_source: str,
+    internals_source: str,
+) -> SingletonRefactorResponse:
+    """Assemble a pass-1 singleton response from a mechanical draft body.
+
+    As with clusters, the mechanical local names survive into pass 1 behind a
+    placeholder docstring; pass 2 renames them and supplies the real docstring.
+    """
+    llm_response = SingletonRefactorLLMResponse(
+        symbol_docstring=mechanical_placeholder_docstring(()),
+        symbol_body=draft.body,
+        error=None,
+        error_reason=None,
+    )
+    return prepare_singleton_refactor_response(
+        llm_response,
+        ctx,
+        runtime_source=runtime_source,
+        internals_source=internals_source,
+    )
+
+
 def _yaml_scalar(value: object) -> str:
     if isinstance(value, str):
         if (
@@ -2982,6 +3127,7 @@ def validate_singleton_refactor_response(
     *,
     existing_names: frozenset[str],
     internals_source: str,
+    require_semantic_locals: bool = True,
 ) -> None:
     if response.symbol_name != ctx.expected_helper_name:
         raise ValueError(
@@ -3021,7 +3167,8 @@ def validate_singleton_refactor_response(
             "symbol_docstring must match the docstring embedded in symbol_source"
         )
 
-    validate_semantic_local_names(symbol_def)
+    if require_semantic_locals:
+        validate_semantic_local_names(symbol_def)
     validate_no_cell_function_references(symbol_def)
 
     arg_names = [arg.arg for arg in symbol_def.args.args]
@@ -3954,6 +4101,305 @@ def refactor_internals_cluster(
     )
 
 
+@dataclass
+class _PendingSemanticUnit:
+    """A mechanically refactored unit awaiting parallel LLM semantic naming."""
+
+    kind: Literal["cluster", "singleton"]
+    unit_id: str
+    helper_name: str
+    diagnostic_target: str
+    canonical_template: str
+    contract: str | None
+    draft: MechanicalBodyDraft
+    ctx: ClusterRefactorContext | SingletonRefactorContext
+    parameter_names: frozenset[str]
+    forbidden_names: frozenset[str]
+    member_fingerprints: tuple[tuple[str, str, str], ...]
+    member_checks: tuple[tuple[str, dict[str, BindingKeyValue]], ...]
+
+
+def _member_fingerprint(
+    address: str, formula: str, source: str
+) -> tuple[str, str, str]:
+    return (
+        address,
+        hashlib.sha256(formula.encode()).hexdigest(),
+        hashlib.sha256(source.encode()).hexdigest(),
+    )
+
+
+_MECHANICAL_NAMING_SYSTEM_PROMPT = (
+    "You add the semantic layer (docstring and local names) to a verified, "
+    "mechanically generated Python function. Return only JSON matching the schema."
+)
+
+
+def _semantic_naming_user_prompt(
+    pending: _PendingSemanticUnit,
+    *,
+    internals_path: Path,
+    internals_index: InternalsSourceIndex,
+) -> str:
+    from src.mechanical_naming import (
+        format_cluster_naming_prompt_context,
+        format_singleton_naming_prompt_context,
+        load_cluster_naming_prompt_fixed_portion,
+        load_singleton_naming_prompt_fixed_portion,
+    )
+
+    if pending.kind == "cluster":
+        assert isinstance(pending.ctx, ClusterRefactorContext)
+        context_dump = build_cluster_refactor_prompt_context(
+            pending.ctx,
+            internals_path=internals_path,
+            internals_index=internals_index,
+        )
+        return (
+            load_cluster_naming_prompt_fixed_portion().strip()
+            + "\n\n"
+            + format_cluster_naming_prompt_context(context_dump, pending.draft)
+        )
+    assert isinstance(pending.ctx, SingletonRefactorContext)
+    context_dump = build_singleton_refactor_prompt_context(
+        pending.ctx,
+        internals_path=internals_path,
+        internals_index=internals_index,
+    )
+    return (
+        load_singleton_naming_prompt_fixed_portion().strip()
+        + "\n\n"
+        + format_singleton_naming_prompt_context(context_dump, pending.draft)
+    )
+
+
+def _apply_semantic_naming_response(
+    pending: _PendingSemanticUnit,
+    naming_response: ClusterNamingLLMResponse,
+    source: str,
+    *,
+    runtime_source: str,
+) -> str:
+    """Rewrite ``pending``'s helper in ``source`` with its named body/docstring."""
+    from src.mechanical_naming import apply_cluster_naming_response
+
+    named_body = apply_cluster_naming_response(
+        naming_response,
+        pending.draft,
+        parameter_names=pending.parameter_names,
+        forbidden_names=pending.forbidden_names,
+    )
+    existing_names = _function_names(source)
+    if pending.kind == "cluster":
+        assert isinstance(pending.ctx, ClusterRefactorContext)
+        legacy = ClusterRefactorLLMResponse(
+            symbol_docstring=naming_response.symbol_docstring,
+            symbol_body=named_body,
+            error=None,
+            error_reason=None,
+        )
+        semantic_response = prepare_cluster_refactor_response(
+            legacy,
+            pending.ctx,
+            runtime_source=runtime_source,
+            internals_source=source,
+        )
+        validate_cluster_refactor_response(
+            pending.ctx,
+            semantic_response,
+            existing_names=existing_names,
+            internals_source=source,
+            require_semantic_locals=True,
+        )
+        return _replace_function_definition(
+            source, pending.helper_name, semantic_response.helper_source
+        )
+    assert isinstance(pending.ctx, SingletonRefactorContext)
+    legacy_singleton = SingletonRefactorLLMResponse(
+        symbol_docstring=naming_response.symbol_docstring,
+        symbol_body=named_body,
+        error=None,
+        error_reason=None,
+    )
+    semantic_singleton = prepare_singleton_refactor_response(
+        legacy_singleton,
+        pending.ctx,
+        runtime_source=runtime_source,
+        internals_source=source,
+    )
+    validate_singleton_refactor_response(
+        pending.ctx,
+        semantic_singleton,
+        existing_names=existing_names,
+        internals_source=source,
+        require_semantic_locals=True,
+    )
+    return _replace_function_definition(
+        source, pending.helper_name, semantic_singleton.symbol_source
+    )
+
+
+def _run_semantic_naming_pass(
+    pending_units: Sequence[_PendingSemanticUnit],
+    *,
+    internals_path: Path,
+    internals_index: InternalsSourceIndex,
+    runtime_source: str,
+    dry_run: bool,
+) -> InternalsSourceIndex:
+    """Pass 2: name every mechanical unit in parallel, then rewrite the module once.
+
+    Naming is a pure semantic layer over an already-verified body, so the calls
+    are independent and run concurrently under the shared LLM semaphore. Results
+    are cached on a key that omits the internals hash (the mechanical body fully
+    determines the answer), and all responses are applied to a single in-memory
+    source that is written and re-indexed once.
+    """
+    from src.mechanical_naming import (
+        ClusterNamingLLMResponse as ClusterNamingModel,
+        SingletonNamingLLMResponse,
+        apply_cluster_naming_response,
+    )
+
+    model = refactor_model()
+    cache = load_refactor_cache()
+
+    cache_keys: dict[str, str] = {}
+    prompts: dict[str, str] = {}
+    response_models: dict[str, type[ClusterNamingLLMResponse]] = {}
+    for pending in pending_units:
+        response_model: type[ClusterNamingLLMResponse] = (
+            ClusterNamingModel
+            if pending.kind == "cluster"
+            else SingletonNamingLLMResponse
+        )
+        response_models[pending.unit_id] = response_model
+        cache_keys[pending.unit_id] = semantic_naming_cache_key(
+            kind=pending.kind,
+            unit_id=pending.unit_id,
+            canonical_template=pending.canonical_template,
+            mechanical_body=pending.draft.body,
+            response_schema=response_model.model_json_schema(),
+            member_fingerprints=pending.member_fingerprints,
+            contract=pending.contract,
+        )
+        prompt = _semantic_naming_user_prompt(
+            pending,
+            internals_path=internals_path,
+            internals_index=internals_index,
+        )
+        prompts[pending.unit_id] = prompt
+        if _PROMPT_OBSERVER is not None:
+            _PROMPT_OBSERVER(pending.kind, pending.helper_name, prompt)
+
+    naming_by_unit: dict[str, ClusterNamingLLMResponse] = {}
+    misses: list[_PendingSemanticUnit] = []
+    for pending in pending_units:
+        cached = cache.get(cache_keys[pending.unit_id])
+        if cached is None:
+            misses.append(pending)
+            continue
+        try:
+            naming_response = response_models[pending.unit_id].model_validate_json(
+                cached
+            )
+            apply_cluster_naming_response(
+                naming_response,
+                pending.draft,
+                parameter_names=pending.parameter_names,
+                forbidden_names=pending.forbidden_names,
+            )
+        except (ValueError, ValidationError):
+            del cache[cache_keys[pending.unit_id]]
+            misses.append(pending)
+            continue
+        naming_by_unit[pending.unit_id] = naming_response
+
+    if misses:
+        fresh = _gather_semantic_naming(misses, model=model, prompts=prompts)
+        naming_by_unit.update(fresh)
+        for pending in misses:
+            naming_response = naming_by_unit[pending.unit_id]
+            cache[cache_keys[pending.unit_id]] = naming_response.model_dump_json()
+
+    source = internals_index.source
+    for pending in pending_units:
+        source = _apply_semantic_naming_response(
+            pending,
+            naming_by_unit[pending.unit_id],
+            source,
+            runtime_source=runtime_source,
+        )
+
+    validate_refactored_internals(source)
+    if not dry_run:
+        internals_path.write_text(source, encoding="utf-8", newline="\n")
+        save_refactor_cache(cache)
+    return InternalsSourceIndex.from_source(source)
+
+
+def _gather_semantic_naming(
+    misses: Sequence[_PendingSemanticUnit],
+    *,
+    model: str,
+    prompts: Mapping[str, str],
+) -> dict[str, ClusterNamingLLMResponse]:
+    from src.mechanical_naming import (
+        ClusterNamingLLMResponse as ClusterNamingModel,
+        SingletonNamingLLMResponse,
+        apply_cluster_naming_response,
+    )
+
+    client, provider = build_async_client(model)
+    semaphore = get_llm_semaphore()
+
+    def _make_post_validate(pending: _PendingSemanticUnit):
+        def _post_validate(
+            parsed: ClusterNamingLLMResponse,
+        ) -> ClusterNamingLLMResponse:
+            raise_if_llm_declared_error(
+                parsed,
+                kind=pending.kind,
+                target=pending.diagnostic_target,
+            )
+            apply_cluster_naming_response(
+                parsed,
+                pending.draft,
+                parameter_names=pending.parameter_names,
+                forbidden_names=pending.forbidden_names,
+            )
+            return parsed
+
+        return _post_validate
+
+    async def _one(
+        pending: _PendingSemanticUnit,
+    ) -> tuple[str, ClusterNamingLLMResponse]:
+        response_model: type[ClusterNamingLLMResponse] = (
+            ClusterNamingModel
+            if pending.kind == "cluster"
+            else SingletonNamingLLMResponse
+        )
+        parsed, _content = await generate_validated_json_async(
+            client=client,
+            model=model,
+            provider=provider,
+            system_prompt=_MECHANICAL_NAMING_SYSTEM_PROMPT,
+            user_prompt=prompts[pending.unit_id],
+            response_model=response_model,
+            post_validate=_make_post_validate(pending),
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
+            semaphore=semaphore,
+        )
+        return pending.unit_id, parsed
+
+    async def _run() -> dict[str, ClusterNamingLLMResponse]:
+        pairs = await asyncio.gather(*[_one(pending) for pending in misses])
+        return dict(pairs)
+
+    return asyncio.run(_run())
+
+
 def refactor_internals_all_clusters(
     projection: ProjectionResult,
     clusters: tuple[FormulaCluster, ...],
@@ -3969,11 +4415,22 @@ def refactor_internals_all_clusters(
     parity_gate: bool = True,
     layout: ProjectionColumnLayout | None = None,
 ) -> tuple[ClusterRefactorApplyResult, ...]:
-    """Refactor every eligible cluster in unified dependency order.
+    """Refactor every eligible unit in unified dependency order in two passes.
 
-    When ``parity_gate`` is enabled, each refactored helper is checked against the
-    pristine pre-refactor cell semantics across several input vectors before its
-    transaction is committed; a divergence rolls back and re-prompts the model.
+    Pass 1 (sequential, no LLM): each unit whose body can be mechanically
+    synthesized is collapsed with a placeholder docstring, applied in schedule
+    order so later units see upstream collapses. Units that cannot be mechanically
+    synthesized fall back to the interleaved full-body LLM contract (with its own
+    per-unit parity gate) exactly as before.
+
+    Between the passes, when ``parity_gate`` is enabled, all mechanically
+    refactored helpers are checked against the pristine cell semantics in a single
+    batched gate. A mechanical divergence is a synthesis defect and raises loudly
+    with no retry.
+
+    Pass 2 (parallel): the deferred semantic layer — docstring and local names —
+    is generated for every mechanical unit concurrently, applied to the module in
+    one shot, and fully re-validated (including semantic local names).
 
     Pass ``bound_address_keys`` from the extract stage when available so cluster
     context construction does not call ``_default_bound_address_keys`` (which
@@ -3988,6 +4445,7 @@ def refactor_internals_all_clusters(
         pristine_source = internals_index.source
         input_vectors = build_default_input_vectors()
 
+    runtime_source = _read_runtime_source(internals_path)
     ordered_units = compute_refactor_schedule(projection, clusters)
     existing_helper_names = internals_index.semantic_helper_names
     allocated_helper_names = allocate_schedule_helper_names(
@@ -3996,7 +4454,7 @@ def refactor_internals_all_clusters(
         existing_names=existing_helper_names,
     )
     results: list[ClusterRefactorApplyResult] = []
-    responses: list[ClusterRefactorResponse] = []
+    pending_semantic: list[_PendingSemanticUnit] = []
     refactored_any = False
     for unit, helper_name in zip(ordered_units, allocated_helper_names, strict=True):
         cluster = unit.as_formula_cluster()
@@ -4005,7 +4463,7 @@ def refactor_internals_all_clusters(
             frozenset(allocated_helper_names) | existing_helper_names
         ) - {helper_name}
         if len(cluster.members) == 1:
-            ctx = build_singleton_refactor_context(
+            singleton_ctx = build_singleton_refactor_context(
                 projection,
                 cluster,
                 internals_path,
@@ -4016,10 +4474,63 @@ def refactor_internals_all_clusters(
                 expected_helper_name=helper_name,
                 existing_helper_names=reserved_for_others,
             )
-            if ctx is None:
+            if singleton_ctx is None:
+                continue
+            if _SINGLETON_CONTEXT_OBSERVER is not None:
+                _SINGLETON_CONTEXT_OBSERVER(singleton_ctx)
+            draft = _try_synthesize_singleton_body(singleton_ctx)
+            if draft is not None:
+                internals_source = internals_index.source
+                existing_names = _function_names(
+                    internals_source, index=internals_index
+                )
+                mechanical_response = build_mechanical_singleton_response(
+                    singleton_ctx,
+                    draft,
+                    runtime_source=runtime_source,
+                    internals_source=internals_source,
+                )
+                validate_singleton_refactor_response(
+                    singleton_ctx,
+                    mechanical_response,
+                    existing_names=existing_names,
+                    internals_source=internals_source,
+                    require_semantic_locals=False,
+                )
+                updated, _rewrites = apply_singleton_refactor_plan(
+                    internals_source, mechanical_response, singleton_ctx
+                )
+                validate_refactored_internals(updated)
+                if not dry_run:
+                    internals_path.write_text(updated, encoding="utf-8", newline="\n")
+                internals_index = InternalsSourceIndex.from_source(updated)
+                pending_semantic.append(
+                    _PendingSemanticUnit(
+                        kind="singleton",
+                        unit_id=diagnostic_target,
+                        helper_name=mechanical_response.symbol_name,
+                        diagnostic_target=diagnostic_target,
+                        canonical_template=singleton_ctx.canonical_template,
+                        contract=None,
+                        draft=draft,
+                        ctx=singleton_ctx,
+                        parameter_names=frozenset(),
+                        forbidden_names=existing_names
+                        | frozenset(singleton_ctx.allowed_runtime_symbols),
+                        member_fingerprints=(
+                            _member_fingerprint(
+                                singleton_ctx.address,
+                                singleton_ctx.normalized_formula,
+                                singleton_ctx.python_source,
+                            ),
+                        ),
+                        member_checks=((singleton_ctx.address, {}),),
+                    )
+                )
+                refactored_any = True
                 continue
             singleton_result = refactor_internals_singleton(
-                ctx,
+                singleton_ctx,
                 internals_path=internals_path,
                 dry_run=dry_run,
                 pristine_source=pristine_source,
@@ -4035,7 +4546,7 @@ def refactor_internals_all_clusters(
             refactored_any = True
             continue
 
-        ctx = build_cluster_refactor_context(
+        cluster_ctx = build_cluster_refactor_context(
             projection,
             cluster,
             internals_path,
@@ -4050,10 +4561,83 @@ def refactor_internals_all_clusters(
             expected_helper_name=helper_name,
             existing_helper_names=reserved_for_others,
         )
-        if ctx is None:
+        if cluster_ctx is None:
+            continue
+        if _CLUSTER_CONTEXT_OBSERVER is not None:
+            _CLUSTER_CONTEXT_OBSERVER(cluster_ctx)
+        draft = _try_synthesize_cluster_body(cluster_ctx)
+        if draft is not None:
+            internals_source = internals_index.source
+            existing_names = _function_names(internals_source, index=internals_index)
+            mechanical_response = build_mechanical_cluster_response(
+                cluster_ctx,
+                draft,
+                runtime_source=runtime_source,
+                internals_source=internals_source,
+            )
+            validate_cluster_refactor_response(
+                cluster_ctx,
+                mechanical_response,
+                existing_names=existing_names,
+                internals_source=internals_source,
+                require_semantic_locals=False,
+            )
+            updated = apply_refactor_plan(
+                internals_source, mechanical_response, cluster_ctx
+            )
+            validate_refactored_internals(updated)
+            if not dry_run:
+                internals_path.write_text(updated, encoding="utf-8", newline="\n")
+            internals_index = InternalsSourceIndex.from_source(updated)
+            results.append(
+                ClusterRefactorApplyResult(
+                    source=updated,
+                    helper_name=mechanical_response.helper_name,
+                    wrappers_applied=tuple(
+                        entry.function_name for entry in mechanical_response.member_keys
+                    ),
+                    dry_run=dry_run,
+                    response=mechanical_response,
+                )
+            )
+            pending_semantic.append(
+                _PendingSemanticUnit(
+                    kind="cluster",
+                    unit_id=diagnostic_target,
+                    helper_name=mechanical_response.helper_name,
+                    diagnostic_target=diagnostic_target,
+                    canonical_template=cluster_ctx.canonical_template,
+                    contract=cluster_ctx.contract,
+                    draft=draft,
+                    ctx=cluster_ctx,
+                    parameter_names=frozenset(
+                        parameter.name for parameter in mechanical_response.parameters
+                    ),
+                    forbidden_names=existing_names
+                    | frozenset(cluster_ctx.allowed_runtime_symbols),
+                    member_fingerprints=tuple(
+                        _member_fingerprint(
+                            member.address,
+                            member.normalized_formula,
+                            member.python_source,
+                        )
+                        for member in cluster_ctx.members
+                    ),
+                    member_checks=tuple(
+                        (
+                            entry.address,
+                            _parameter_literals(
+                                mechanical_response.parameters, entry.keys_dict()
+                            ),
+                        )
+                        for entry in mechanical_response.member_keys
+                    ),
+                )
+            )
+            refactored_any = True
             continue
         result = refactor_internals_cluster(
-            ctx,
+            cluster_ctx,
             internals_path=internals_path,
             dry_run=dry_run,
             pristine_source=pristine_source,
@@ -4065,8 +4649,37 @@ def refactor_internals_all_clusters(
         if not dry_run:
             internals_index = InternalsSourceIndex.from_source(result.source)
         results.append(result)
-        responses.append(result.response)
         refactored_any = True
+
+    if parity_gate and pending_semantic and pristine_source is not None:
+        from src.refactor_parity_gate import (
+            MechanicalParityUnit,
+            check_batched_mechanical_parity,
+        )
+
+        check_batched_mechanical_parity(
+            pristine_source=pristine_source,
+            mechanical_source=internals_index.source,
+            units=[
+                MechanicalParityUnit(
+                    unit_id=pending.unit_id,
+                    helper_name=pending.helper_name,
+                    kind=pending.kind,
+                    member_checks=pending.member_checks,
+                )
+                for pending in pending_semantic
+            ],
+            input_vectors=input_vectors if input_vectors is not None else (),
+        )
+
+    if pending_semantic:
+        internals_index = _run_semantic_naming_pass(
+            pending_semantic,
+            internals_path=internals_path,
+            internals_index=internals_index,
+            runtime_source=runtime_source,
+            dry_run=dry_run,
+        )
 
     if not dry_run and refactored_any:
         source = internals_path.read_text(encoding="utf-8")
