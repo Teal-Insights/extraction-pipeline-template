@@ -16,7 +16,7 @@ If you are asked to commit your work, make sure you commit it to an issue branch
 
 ## Binding and graph-cache utilities
 
-Warm extract also caches `derive_*_series` payloads under `.cache/series-resolution/` (keyed from `graph_cache_key`, like `.cache/projection/`). That directory is local/untracked; pytest redirects it via `tests/fixtures/test_state.py`. Pass `--no-cache` to bypass it.
+Warm extract also caches `derive_*_series` payloads under `.cache/series-resolution/` and codegen module texts under `.cache/codegen/` (both keyed from `graph_cache_key` / projection key, like `.cache/projection/`). Those directories are local/untracked; pytest redirects them via `tests/fixtures/test_state.py`. Pass `--no-cache` to bypass them.
 
 Four workflow scripts live under `scripts/`:
 

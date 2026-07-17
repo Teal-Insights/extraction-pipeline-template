@@ -161,7 +161,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Bypass graph/projection/series-resolution caches for this run.",
+        help="Bypass graph/projection/series-resolution/codegen caches for this run.",
     )
     parser.add_argument(
         "--report-synthesis",

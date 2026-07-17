@@ -16,18 +16,22 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 REPO_GRAPH_CACHE_DIR = _REPO_ROOT / ".cache" / "dependency-graph"
 REPO_PROJECTION_CACHE_DIR = _REPO_ROOT / ".cache" / "projection"
 REPO_SERIES_RESOLUTION_CACHE_DIR = _REPO_ROOT / ".cache" / "series-resolution"
+REPO_CODEGEN_CACHE_DIR = _REPO_ROOT / ".cache" / "codegen"
 
 _ORIGINAL_GRAPH_CACHE_DIR: Path | None = None
 _ORIGINAL_PROJECTION_CACHE_DIR: Path | None = None
 _ORIGINAL_SERIES_RESOLUTION_CACHE_DIR: Path | None = None
+_ORIGINAL_CODEGEN_CACHE_DIR: Path | None = None
 
 
 def redirect_pipeline_disk_cache(root: Path) -> None:
-    """Point graph/projection/series-resolution disk caches at an isolated directory."""
+    """Point graph/projection/series-resolution/codegen disk caches at an isolated directory."""
     global _ORIGINAL_GRAPH_CACHE_DIR
     global _ORIGINAL_PROJECTION_CACHE_DIR
     global _ORIGINAL_SERIES_RESOLUTION_CACHE_DIR
+    global _ORIGINAL_CODEGEN_CACHE_DIR
 
+    import src.codegen_cache as codegen_cache
     import src.graph_cache as graph_cache
     import src.projection_cache as projection_cache
     import src.series_resolution_cache as series_resolution_cache
@@ -38,26 +42,36 @@ def redirect_pipeline_disk_cache(root: Path) -> None:
         _ORIGINAL_SERIES_RESOLUTION_CACHE_DIR = (
             series_resolution_cache.DEFAULT_SERIES_RESOLUTION_CACHE_DIR
         )
+        _ORIGINAL_CODEGEN_CACHE_DIR = codegen_cache.DEFAULT_CODEGEN_CACHE_DIR
 
     graph_cache.DEFAULT_GRAPH_CACHE_DIR = root / "dependency-graph"
     projection_cache.DEFAULT_PROJECTION_CACHE_DIR = root / "projection"
     series_resolution_cache.DEFAULT_SERIES_RESOLUTION_CACHE_DIR = (
         root / "series-resolution"
     )
+    codegen_cache.DEFAULT_CODEGEN_CACHE_DIR = root / "codegen"
 
 
 def restore_pipeline_disk_cache() -> None:
-    """Restore graph/projection/series-resolution disk cache directories after pytest."""
+    """Restore graph/projection/series-resolution/codegen disk cache directories after pytest."""
     global _ORIGINAL_GRAPH_CACHE_DIR
     global _ORIGINAL_PROJECTION_CACHE_DIR
     global _ORIGINAL_SERIES_RESOLUTION_CACHE_DIR
+    global _ORIGINAL_CODEGEN_CACHE_DIR
 
     original_graph = _ORIGINAL_GRAPH_CACHE_DIR
     original_projection = _ORIGINAL_PROJECTION_CACHE_DIR
     original_series = _ORIGINAL_SERIES_RESOLUTION_CACHE_DIR
-    if original_graph is None or original_projection is None or original_series is None:
+    original_codegen = _ORIGINAL_CODEGEN_CACHE_DIR
+    if (
+        original_graph is None
+        or original_projection is None
+        or original_series is None
+        or original_codegen is None
+    ):
         return
 
+    import src.codegen_cache as codegen_cache
     import src.graph_cache as graph_cache
     import src.projection_cache as projection_cache
     import src.series_resolution_cache as series_resolution_cache
@@ -65,9 +79,11 @@ def restore_pipeline_disk_cache() -> None:
     graph_cache.DEFAULT_GRAPH_CACHE_DIR = original_graph
     projection_cache.DEFAULT_PROJECTION_CACHE_DIR = original_projection
     series_resolution_cache.DEFAULT_SERIES_RESOLUTION_CACHE_DIR = original_series
+    codegen_cache.DEFAULT_CODEGEN_CACHE_DIR = original_codegen
     _ORIGINAL_GRAPH_CACHE_DIR = None
     _ORIGINAL_PROJECTION_CACHE_DIR = None
     _ORIGINAL_SERIES_RESOLUTION_CACHE_DIR = None
+    _ORIGINAL_CODEGEN_CACHE_DIR = None
 
 
 def clear_runtime_caches() -> None:
