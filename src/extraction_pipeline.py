@@ -420,6 +420,8 @@ def run_export_stage(
     )
     callback_name = configure_docstring_callback(config)
 
+    print("codegen: generating modules…", flush=True)
+    codegen_started = time.perf_counter()
     with CodeGenerator(
         cast(GraphLike, refactor_projection), unpack_return=True
     ) as generator:
@@ -469,6 +471,10 @@ tests/results/local/
     write_dist_readme(config.dist_root, metadata=config.dist_metadata)
 
     seed_validation_harness(config=config)
+    print(
+        f"codegen: {len(modules)} modules ({time.perf_counter() - codegen_started:.1f}s)",
+        flush=True,
+    )
 
     return ExportStageState(
         config=config,
@@ -500,6 +506,8 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         output_series=graph_result.output_series,
         input_series=graph_result.input_series,
     )
+    print("clustering: partitioning formulas…", flush=True)
+    clustering_started = time.perf_counter()
     formula_clusters = cluster_graph_formulas(
         state.refactor_projection,
         bound_address_keys=bound_address_keys,
@@ -509,6 +517,17 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         workbook_path=config.workbook_path,
         layout=config.projection_layout,
     )
+    formula_count = sum(len(cluster.members) for cluster in formula_clusters)
+    print(
+        f"clustering: {formula_count} formulas → {len(formula_clusters)} clusters "
+        f"({time.perf_counter() - clustering_started:.1f}s)",
+        flush=True,
+    )
+    print(
+        f"internals_refactor: rewriting {len(formula_clusters)} clusters…",
+        flush=True,
+    )
+    refactor_started = time.perf_counter()
     refactor_internals_all_clusters(
         state.refactor_projection,
         formula_clusters,
@@ -519,6 +538,10 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         bindings_path=config.bindings_path,
         workbook_path=config.workbook_path,
         address_to_series_id=address_to_series_id,
+    )
+    print(
+        f"internals_refactor: done ({time.perf_counter() - refactor_started:.1f}s)",
+        flush=True,
     )
     return RefactorStageState(config=config)
 
