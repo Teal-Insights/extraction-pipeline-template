@@ -62,6 +62,8 @@ def test_run_export_stage_prints_codegen_stage_boundary(
 ) -> None:
     config = _sample_config(tmp_path)
     (tmp_path / "dist" / "my_model").mkdir(parents=True)
+    config.guide_path.parent.mkdir(parents=True, exist_ok=True)
+    config.guide_path.write_text("guide\n", encoding="utf-8")
 
     with (
         patch(
@@ -91,7 +93,7 @@ def test_run_export_stage_prints_codegen_stage_boundary(
         run_export_stage(config)
 
     captured = capsys.readouterr().out
-    assert "codegen: generating modules…" in captured
+    assert "codegen: cache miss" in captured or "codegen: cache bypassed" in captured
     assert "codegen: 1 modules (" in captured
 
 
