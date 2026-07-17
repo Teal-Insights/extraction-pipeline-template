@@ -2738,6 +2738,125 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
     assert from_source_sources[1] == version_sources[1]
 
 
+def test_pass_one_defers_internals_write_until_single_flush(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pass 1 applies units in memory; internals.py is flushed exactly once."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
+
+    graph, bindings = inter_cluster_cycle_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    version_sources = [
+        f"def cell_engine_b2(ctx):\n    return {n}.0\n" for n in range(5)
+    ]
+    internals_path.write_text(version_sources[0], encoding="utf-8")
+
+    events: list[tuple[str, str]] = []
+    apply_count = {"n": 0}
+    original_write_text = Path.write_text
+
+    def tracking_write_text(
+        self: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if self == internals_path:
+            events.append(("write", data))
+        return original_write_text(
+            self, data, encoding=encoding, errors=errors, newline=newline
+        )
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            address=cluster.members[0],
+            canonical_template="=1",
+            normalized_formula="=1",
+            python_source="return 1.0",
+            allowed_runtime_symbols=(),
+        )
+
+    def fake_apply_plan(
+        _source: str, _response: object, _ctx: object
+    ) -> tuple[str, int]:
+        apply_count["n"] += 1
+        events.append(("apply", str(apply_count["n"])))
+        return version_sources[apply_count["n"]], 0
+
+    def fake_naming_pass(
+        _pending_units: object,
+        *,
+        internals_index: InternalsSourceIndex,
+        **_kwargs: object,
+    ) -> tuple[InternalsSourceIndex, dict[str, object]]:
+        events.append(("pass2", ""))
+        return internals_index, {}
+
+    monkeypatch.setattr(Path, "write_text", tracking_write_text)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: object())
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module,
+        "build_mechanical_singleton_response",
+        lambda *_a, **_k: SimpleNamespace(symbol_name="cell_engine_b2"),
+    )
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "apply_singleton_refactor_plan", fake_apply_plan)
+    monkeypatch.setattr(module, "_run_semantic_naming_pass", fake_naming_pass)
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!B3": "family_b",
+            "Engine!C3": "family_c",
+        },
+    )
+
+    # Four in-memory applies, then a single end-of-Pass-1 flush, then Pass 2,
+    # then Phase C's own write — never a per-unit write.
+    assert [kind for kind, _ in events] == [
+        "apply",
+        "apply",
+        "apply",
+        "apply",
+        "write",
+        "pass2",
+        "write",
+    ]
+    assert events[4][1] == version_sources[4]
+
+
 def test_llm_refactor_cluster_uses_dimension_aware_prompt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
