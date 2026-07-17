@@ -4023,6 +4023,7 @@ def refactor_internals_singleton(
     source_graph: DependencyGraph | None = None,
     diagnostic_target: str | None = None,
     internals_index: InternalsSourceIndex | None = None,
+    flush: bool = True,
 ) -> SingletonRefactorApplyResult:
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     source = index.source
@@ -4045,7 +4046,7 @@ def refactor_internals_singleton(
     )
     updated, rewrite_count = apply_singleton_refactor_plan(source, response, ctx)
     validate_refactored_internals(updated)
-    if not dry_run:
+    if not dry_run and flush:
         internals_path.write_text(updated, encoding="utf-8", newline="\n")
     return SingletonRefactorApplyResult(
         source=updated,
@@ -4068,6 +4069,7 @@ def refactor_internals_cluster(
     source_graph: DependencyGraph | None = None,
     diagnostic_target: str | None = None,
     internals_index: InternalsSourceIndex | None = None,
+    flush: bool = True,
 ) -> ClusterRefactorApplyResult:
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     source = index.source
@@ -4090,7 +4092,7 @@ def refactor_internals_cluster(
     )
     updated = apply_refactor_plan(source, response, ctx)
     validate_refactored_internals(updated)
-    if not dry_run:
+    if not dry_run and flush:
         internals_path.write_text(updated, encoding="utf-8", newline="\n")
     return ClusterRefactorApplyResult(
         source=updated,
@@ -4521,6 +4523,12 @@ def refactor_internals_all_clusters(
     is generated for every mechanical unit concurrently, applied to the module in
     one shot, and fully re-validated (including semantic local names).
 
+    Disk flush boundary: Pass 1 never writes ``internals_path`` per unit.
+    Cumulative source is threaded through the in-memory ``internals_index`` and
+    flushed to disk exactly once after Pass 1 completes — after the batched
+    mechanical parity gate, before Pass 2 — unless ``dry_run``. Pass 2 and
+    Phase C keep their own single writes.
+
     Pass ``bound_address_keys`` from the extract stage when available so cluster
     context construction does not call ``_default_bound_address_keys`` (which
     rebuilds the pipeline graph).
@@ -4590,8 +4598,6 @@ def refactor_internals_all_clusters(
                     internals_source, mechanical_response, singleton_ctx
                 )
                 validate_refactored_internals(updated)
-                if not dry_run:
-                    internals_path.write_text(updated, encoding="utf-8", newline="\n")
                 internals_index = InternalsSourceIndex.from_source(updated)
                 pending_semantic.append(
                     _PendingSemanticUnit(
@@ -4627,6 +4633,7 @@ def refactor_internals_all_clusters(
                 source_graph=source_graph,
                 diagnostic_target=diagnostic_target,
                 internals_index=internals_index,
+                flush=False,
             )
             if not dry_run:
                 internals_index = InternalsSourceIndex.from_source(
@@ -4675,8 +4682,6 @@ def refactor_internals_all_clusters(
                 internals_source, mechanical_response, cluster_ctx
             )
             validate_refactored_internals(updated)
-            if not dry_run:
-                internals_path.write_text(updated, encoding="utf-8", newline="\n")
             internals_index = InternalsSourceIndex.from_source(updated)
             results.append(
                 ClusterRefactorApplyResult(
@@ -4734,6 +4739,7 @@ def refactor_internals_all_clusters(
             source_graph=source_graph,
             diagnostic_target=diagnostic_target,
             internals_index=internals_index,
+            flush=False,
         )
         if not dry_run:
             internals_index = InternalsSourceIndex.from_source(result.source)
@@ -4759,6 +4765,11 @@ def refactor_internals_all_clusters(
                 for pending in pending_semantic
             ],
             input_vectors=input_vectors if input_vectors is not None else (),
+        )
+
+    if not dry_run and refactored_any:
+        internals_path.write_text(
+            internals_index.source, encoding="utf-8", newline="\n"
         )
 
     if pending_semantic:
