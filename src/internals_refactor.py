@@ -4173,70 +4173,158 @@ def _semantic_naming_user_prompt(
     )
 
 
-def _apply_semantic_naming_response(
-    pending: _PendingSemanticUnit,
-    naming_response: ClusterNamingLLMResponse,
+def _apply_and_validate_semantic_naming(
+    pending_units: Sequence[_PendingSemanticUnit],
+    naming_by_unit: Mapping[str, ClusterNamingLLMResponse],
     source: str,
     *,
     runtime_source: str,
-) -> str:
-    """Rewrite ``pending``'s helper in ``source`` with its named body/docstring."""
-    from src.mechanical_naming import apply_cluster_naming_response
+) -> tuple[str, dict[str, ClusterRefactorResponse | SingletonRefactorResponse]]:
+    """Validate naming responses, then apply them commutatively to ``source``.
 
-    named_body = apply_cluster_naming_response(
-        naming_response,
-        pending.draft,
-        parameter_names=pending.parameter_names,
-        forbidden_names=pending.forbidden_names,
+    Each unit is prepared and fully validated (including semantic local names)
+    before any rewrite. Application goes through
+    :func:`src.mechanical_naming.apply_naming_responses_to_module` so the live
+    pass-2 path matches the order-independent applier covered by tests.
+    Prepared responses have ``helper_source`` / ``symbol_source`` synced to the
+    text actually written into the module.
+    """
+    from src.mechanical_naming import (
+        NamingUnit,
+        apply_cluster_naming_response,
+        apply_naming_responses_to_module,
     )
+
     existing_names = _function_names(source)
-    if pending.kind == "cluster":
-        assert isinstance(pending.ctx, ClusterRefactorContext)
-        legacy = ClusterRefactorLLMResponse(
-            symbol_docstring=naming_response.symbol_docstring,
-            symbol_body=named_body,
-            error=None,
-            error_reason=None,
+    prepared_by_unit: dict[
+        str, ClusterRefactorResponse | SingletonRefactorResponse
+    ] = {}
+    units: list[NamingUnit] = []
+
+    for pending in pending_units:
+        naming_response = naming_by_unit[pending.unit_id]
+        named_body = apply_cluster_naming_response(
+            naming_response,
+            pending.draft,
+            parameter_names=pending.parameter_names,
+            forbidden_names=pending.forbidden_names,
         )
-        semantic_response = prepare_cluster_refactor_response(
-            legacy,
-            pending.ctx,
-            runtime_source=runtime_source,
-            internals_source=source,
+        if pending.kind == "cluster":
+            assert isinstance(pending.ctx, ClusterRefactorContext)
+            legacy = ClusterRefactorLLMResponse(
+                symbol_docstring=naming_response.symbol_docstring,
+                symbol_body=named_body,
+                error=None,
+                error_reason=None,
+            )
+            prepared: ClusterRefactorResponse | SingletonRefactorResponse = (
+                prepare_cluster_refactor_response(
+                    legacy,
+                    pending.ctx,
+                    runtime_source=runtime_source,
+                    internals_source=source,
+                )
+            )
+            assert isinstance(prepared, ClusterRefactorResponse)
+            prepared = _prepare_cluster_refactor_response(prepared, pending.ctx)
+            validate_cluster_refactor_response(
+                pending.ctx,
+                prepared,
+                existing_names=existing_names,
+                internals_source=source,
+                require_semantic_locals=True,
+            )
+            enriched_docstring = prepared.helper_docstring
+        else:
+            assert isinstance(pending.ctx, SingletonRefactorContext)
+            legacy_singleton = SingletonRefactorLLMResponse(
+                symbol_docstring=naming_response.symbol_docstring,
+                symbol_body=named_body,
+                error=None,
+                error_reason=None,
+            )
+            prepared = prepare_singleton_refactor_response(
+                legacy_singleton,
+                pending.ctx,
+                runtime_source=runtime_source,
+                internals_source=source,
+            )
+            assert isinstance(prepared, SingletonRefactorResponse)
+            prepared = _prepare_singleton_refactor_response(prepared, pending.ctx)
+            validate_singleton_refactor_response(
+                pending.ctx,
+                prepared,
+                existing_names=existing_names,
+                internals_source=source,
+                require_semantic_locals=True,
+            )
+            enriched_docstring = prepared.symbol_docstring
+
+        prepared_by_unit[pending.unit_id] = prepared
+        units.append(
+            NamingUnit(
+                helper_name=pending.helper_name,
+                draft=pending.draft,
+                response=naming_response.model_copy(
+                    update={"symbol_docstring": enriched_docstring}
+                ),
+                parameter_names=pending.parameter_names,
+                forbidden_names=pending.forbidden_names,
+            )
         )
-        validate_cluster_refactor_response(
-            pending.ctx,
-            semantic_response,
-            existing_names=existing_names,
-            internals_source=source,
-            require_semantic_locals=True,
+
+    named_source = apply_naming_responses_to_module(source, units)
+    for pending in pending_units:
+        prepared = prepared_by_unit[pending.unit_id]
+        helper_source = extract_function_source(
+            named_source, pending.helper_name
+        ).strip()
+        if pending.kind == "cluster":
+            assert isinstance(prepared, ClusterRefactorResponse)
+            prepared_by_unit[pending.unit_id] = _align_cluster_response_docstring(
+                prepared.model_copy(update={"helper_source": helper_source})
+            )
+        else:
+            assert isinstance(prepared, SingletonRefactorResponse)
+            prepared_by_unit[pending.unit_id] = _align_singleton_response_docstring(
+                prepared.model_copy(update={"symbol_source": helper_source})
+            )
+    return named_source, prepared_by_unit
+
+
+def _refresh_mechanical_cluster_results(
+    results: Sequence[ClusterRefactorApplyResult],
+    *,
+    pending_units: Sequence[_PendingSemanticUnit],
+    prepared_by_unit_id: Mapping[
+        str, ClusterRefactorResponse | SingletonRefactorResponse
+    ],
+    named_source: str,
+) -> list[ClusterRefactorApplyResult]:
+    """Replace pass-1 placeholder cluster responses with post-naming ones."""
+    named_by_helper = {
+        pending.helper_name: prepared_by_unit_id[pending.unit_id]
+        for pending in pending_units
+        if pending.kind == "cluster"
+    }
+    refreshed: list[ClusterRefactorApplyResult] = []
+    for result in results:
+        prepared = named_by_helper.get(result.helper_name)
+        if prepared is None:
+            refreshed.append(result)
+            continue
+        assert isinstance(prepared, ClusterRefactorResponse)
+        refreshed.append(
+            ClusterRefactorApplyResult(
+                source=named_source,
+                helper_name=result.helper_name,
+                wrappers_applied=result.wrappers_applied,
+                dry_run=result.dry_run,
+                response=prepared,
+                phase_c_pruned=result.phase_c_pruned,
+            )
         )
-        return _replace_function_definition(
-            source, pending.helper_name, semantic_response.helper_source
-        )
-    assert isinstance(pending.ctx, SingletonRefactorContext)
-    legacy_singleton = SingletonRefactorLLMResponse(
-        symbol_docstring=naming_response.symbol_docstring,
-        symbol_body=named_body,
-        error=None,
-        error_reason=None,
-    )
-    semantic_singleton = prepare_singleton_refactor_response(
-        legacy_singleton,
-        pending.ctx,
-        runtime_source=runtime_source,
-        internals_source=source,
-    )
-    validate_singleton_refactor_response(
-        pending.ctx,
-        semantic_singleton,
-        existing_names=existing_names,
-        internals_source=source,
-        require_semantic_locals=True,
-    )
-    return _replace_function_definition(
-        source, pending.helper_name, semantic_singleton.symbol_source
-    )
+    return refreshed
 
 
 def _run_semantic_naming_pass(
@@ -4246,7 +4334,10 @@ def _run_semantic_naming_pass(
     internals_index: InternalsSourceIndex,
     runtime_source: str,
     dry_run: bool,
-) -> InternalsSourceIndex:
+) -> tuple[
+    InternalsSourceIndex,
+    dict[str, ClusterRefactorResponse | SingletonRefactorResponse],
+]:
     """Pass 2: name every mechanical unit in parallel, then rewrite the module once.
 
     Naming is a pure semantic layer over an already-verified body, so the calls
@@ -4322,20 +4413,18 @@ def _run_semantic_naming_pass(
             naming_response = naming_by_unit[pending.unit_id]
             cache[cache_keys[pending.unit_id]] = naming_response.model_dump_json()
 
-    source = internals_index.source
-    for pending in pending_units:
-        source = _apply_semantic_naming_response(
-            pending,
-            naming_by_unit[pending.unit_id],
-            source,
-            runtime_source=runtime_source,
-        )
+    source, prepared_by_unit = _apply_and_validate_semantic_naming(
+        pending_units,
+        naming_by_unit,
+        internals_index.source,
+        runtime_source=runtime_source,
+    )
 
     validate_refactored_internals(source)
     if not dry_run:
         internals_path.write_text(source, encoding="utf-8", newline="\n")
         save_refactor_cache(cache)
-    return InternalsSourceIndex.from_source(source)
+    return InternalsSourceIndex.from_source(source), prepared_by_unit
 
 
 def _gather_semantic_naming(
@@ -4673,12 +4762,18 @@ def refactor_internals_all_clusters(
         )
 
     if pending_semantic:
-        internals_index = _run_semantic_naming_pass(
+        internals_index, prepared_by_unit = _run_semantic_naming_pass(
             pending_semantic,
             internals_path=internals_path,
             internals_index=internals_index,
             runtime_source=runtime_source,
             dry_run=dry_run,
+        )
+        results = _refresh_mechanical_cluster_results(
+            results,
+            pending_units=pending_semantic,
+            prepared_by_unit_id=prepared_by_unit,
+            named_source=internals_index.source,
         )
 
     if not dry_run and refactored_any:
