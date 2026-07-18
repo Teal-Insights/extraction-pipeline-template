@@ -110,6 +110,31 @@ def test_infer_refactor_return_type_hint_from_if_expression_literals() -> None:
     )
 
 
+def test_infer_refactor_return_type_hint_treats_none_literal_as_cellvalue() -> None:
+    source = dedent(
+        """
+        def cell_baseline_x42(ctx):
+            return (
+                (0.0)
+                if (_t2 := xl_compare("=", xl_cell(ctx, "Dashboard!C33"), "No"))
+                else (
+                    (xl_cell(ctx, "Baseline!X47"))
+                    if (_t1 := xl_compare("=", xl_cell(ctx, "Baseline!X46"), xl_cell(ctx, "Baseline!B47")))
+                    else (None)
+                )
+            )
+        """
+    ).strip()
+    assert (
+        infer_refactor_return_type_hint(
+            python_sources=(source,),
+            runtime_source=RUNTIME_STUB,
+            internals_source="",
+        )
+        == "float | CellValue"
+    )
+
+
 def test_infer_refactor_return_type_hint_from_direct_xl_compare_call() -> None:
     source = dedent(
         """

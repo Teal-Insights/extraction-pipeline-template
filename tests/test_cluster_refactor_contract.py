@@ -189,7 +189,13 @@ GROWTH_THRESHOLD_RUNTIME_STUB = dedent(
     '''
 ).strip()
 
-CLUSTER_PREPARE_KWARGS = {
+
+class ClusterPrepareKwargs(TypedDict):
+    runtime_source: str
+    internals_source: str
+
+
+CLUSTER_PREPARE_KWARGS: ClusterPrepareKwargs = {
     "runtime_source": GROWTH_THRESHOLD_RUNTIME_STUB,
     "internals_source": GROWTH_THRESHOLD_INTERNALS,
 }

@@ -117,6 +117,9 @@ def _infer_expr_types(
     callees: Mapping[str, str],
 ) -> set[str] | None:
     if isinstance(node, ast.Constant):
+        if node.value is None:
+            # Empty IF branches compile to a literal None, a valid CellValue.
+            return {"CellValue"}
         literal = _literal_type_hint(node.value)
         return {literal} if literal is not None else None
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -207,11 +210,16 @@ def infer_refactor_return_type_hint(
     runtime_source: str,
     internals_source: str,
     naming_hints: Mapping[str, object] | None = None,
+    callee_hints: Mapping[str, str] | None = None,
 ) -> str:
     """Infer an allowlisted helper return hint from mechanical member bodies."""
-    callees = build_callee_return_hints(
-        runtime_source=runtime_source,
-        internals_source=internals_source,
+    callees = (
+        dict(callee_hints)
+        if callee_hints is not None
+        else build_callee_return_hints(
+            runtime_source=runtime_source,
+            internals_source=internals_source,
+        )
     )
     hints: set[str] = set()
     for index, source in enumerate(python_sources):

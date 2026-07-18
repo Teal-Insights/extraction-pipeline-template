@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import textwrap
+import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -52,6 +53,15 @@ from src.refactor_bindings import (
     render_literal_helper_call,
     resolve_dimension_key,
 )
+from src.refactor_return_types import (
+    ALLOWED_REFACTOR_RETURN_TYPE_HINTS,
+    KNOWN_RUNTIME_RETURN_HINTS,
+    _binding_dtype_to_python,
+    build_callee_return_hints,
+    infer_refactor_return_type_hint,
+    normalize_return_type_hint_for_allowlist,
+    validate_scalar_return_type_hint,
+)
 from src.refactor_contracts import (
     ClusterRefactorContract,
     concepts_with_multiple_dimensions,
@@ -64,14 +74,6 @@ from src.refactor_fingerprints import (
     format_cluster_fingerprint_dump,
 )
 from src.refactor_order import compute_refactor_schedule, refactor_failure_target
-from src.refactor_return_types import (
-    ALLOWED_REFACTOR_RETURN_TYPE_HINTS,
-    KNOWN_RUNTIME_RETURN_HINTS,
-    _binding_dtype_to_python,
-    infer_refactor_return_type_hint,
-    normalize_return_type_hint_for_allowlist,
-    validate_scalar_return_type_hint,
-)
 from src.runtime_symbols import allowed_runtime_symbols
 from src.semantic_naming import (
     BindingRecordHints,
@@ -222,7 +224,8 @@ def write_refactor_failure_diagnostic(
     raw_content: str | None = None,
     conversation: Sequence[Mapping[str, Any]] | None = None,
     attempts: Sequence[Mapping[str, Any]] | None = None,
-    source: Literal["llm", "cache"] = "llm",
+    context: Mapping[str, Any] | None = None,
+    source: Literal["llm", "cache", "mechanical"] = "llm",
     model: str | None = None,
 ) -> Path:
     """Persist refactor failure artifacts for offline diagnosis.
@@ -231,6 +234,9 @@ def write_refactor_failure_diagnostic(
     validation failures), the dump includes the full chat history and
     per-attempt artifacts under ``attempts/NN/``. Legacy top-level response
     files continue to mirror the final attempt.
+
+    Pass-1 mechanical failures set ``source="mechanical"`` and typically
+    include a ``context`` payload (member sources, draft body, addresses).
     """
     root = dump_dir if dump_dir is not None else REFACTOR_FAILURE_DUMP_DIR
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -258,6 +264,9 @@ def write_refactor_failure_diagnostic(
             user_prompt,
             encoding="utf-8",
         )
+    if context is not None:
+        files["context"] = "context.json"
+        _write_json_artifact(failure_dir / files["context"], dict(context))
     if conversation is not None:
         files["conversation"] = "conversation.json"
         _write_json_artifact(
@@ -313,6 +322,99 @@ def write_refactor_failure_diagnostic(
         encoding="utf-8",
     )
     return failure_dir
+
+
+def _mechanical_draft_context(draft: MechanicalBodyDraft) -> dict[str, Any]:
+    return {
+        "body": draft.body,
+        "renameable_locals": list(draft.renameable_locals),
+        "lookup_table_names": list(draft.lookup_table_names),
+        "group_count": draft.group_count,
+    }
+
+
+def _mechanical_cluster_failure_context(
+    ctx: ClusterRefactorContext,
+    draft: MechanicalBodyDraft,
+) -> dict[str, Any]:
+    return {
+        "cluster_id": ctx.cluster_id,
+        "canonical_template": ctx.canonical_template,
+        "expected_helper_name": ctx.expected_helper_name,
+        "contract": ctx.contract,
+        "naming_hints": dict(ctx.naming_hints),
+        "members": [
+            {
+                "index": index,
+                "address": member.address,
+                "function_name": member.function_name,
+                "python_source": member.python_source,
+            }
+            for index, member in enumerate(ctx.members)
+        ],
+        "mechanical_draft": _mechanical_draft_context(draft),
+    }
+
+
+def _mechanical_singleton_failure_context(
+    ctx: SingletonRefactorContext,
+    draft: MechanicalBodyDraft,
+) -> dict[str, Any]:
+    return {
+        "address": ctx.address,
+        "function_name": ctx.function_name,
+        "canonical_template": ctx.canonical_template,
+        "normalized_formula": ctx.normalized_formula,
+        "python_source": ctx.python_source,
+        "expected_helper_name": ctx.expected_helper_name,
+        "naming_hints": dict(ctx.naming_hints),
+        "mechanical_draft": _mechanical_draft_context(draft),
+    }
+
+
+def _response_dump(response: object) -> Mapping[str, Any] | None:
+    model_dump = getattr(response, "model_dump", None)
+    if not callable(model_dump):
+        return None
+    payload = model_dump()
+    if isinstance(payload, Mapping):
+        return payload
+    return None
+
+
+def _log_mechanical_pass1_failure(
+    *,
+    kind: Literal["singleton", "cluster"],
+    target: str,
+    error: BaseException,
+    prepared_response: Mapping[str, Any] | None,
+    context: Callable[[], Mapping[str, Any]],
+    log_message: str,
+    log_args: Sequence[object],
+) -> None:
+    """Best-effort dump + log for pass-1 mechanical failures.
+
+    Dump construction must never mask the original exception.
+    """
+    try:
+        dump_dir = write_refactor_failure_diagnostic(
+            kind=kind,
+            target=target,
+            error=error,
+            prepared_response=prepared_response,
+            context=context(),
+            source="mechanical",
+        )
+    except Exception as dump_error:
+        logger.error(
+            "failed to write mechanical refactor diagnostic kind=%s target=%s: %s",
+            kind,
+            target,
+            dump_error,
+        )
+        logger.error(log_message, *log_args, "<unavailable>", error)
+        return
+    logger.error(log_message, *log_args, dump_dir, error)
 
 
 def _artifact_matches_raw_content(
@@ -2297,6 +2399,7 @@ def prepare_singleton_refactor_response(
     *,
     runtime_source: str,
     internals_source: str,
+    callee_hints: Mapping[str, str] | None = None,
 ) -> SingletonRefactorResponse:
     if llm_response.symbol_docstring is None or llm_response.symbol_body is None:
         raise ValueError(
@@ -2307,6 +2410,7 @@ def prepare_singleton_refactor_response(
         runtime_source=runtime_source,
         internals_source=internals_source,
         naming_hints=ctx.naming_hints,
+        callee_hints=callee_hints,
     )
     signature = inject_signature_return_type_hint(
         build_locked_helper_signature(ctx.expected_helper_name),
@@ -2661,6 +2765,7 @@ def prepare_cluster_refactor_response(
     *,
     runtime_source: str,
     internals_source: str,
+    callee_hints: Mapping[str, str] | None = None,
 ) -> ClusterRefactorResponse:
     if llm_response.symbol_docstring is None or llm_response.symbol_body is None:
         raise ValueError("cluster refactor response is missing required success fields")
@@ -2671,6 +2776,7 @@ def prepare_cluster_refactor_response(
         runtime_source=runtime_source,
         internals_source=internals_source,
         naming_hints=ctx.naming_hints,
+        callee_hints=callee_hints,
     )
     signature = inject_signature_return_type_hint(
         build_locked_helper_signature(
@@ -2711,6 +2817,7 @@ def build_mechanical_cluster_response(
     *,
     runtime_source: str,
     internals_source: str,
+    callee_hints: Mapping[str, str] | None = None,
 ) -> ClusterRefactorResponse:
     """Assemble a pass-1 cluster response from a verified mechanical draft body.
 
@@ -2732,6 +2839,7 @@ def build_mechanical_cluster_response(
         ctx,
         runtime_source=runtime_source,
         internals_source=internals_source,
+        callee_hints=callee_hints,
     )
 
 
@@ -2741,6 +2849,7 @@ def build_mechanical_singleton_response(
     *,
     runtime_source: str,
     internals_source: str,
+    callee_hints: Mapping[str, str] | None = None,
 ) -> SingletonRefactorResponse:
     """Assemble a pass-1 singleton response from a mechanical draft body.
 
@@ -2758,6 +2867,7 @@ def build_mechanical_singleton_response(
         ctx,
         runtime_source=runtime_source,
         internals_source=internals_source,
+        callee_hints=callee_hints,
     )
 
 
@@ -3120,6 +3230,26 @@ def _type_hint_runtime_imports(source: str) -> set[str]:
     return {name for name in ALLOWED_REFACTOR_TYPE_HINT_NAMES if name in source}
 
 
+def _missing_runtime_imports(source: str, symbols: set[str]) -> set[str]:
+    """Return ``symbols`` not already named on the ``from .runtime import`` line."""
+    if not symbols:
+        return set()
+    paren = re.search(
+        r"^from \.runtime import \(([^)]*)\)",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    if paren is not None:
+        imported = paren.group(1)
+    else:
+        flat = re.search(r"^from \.runtime import (.+)$", source, re.MULTILINE)
+        if flat is None:
+            return set(symbols)
+        imported = flat.group(1)
+    existing = {part.strip() for part in imported.split(",") if part.strip()}
+    return symbols - existing
+
+
 def _cluster_runtime_imports(response: ClusterRefactorResponse) -> set[str]:
     return _type_hint_runtime_imports(response.helper_source)
 
@@ -3129,7 +3259,8 @@ def ensure_cluster_refactor_imports(
     response: ClusterRefactorResponse,
 ) -> str:
     needed = _cluster_runtime_imports(response)
-    if not needed:
+    missing = _missing_runtime_imports(source, needed)
+    if not missing:
         return source
     return _merge_runtime_imports(source, needed)
 
@@ -3160,7 +3291,8 @@ def ensure_singleton_refactor_imports(
     response: SingletonRefactorResponse,
 ) -> str:
     needed = _singleton_runtime_imports(response)
-    if not needed:
+    missing = _missing_runtime_imports(source, needed)
+    if not missing:
         return source
     return _merge_runtime_imports(source, needed)
 
@@ -3291,18 +3423,20 @@ def validate_singleton_refactor_response(
     validate_allowed_global_references(symbol_def, allowed_names=allowed_names)
 
 
-def _replace_function_definition(source: str, old_name: str, new_source: str) -> str:
-    module = ast.parse(source)
-    lines = source.splitlines(keepends=True)
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name == old_name:
-            start = node.lineno - 1
-            end = node.end_lineno or node.lineno
-            while end < len(lines) and lines[end].strip() == "":
-                end += 1
-            replacement = new_source.strip() + "\n\n"
-            return "".join(lines[:start]) + replacement + "".join(lines[end:])
-    raise KeyError(f"Function {old_name!r} not found")
+def _replace_function_definition(
+    source: str,
+    old_name: str,
+    new_source: str,
+    *,
+    module: ast.Module | None = None,
+) -> str:
+    tree = module if module is not None else ast.parse(source)
+    span = _function_def_char_span(source, tree, old_name)
+    if span is None:
+        raise KeyError(f"Function {old_name!r} not found")
+    start, end = span
+    replacement = new_source.strip() + "\n\n"
+    return source[:start] + replacement + source[end:]
 
 
 def apply_singleton_refactor_plan(
@@ -3311,27 +3445,41 @@ def apply_singleton_refactor_plan(
     ctx: SingletonRefactorContext,
 ) -> tuple[str, int]:
     source = ensure_singleton_refactor_imports(source, response)
-    updated = _replace_function_definition(
-        source,
-        ctx.function_name,
-        response.symbol_source,
-    )
     binding = CollapseBinding(
         address=ctx.address,
         function_name=ctx.function_name,
         helper_name=response.symbol_name,
         literal_call=f"{response.symbol_name}(ctx)",
     )
-    updated, rewrite_count = substitute_collapse_bindings(updated, (binding,))
+    module = ast.parse(source)
+    replacement_span = _function_def_char_span(source, module, ctx.function_name)
+    if replacement_span is None:
+        raise KeyError(f"Function {ctx.function_name!r} not found")
+    call_replacements = _collect_collapse_binding_replacements(
+        source,
+        module,
+        (binding,),
+    )
+    replace_start, replace_end = replacement_span
+    external_replacements = [
+        edit
+        for edit in call_replacements
+        if not (replace_start <= edit[0] and edit[1] <= replace_end)
+    ]
+    edits: list[tuple[int, int, str]] = [
+        (replace_start, replace_end, response.symbol_source.strip() + "\n\n"),
+        *external_replacements,
+    ]
+    updated = _apply_char_span_edits(source, edits)
     if RESOLVER_SECTION_MARKER in updated:
-        symbol_dispatch = _parse_symbol_dispatch(source)
+        symbol_dispatch = _parse_symbol_dispatch(source, module=module)
         symbol_dispatch[ctx.address] = response.symbol_name
         updated = _replace_resolver_section(
             updated,
-            _parse_address_dispatch(updated) or {},
+            _parse_address_dispatch(source, module=module) or {},
             symbol_dispatch=symbol_dispatch,
         )
-    return updated, rewrite_count
+    return updated, len(external_replacements)
 
 
 def apply_refactor_plan(
@@ -3369,23 +3517,67 @@ def apply_cluster_collapse(
     response: ClusterRefactorResponse,
     ctx: ClusterRefactorContext | None = None,
 ) -> tuple[str, int]:
+    return apply_cluster_collapses_batch(source, (response,), ctx=ctx)
+
+
+def apply_cluster_collapses_batch(
+    source: str,
+    responses: Sequence[ClusterRefactorResponse],
+    ctx: ClusterRefactorContext | None = None,
+) -> tuple[str, int]:
+    """Collapse one or more independent clusters with a single full-module parse.
+
+    Helpers are inserted first (preserving prior single-collapse semantics so
+    wrapper call sites inside newly inserted helpers are rewritten), then bindings
+    and wrapper removals run against one shared AST.
+
+    Runtime import merges for type-hint symbols (``EvalContext``, ``CellValue``)
+    are applied once for the whole batch before inserts, and skipped entirely when
+    the symbols are already imported, so a typed helper batch does not re-parse the
+    module once per response.
+    """
     _ = ctx
-    source = ensure_cluster_refactor_imports(source, response)
-    updated = insert_helper_source(source, response.helper_source)
-    bindings = collapse_bindings_for_response(response)
-    updated, rewrite_count = substitute_collapse_bindings(updated, bindings)
-    collapsed_functions = frozenset(
-        entry.function_name for entry in response.member_keys
+    if not responses:
+        return source, 0
+    needed_imports: set[str] = set()
+    for response in responses:
+        needed_imports |= _cluster_runtime_imports(response)
+    missing_imports = _missing_runtime_imports(source, needed_imports)
+    updated = (
+        _merge_runtime_imports(source, needed_imports) if missing_imports else source
     )
-    updated = _remove_function_definitions(updated, collapsed_functions)
-    dispatch_updates = _dispatch_entries_for_collapse(response)
+    # Insert in reverse so the first response's helper ends closest to the
+    # formula-section marker (stable, readable order matching schedule order).
+    for response in reversed(tuple(responses)):
+        updated = insert_helper_source(updated, response.helper_source)
+    bindings = tuple(
+        binding
+        for response in responses
+        for binding in collapse_bindings_for_response(response)
+    )
+    collapsed_functions = frozenset(
+        entry.function_name for response in responses for entry in response.member_keys
+    )
+    # One full-module parse covers binding rewrites, wrapper removal, and
+    # resolver-dispatch reads. String edits invalidate line numbers, so do not
+    # re-parse afterward — dispatch values are taken from this AST.
+    tree = ast.parse(updated)
+    updated, rewrite_count = _apply_bindings_and_remove_functions(
+        updated,
+        bindings,
+        collapsed_functions,
+        module=tree,
+    )
+    dispatch_updates: AddressDispatch = {}
+    for response in responses:
+        dispatch_updates.update(_dispatch_entries_for_collapse(response))
     if dispatch_updates and RESOLVER_SECTION_MARKER in updated:
-        dispatch = _parse_address_dispatch(updated) or {}
+        dispatch = _parse_address_dispatch(updated, module=tree) or {}
         dispatch.update(dispatch_updates)
         updated = _replace_resolver_section(
             updated,
             dispatch,
-            symbol_dispatch=_parse_symbol_dispatch(source),
+            symbol_dispatch=_parse_symbol_dispatch(updated, module=tree),
         )
     return updated, rewrite_count
 
@@ -3411,25 +3603,117 @@ def _dispatch_entries_for_collapse(
     return dispatch
 
 
-def substitute_collapse_bindings(
+def _line_start_offsets(source: str) -> list[int]:
+    starts = [0]
+    for index, character in enumerate(source):
+        if character == "\n":
+            starts.append(index + 1)
+    return starts
+
+
+def _function_def_char_span(
     source: str,
+    module: ast.Module,
+    function_name: str,
+) -> tuple[int, int] | None:
+    lines = source.splitlines(keepends=True)
+    line_starts = _line_start_offsets(source)
+    for node in module.body:
+        if not isinstance(node, ast.FunctionDef) or node.name != function_name:
+            continue
+        start = line_starts[node.lineno - 1]
+        end_line = node.end_lineno or node.lineno
+        while end_line < len(lines) and lines[end_line].strip() == "":
+            end_line += 1
+        end = line_starts[end_line] if end_line < len(lines) else len(source)
+        return start, end
+    return None
+
+
+def _function_removal_char_spans(
+    source: str,
+    module: ast.Module,
+    function_names: frozenset[str],
+) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for name in function_names:
+        span = _function_def_char_span(source, module, name)
+        if span is not None:
+            spans.append(span)
+    return spans
+
+
+def _collect_collapse_binding_replacements(
+    source: str,
+    module: ast.Module,
     bindings: tuple[CollapseBinding, ...],
-) -> tuple[str, int]:
+) -> list[tuple[int, int, str]]:
     if not bindings:
-        return source, 0
+        return []
     bindings_by_function = {binding.function_name: binding for binding in bindings}
-    module = ast.parse(source)
-    replacements: list[tuple[int, int, str, str]] = []
+    line_starts = _line_start_offsets(source)
+    replacements: list[tuple[int, int, str]] = []
     visitor = _CollapseBindingsRewriteVisitor(
         bindings_by_function=bindings_by_function,
-        source=source,
+        line_starts=line_starts,
         replacements=replacements,
     )
     for function_def in _iter_function_defs(module.body):
         visitor.visit(function_def)
+    return replacements
+
+
+def _apply_char_span_edits(
+    source: str,
+    edits: list[tuple[int, int, str]],
+) -> str:
+    if not edits:
+        return source
+    updated = source
+    for start, end, new_text in sorted(edits, key=lambda item: item[0], reverse=True):
+        updated = updated[:start] + new_text + updated[end:]
+    return updated
+
+
+def _apply_bindings_and_remove_functions(
+    source: str,
+    bindings: tuple[CollapseBinding, ...],
+    remove_names: frozenset[str],
+    *,
+    module: ast.Module,
+) -> tuple[str, int]:
+    """Rewrite collapse call sites and drop wrappers from one parsed module."""
+    replacements = _collect_collapse_binding_replacements(source, module, bindings)
+    deletions = _function_removal_char_spans(source, module, remove_names)
+
+    def _subsumed(start: int, end: int) -> bool:
+        return any(
+            delete_start <= start and end <= delete_end
+            for delete_start, delete_end in deletions
+        )
+
+    edits: list[tuple[int, int, str]] = [
+        (start, end, new_text)
+        for start, end, new_text in replacements
+        if not _subsumed(start, end)
+    ]
+    edits.extend((start, end, "") for start, end in deletions)
+    return _apply_char_span_edits(source, edits), len(replacements)
+
+
+def substitute_collapse_bindings(
+    source: str,
+    bindings: tuple[CollapseBinding, ...],
+    *,
+    module: ast.Module | None = None,
+) -> tuple[str, int]:
+    if not bindings:
+        return source, 0
+    tree = module if module is not None else ast.parse(source)
+    replacements = _collect_collapse_binding_replacements(source, tree, bindings)
     if not replacements:
         return source, 0
-    return _apply_segment_replacements(source, replacements), len(replacements)
+    return _apply_char_span_edits(source, replacements), len(replacements)
 
 
 def collect_static_cell_function_references(source: str) -> frozenset[str]:
@@ -3842,20 +4126,18 @@ def _parse_symbol_dispatch(
     return {}
 
 
-def _remove_function_definitions(source: str, function_names: frozenset[str]) -> str:
-    module = ast.parse(source)
-    lines = source.splitlines(keepends=True)
-    spans: list[tuple[int, int]] = []
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name in function_names:
-            start = node.lineno - 1
-            end = node.end_lineno or node.lineno
-            while end < len(lines) and lines[end].strip() == "":
-                end += 1
-            spans.append((start, end))
-    for start, end in sorted(spans, key=lambda item: item[0], reverse=True):
-        del lines[start:end]
-    return "".join(lines)
+def _remove_function_definitions(
+    source: str,
+    function_names: frozenset[str],
+    *,
+    module: ast.Module | None = None,
+) -> str:
+    tree = module if module is not None else ast.parse(source)
+    spans = _function_removal_char_spans(source, tree, function_names)
+    return _apply_char_span_edits(
+        source,
+        [(start, end, "") for start, end in spans],
+    )
 
 
 def _replace_resolver_section(
@@ -4027,11 +4309,11 @@ class _CollapseBindingsRewriteVisitor(ast.NodeVisitor):
         self,
         *,
         bindings_by_function: dict[str, CollapseBinding],
-        source: str,
-        replacements: list[tuple[int, int, str, str]],
+        line_starts: list[int],
+        replacements: list[tuple[int, int, str]],
     ) -> None:
         self.bindings_by_function = bindings_by_function
-        self.source = source
+        self.line_starts = line_starts
         self.replacements = replacements
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -4050,34 +4332,15 @@ class _CollapseBindingsRewriteVisitor(ast.NodeVisitor):
         ):
             binding = self.bindings_by_function.get(node.func.id)
 
-        if binding is not None:
-            segment = ast.get_source_segment(self.source, node)
-            if segment is not None:
-                self.replacements.append(
-                    (
-                        node.lineno,
-                        node.end_lineno or node.lineno,
-                        segment,
-                        binding.literal_call,
-                    )
-                )
+        if (
+            binding is not None
+            and node.end_lineno is not None
+            and node.end_col_offset is not None
+        ):
+            start = self.line_starts[node.lineno - 1] + node.col_offset
+            end = self.line_starts[node.end_lineno - 1] + node.end_col_offset
+            self.replacements.append((start, end, binding.literal_call))
         self.generic_visit(node)
-
-
-def _apply_segment_replacements(
-    source: str,
-    replacements: list[tuple[int, int, str, str]],
-) -> str:
-    updated = source
-    for _start_line, _end_line, old_segment, new_segment in sorted(
-        replacements,
-        key=lambda item: updated.find(item[2]) if item[2] in updated else -1,
-        reverse=True,
-    ):
-        if old_segment not in updated:
-            continue
-        updated = updated.replace(old_segment, new_segment, 1)
-    return updated
 
 
 def _iter_function_defs(body: list[ast.stmt]) -> list[ast.FunctionDef]:
@@ -4096,6 +4359,33 @@ def validate_refactored_internals(source: str) -> None:
     compile(source, "internals.py", "exec")
 
 
+def _record_cluster_name_delta(
+    names: set[str],
+    *,
+    helper_name: str,
+    removed_names: Iterable[str],
+) -> None:
+    """Update a live top-level def set after a cluster collapse (fail-fast duplicates)."""
+    removed = set(removed_names)
+    if helper_name in names and helper_name not in removed:
+        raise ValueError(f"duplicate top-level function definition: {helper_name!r}")
+    names -= removed
+    names.add(helper_name)
+
+
+def _record_singleton_name_delta(
+    names: set[str],
+    *,
+    old_name: str,
+    new_name: str,
+) -> None:
+    """Update a live top-level def set after a singleton rewrite."""
+    if new_name != old_name and new_name in names:
+        raise ValueError(f"duplicate top-level function definition: {new_name!r}")
+    names.discard(old_name)
+    names.add(new_name)
+
+
 def refactor_internals_singleton(
     ctx: SingletonRefactorContext,
     *,
@@ -4108,9 +4398,12 @@ def refactor_internals_singleton(
     diagnostic_target: str | None = None,
     internals_index: InternalsSourceIndex | None = None,
     flush: bool = True,
+    apply_source: str | None = None,
+    validate_module: bool = True,
 ) -> SingletonRefactorApplyResult:
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     source = index.source
+    apply_base = source if apply_source is None else apply_source
     existing_names = _function_names(source, index=index)
     if response is None:
         response = llm_refactor_singleton(
@@ -4128,8 +4421,9 @@ def refactor_internals_singleton(
         existing_names=existing_names,
         internals_source=source,
     )
-    updated, rewrite_count = apply_singleton_refactor_plan(source, response, ctx)
-    validate_refactored_internals(updated)
+    updated, rewrite_count = apply_singleton_refactor_plan(apply_base, response, ctx)
+    if validate_module:
+        validate_refactored_internals(updated)
     if not dry_run and flush:
         internals_path.write_text(updated, encoding="utf-8", newline="\n")
     return SingletonRefactorApplyResult(
@@ -4154,9 +4448,12 @@ def refactor_internals_cluster(
     diagnostic_target: str | None = None,
     internals_index: InternalsSourceIndex | None = None,
     flush: bool = True,
+    apply_source: str | None = None,
+    validate_module: bool = True,
 ) -> ClusterRefactorApplyResult:
     index = _resolve_internals_index(internals_path, internals_index=internals_index)
     source = index.source
+    apply_base = source if apply_source is None else apply_source
     existing_names = _function_names(source, index=index)
     if response is None:
         response = llm_refactor_cluster(
@@ -4174,8 +4471,9 @@ def refactor_internals_cluster(
         existing_names=existing_names,
         internals_source=source,
     )
-    updated = apply_refactor_plan(source, response, ctx)
-    validate_refactored_internals(updated)
+    updated = apply_refactor_plan(apply_base, response, ctx)
+    if validate_module:
+        validate_refactored_internals(updated)
     if not dry_run and flush:
         internals_path.write_text(updated, encoding="utf-8", newline="\n")
     return ClusterRefactorApplyResult(
@@ -4203,6 +4501,18 @@ class _PendingSemanticUnit:
     forbidden_names: frozenset[str]
     member_fingerprints: tuple[tuple[str, str, str], ...]
     member_checks: tuple[tuple[str, dict[str, BindingKeyValue]], ...]
+
+
+@dataclass
+class _PendingMechanicalClusterApply:
+    """A validated mechanical cluster collapse waiting for a layer-batched apply."""
+
+    cluster_members: tuple[str, ...]
+    cluster_ctx: ClusterRefactorContext
+    draft: MechanicalBodyDraft
+    mechanical_response: ClusterRefactorResponse
+    existing_names: frozenset[str]
+    diagnostic_target: str
 
 
 def _member_fingerprint(
@@ -4598,6 +4908,14 @@ def refactor_internals_all_clusters(
     synthesized fall back to the interleaved full-body LLM contract (with its own
     per-unit parity gate) exactly as before.
 
+    Full-module ``validate_refactored_internals`` (parse + compile) runs once after
+    Pass 1 applies, not after every unit. Duplicate top-level names are still
+    checked incrementally via a live function-name set during applies.
+
+    Independent mechanical cluster collapses are accumulated and applied with
+    :func:`apply_cluster_collapses_batch` so a topological layer shares one
+    full-module ``ast.parse`` instead of paying parse cost per unit.
+
     Between the passes, when ``parity_gate`` is enabled, all mechanically
     refactored helpers are checked against the pristine cell semantics in a single
     batched gate. A mechanical divergence is a synthesis defect and raises loudly
@@ -4627,6 +4945,10 @@ def refactor_internals_all_clusters(
         input_vectors = build_default_input_vectors()
 
     runtime_source = _read_runtime_source(internals_path)
+    callee_hints = build_callee_return_hints(
+        runtime_source=runtime_source,
+        internals_source=internals_index.source,
+    )
     ordered_units = compute_refactor_schedule(projection, clusters)
     existing_helper_names = internals_index.semantic_helper_names
     allocated_helper_names = allocate_schedule_helper_names(
@@ -4634,16 +4956,163 @@ def refactor_internals_all_clusters(
         address_to_series_id,
         existing_names=existing_helper_names,
     )
+    allocated_name_set = frozenset(allocated_helper_names)
     results: list[ClusterRefactorApplyResult] = []
     pending_semantic: list[_PendingSemanticUnit] = []
+    pending_cluster_applies: list[_PendingMechanicalClusterApply] = []
+    pending_batch_members: set[str] = set()
     refactored_any = False
+    current_source = internals_index.source
+    dirty_addresses: set[str] = set()
+    live_function_names = set(internals_index.functions)
+    pass1_reindex_count = 0
+    pass1_apply_count = 0
+    pass1_batch_count = 0
+    pass1_started = time.perf_counter()
+    pass1_apply_seconds = 0.0
+    pass1_validate_seconds = 0.0
+
+    def _unit_reads_addresses(members: Sequence[str], addresses: set[str]) -> bool:
+        if not addresses:
+            return False
+        for member in members:
+            for dependency in projection.get_dependencies(member):
+                if dependency in addresses:
+                    return True
+                for transitive in projection.get_dependencies(dependency):
+                    if transitive in addresses:
+                        return True
+        return False
+
+    def _unit_reads_dirty(members: Sequence[str]) -> bool:
+        # Context builders consume member bodies (rewritten when a direct
+        # dependency collapses) and direct-dependency def nodes (rewritten when
+        # that dependency or one of its own dependencies collapses), so probing
+        # two dependency levels bounds every source a unit can read.
+        return _unit_reads_addresses(members, dirty_addresses)
+
+    def _seal_index() -> None:
+        nonlocal internals_index, pass1_reindex_count
+        if not dirty_addresses:
+            return
+        internals_index = InternalsSourceIndex.from_source(current_source)
+        pass1_reindex_count += 1
+        dirty_addresses.clear()
+
+    def _flush_mechanical_cluster_batch() -> None:
+        nonlocal current_source, pass1_apply_count, pass1_apply_seconds
+        nonlocal pass1_batch_count, refactored_any
+        if not pending_cluster_applies:
+            return
+        responses = tuple(item.mechanical_response for item in pending_cluster_applies)
+        apply_started = time.perf_counter()
+        try:
+            updated, _rewrite_count = apply_cluster_collapses_batch(
+                current_source, responses
+            )
+        except Exception as error:
+            first = pending_cluster_applies[0]
+            _log_mechanical_pass1_failure(
+                kind="cluster",
+                target=first.diagnostic_target,
+                error=error,
+                prepared_response=_response_dump(first.mechanical_response),
+                context=lambda: {
+                    **_mechanical_cluster_failure_context(
+                        first.cluster_ctx, first.draft
+                    ),
+                    "batch_size": len(pending_cluster_applies),
+                    "batch_targets": [
+                        item.diagnostic_target for item in pending_cluster_applies
+                    ],
+                },
+                log_message=(
+                    "cluster mechanical batch apply failed first_cluster_id=%s "
+                    "batch_size=%s diagnostic=%s: %s"
+                ),
+                log_args=(
+                    first.cluster_ctx.cluster_id,
+                    len(pending_cluster_applies),
+                ),
+            )
+            raise
+        pass1_apply_seconds += time.perf_counter() - apply_started
+        pass1_batch_count += 1
+        current_source = updated
+        for item in pending_cluster_applies:
+            dirty_addresses.update(item.cluster_members)
+            pass1_apply_count += 1
+            results.append(
+                ClusterRefactorApplyResult(
+                    source=updated,
+                    helper_name=item.mechanical_response.helper_name,
+                    wrappers_applied=tuple(
+                        entry.function_name
+                        for entry in item.mechanical_response.member_keys
+                    ),
+                    dry_run=dry_run,
+                    response=item.mechanical_response,
+                )
+            )
+            pending_semantic.append(
+                _PendingSemanticUnit(
+                    kind="cluster",
+                    unit_id=item.diagnostic_target,
+                    helper_name=item.mechanical_response.helper_name,
+                    diagnostic_target=item.diagnostic_target,
+                    canonical_template=item.cluster_ctx.canonical_template,
+                    contract=item.cluster_ctx.contract,
+                    draft=item.draft,
+                    ctx=item.cluster_ctx,
+                    parameter_names=frozenset(
+                        parameter.name
+                        for parameter in item.mechanical_response.parameters
+                    ),
+                    forbidden_names=item.existing_names
+                    | allocated_name_set
+                    | frozenset(item.cluster_ctx.allowed_runtime_symbols),
+                    member_fingerprints=tuple(
+                        _member_fingerprint(
+                            member.address,
+                            member.normalized_formula,
+                            member.python_source,
+                        )
+                        for member in item.cluster_ctx.members
+                    ),
+                    member_checks=tuple(
+                        (
+                            entry.address,
+                            _parameter_literals(
+                                item.mechanical_response.parameters,
+                                entry.keys_dict(),
+                            ),
+                        )
+                        for entry in item.mechanical_response.member_keys
+                    ),
+                )
+            )
+            refactored_any = True
+        pending_cluster_applies.clear()
+        pending_batch_members.clear()
+
+    def _prepare_for_unit(members: Sequence[str]) -> None:
+        if pending_batch_members and _unit_reads_addresses(
+            members, pending_batch_members
+        ):
+            _flush_mechanical_cluster_batch()
+        if dirty_addresses and _unit_reads_dirty(members):
+            _flush_mechanical_cluster_batch()
+            _seal_index()
+
     for unit, helper_name in zip(ordered_units, allocated_helper_names, strict=True):
         cluster = unit.as_formula_cluster()
         diagnostic_target = refactor_failure_target(unit)
+        _prepare_for_unit(cluster.members)
         reserved_for_others = (
             frozenset(allocated_helper_names) | existing_helper_names
         ) - {helper_name}
         if len(cluster.members) == 1:
+            _flush_mechanical_cluster_batch()
             singleton_ctx = build_singleton_refactor_context(
                 projection,
                 cluster,
@@ -4665,24 +5134,52 @@ def refactor_internals_all_clusters(
                 existing_names = _function_names(
                     internals_source, index=internals_index
                 )
-                mechanical_response = build_mechanical_singleton_response(
-                    singleton_ctx,
-                    draft,
-                    runtime_source=runtime_source,
-                    internals_source=internals_source,
-                )
-                validate_singleton_refactor_response(
-                    singleton_ctx,
-                    mechanical_response,
-                    existing_names=existing_names,
-                    internals_source=internals_source,
-                    require_semantic_locals=False,
-                )
-                updated, _rewrites = apply_singleton_refactor_plan(
-                    internals_source, mechanical_response, singleton_ctx
-                )
-                validate_refactored_internals(updated)
-                internals_index = InternalsSourceIndex.from_source(updated)
+                prepared_dump: Mapping[str, Any] | None = None
+                try:
+                    mechanical_response = build_mechanical_singleton_response(
+                        singleton_ctx,
+                        draft,
+                        runtime_source=runtime_source,
+                        internals_source=internals_source,
+                        callee_hints=callee_hints,
+                    )
+                    prepared_dump = _response_dump(mechanical_response)
+                    validate_singleton_refactor_response(
+                        singleton_ctx,
+                        mechanical_response,
+                        existing_names=existing_names,
+                        internals_source=internals_source,
+                        require_semantic_locals=False,
+                    )
+                    _record_singleton_name_delta(
+                        live_function_names,
+                        old_name=singleton_ctx.function_name,
+                        new_name=mechanical_response.symbol_name,
+                    )
+                    apply_started = time.perf_counter()
+                    updated, _rewrites = apply_singleton_refactor_plan(
+                        current_source, mechanical_response, singleton_ctx
+                    )
+                    pass1_apply_seconds += time.perf_counter() - apply_started
+                except Exception as error:
+                    _log_mechanical_pass1_failure(
+                        kind="singleton",
+                        target=diagnostic_target,
+                        error=error,
+                        prepared_response=prepared_dump,
+                        context=lambda: _mechanical_singleton_failure_context(
+                            singleton_ctx, draft
+                        ),
+                        log_message=(
+                            "singleton mechanical refactor failed address=%s "
+                            "diagnostic=%s: %s"
+                        ),
+                        log_args=(singleton_ctx.address,),
+                    )
+                    raise
+                current_source = updated
+                dirty_addresses.update(cluster.members)
+                pass1_apply_count += 1
                 pending_semantic.append(
                     _PendingSemanticUnit(
                         kind="singleton",
@@ -4695,6 +5192,7 @@ def refactor_internals_all_clusters(
                         ctx=singleton_ctx,
                         parameter_names=frozenset(),
                         forbidden_names=existing_names
+                        | allocated_name_set
                         | frozenset(singleton_ctx.allowed_runtime_symbols),
                         member_fingerprints=(
                             _member_fingerprint(
@@ -4718,11 +5216,18 @@ def refactor_internals_all_clusters(
                 diagnostic_target=diagnostic_target,
                 internals_index=internals_index,
                 flush=False,
+                apply_source=current_source,
+                validate_module=False,
             )
             if not dry_run:
-                internals_index = InternalsSourceIndex.from_source(
-                    singleton_result.source
+                _record_singleton_name_delta(
+                    live_function_names,
+                    old_name=singleton_ctx.function_name,
+                    new_name=singleton_result.symbol_name,
                 )
+                current_source = singleton_result.source
+                dirty_addresses.update(cluster.members)
+                pass1_apply_count += 1
             refactored_any = True
             continue
 
@@ -4749,71 +5254,62 @@ def refactor_internals_all_clusters(
         if draft is not None:
             internals_source = internals_index.source
             existing_names = _function_names(internals_source, index=internals_index)
-            mechanical_response = build_mechanical_cluster_response(
-                cluster_ctx,
-                draft,
-                runtime_source=runtime_source,
-                internals_source=internals_source,
-            )
-            validate_cluster_refactor_response(
-                cluster_ctx,
-                mechanical_response,
-                existing_names=existing_names,
-                internals_source=internals_source,
-                require_semantic_locals=False,
-            )
-            updated = apply_refactor_plan(
-                internals_source, mechanical_response, cluster_ctx
-            )
-            validate_refactored_internals(updated)
-            internals_index = InternalsSourceIndex.from_source(updated)
-            results.append(
-                ClusterRefactorApplyResult(
-                    source=updated,
-                    helper_name=mechanical_response.helper_name,
-                    wrappers_applied=tuple(
-                        entry.function_name for entry in mechanical_response.member_keys
-                    ),
-                    dry_run=dry_run,
-                    response=mechanical_response,
+            prepared_dump = None
+            try:
+                mechanical_response = build_mechanical_cluster_response(
+                    cluster_ctx,
+                    draft,
+                    runtime_source=runtime_source,
+                    internals_source=internals_source,
+                    callee_hints=callee_hints,
                 )
-            )
-            pending_semantic.append(
-                _PendingSemanticUnit(
+                prepared_dump = _response_dump(mechanical_response)
+                validate_cluster_refactor_response(
+                    cluster_ctx,
+                    mechanical_response,
+                    existing_names=existing_names,
+                    internals_source=internals_source,
+                    require_semantic_locals=False,
+                )
+                removed_names = tuple(
+                    entry.function_name for entry in mechanical_response.member_keys
+                )
+                _record_cluster_name_delta(
+                    live_function_names,
+                    helper_name=mechanical_response.helper_name,
+                    removed_names=removed_names,
+                )
+            except Exception as error:
+                _log_mechanical_pass1_failure(
                     kind="cluster",
-                    unit_id=diagnostic_target,
-                    helper_name=mechanical_response.helper_name,
-                    diagnostic_target=diagnostic_target,
-                    canonical_template=cluster_ctx.canonical_template,
-                    contract=cluster_ctx.contract,
+                    target=diagnostic_target,
+                    error=error,
+                    prepared_response=prepared_dump,
+                    context=lambda: _mechanical_cluster_failure_context(
+                        cluster_ctx, draft
+                    ),
+                    log_message=(
+                        "cluster mechanical refactor failed cluster_id=%s "
+                        "diagnostic=%s: %s"
+                    ),
+                    log_args=(cluster_ctx.cluster_id,),
+                )
+                raise
+            pending_cluster_applies.append(
+                _PendingMechanicalClusterApply(
+                    cluster_members=tuple(cluster.members),
+                    cluster_ctx=cluster_ctx,
                     draft=draft,
-                    ctx=cluster_ctx,
-                    parameter_names=frozenset(
-                        parameter.name for parameter in mechanical_response.parameters
-                    ),
-                    forbidden_names=existing_names
-                    | frozenset(cluster_ctx.allowed_runtime_symbols),
-                    member_fingerprints=tuple(
-                        _member_fingerprint(
-                            member.address,
-                            member.normalized_formula,
-                            member.python_source,
-                        )
-                        for member in cluster_ctx.members
-                    ),
-                    member_checks=tuple(
-                        (
-                            entry.address,
-                            _parameter_literals(
-                                mechanical_response.parameters, entry.keys_dict()
-                            ),
-                        )
-                        for entry in mechanical_response.member_keys
-                    ),
+                    mechanical_response=mechanical_response,
+                    existing_names=existing_names,
+                    diagnostic_target=diagnostic_target,
                 )
             )
-            refactored_any = True
+            pending_batch_members.update(cluster.members)
             continue
+        _flush_mechanical_cluster_batch()
+        if dirty_addresses and _unit_reads_dirty(cluster.members):
+            _seal_index()
         result = refactor_internals_cluster(
             cluster_ctx,
             internals_path=internals_path,
@@ -4824,11 +5320,45 @@ def refactor_internals_all_clusters(
             diagnostic_target=diagnostic_target,
             internals_index=internals_index,
             flush=False,
+            apply_source=current_source,
+            validate_module=False,
         )
         if not dry_run:
-            internals_index = InternalsSourceIndex.from_source(result.source)
+            _record_cluster_name_delta(
+                live_function_names,
+                helper_name=result.helper_name,
+                removed_names=result.wrappers_applied,
+            )
+            current_source = result.source
+            dirty_addresses.update(cluster.members)
+            pass1_apply_count += 1
         results.append(result)
         refactored_any = True
+
+    _flush_mechanical_cluster_batch()
+    _seal_index()
+    if pass1_apply_count:
+        validate_started = time.perf_counter()
+        validate_refactored_internals(current_source)
+        pass1_validate_seconds = time.perf_counter() - validate_started
+    pass1_elapsed = time.perf_counter() - pass1_started
+    logger.info(
+        "pass1 index cadence: %d InternalsSourceIndex rebuild(s) for %d applied "
+        "unit(s) across %d scheduled unit(s)",
+        pass1_reindex_count,
+        pass1_apply_count,
+        len(ordered_units),
+    )
+    logger.info(
+        "pass1 timings: apply=%.1fs validate=%.1fs reindex_count=%d "
+        "apply_batches=%d applied_units=%d elapsed=%.1fs",
+        pass1_apply_seconds,
+        pass1_validate_seconds,
+        pass1_reindex_count,
+        pass1_batch_count,
+        pass1_apply_count,
+        pass1_elapsed,
+    )
 
     if parity_gate and pending_semantic and pristine_source is not None:
         from src.refactor_parity_gate import (

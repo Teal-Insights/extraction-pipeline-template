@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 from textwrap import dedent
+from typing import TypedDict
 
 import pytest
 
@@ -156,7 +157,13 @@ EXCESS_DEATHS_RUNTIME_STUB = dedent(
     '''
 ).strip()
 
-SINGLETON_PREPARE_KWARGS = {
+
+class SingletonPrepareKwargs(TypedDict):
+    runtime_source: str
+    internals_source: str
+
+
+SINGLETON_PREPARE_KWARGS: SingletonPrepareKwargs = {
     "runtime_source": EXCESS_DEATHS_RUNTIME_STUB,
     "internals_source": EXCESS_DEATHS_INTERNALS,
 }

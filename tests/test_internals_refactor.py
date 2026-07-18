@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -30,6 +30,8 @@ from src.internals_refactor import (
     SingletonRefactorLLMResponse,
     SingletonRefactorResponse,
     FORMULA_SECTION_MARKER,
+    RESOLVER_SECTION_MARKER,
+    address_to_function_name,
     apply_cluster_collapse,
     apply_phase_c,
     apply_singleton_refactor_plan,
@@ -96,6 +98,8 @@ TEST_LAYOUT = ProjectionColumnLayout(
 RUNTIME_IMPORT = """from __future__ import annotations
 
 from .runtime import (
+    CellValue,
+    EvalContext,
     XlError,
     xl_cell,
     xl_eval,
@@ -283,6 +287,264 @@ def test_write_refactor_failure_diagnostic_persists_response_artifacts(
         (dump_dir / "llm_response.json").read_text(encoding="utf-8")
     )
     assert llm_response["symbol_body"] == "return 1.0"
+
+
+def test_write_refactor_failure_diagnostic_persists_mechanical_context(
+    tmp_path: Path,
+) -> None:
+    dump_dir = write_refactor_failure_diagnostic(
+        kind="cluster",
+        target="cluster_42_g0",
+        error=ValueError("could not infer return type from mechanical member source"),
+        dump_dir=tmp_path,
+        context={
+            "cluster_id": 42,
+            "members": [
+                {
+                    "index": 0,
+                    "address": "Engine!C10",
+                    "python_source": "def cell_engine_c10(ctx):\n    return mystery(ctx)\n",
+                }
+            ],
+            "mechanical_draft": {"body": "return mystery(ctx)", "group_count": 1},
+        },
+        source="mechanical",
+    )
+
+    manifest = json.loads((dump_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source"] == "mechanical"
+    assert manifest["target"] == "cluster_42_g0"
+    assert dump_dir.name == "cluster_42_g0"
+    context = json.loads((dump_dir / "context.json").read_text(encoding="utf-8"))
+    assert context["members"][0]["address"] == "Engine!C10"
+    assert context["mechanical_draft"]["body"] == "return mystery(ctx)"
+    assert (
+        (dump_dir / "error.txt")
+        .read_text(encoding="utf-8")
+        .startswith("could not infer return type")
+    )
+
+
+def test_pass1_mechanical_cluster_failure_writes_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pass-1 mechanical assemble/validate failures must dump like LLM failures."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import FormulaCluster
+    from src.mechanical_body import MechanicalBodyDraft
+    from src.refactor_return_types import RefactorReturnTypeInferenceError
+
+    cluster = FormulaCluster(
+        cluster_id=7,
+        members=("Engine!C4", "Engine!D4"),
+        canonical_template="=Inputs!{col}1",
+        row=4,
+    )
+
+    class _Projection:
+        def get_dependencies(self, _address: str) -> tuple[str, ...]:
+            return ()
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_c4(ctx):\n    return 1.0\n"
+        "def cell_engine_d4(ctx):\n    return 2.0\n",
+        encoding="utf-8",
+    )
+    dump_root = tmp_path / "refactor_failures"
+    draft = MechanicalBodyDraft(
+        body="return mystery(ctx)",
+        renameable_locals=(),
+        lookup_table_names=(),
+        group_count=1,
+    )
+    cluster_ctx = SimpleNamespace(
+        cluster_id=7,
+        canonical_template="=Inputs!{col}1",
+        members=(
+            SimpleNamespace(
+                address="Engine!C4",
+                function_name="cell_engine_c4",
+                python_source="def cell_engine_c4(ctx):\n    return mystery(ctx)\n",
+            ),
+            SimpleNamespace(
+                address="Engine!D4",
+                function_name="cell_engine_d4",
+                python_source="def cell_engine_d4(ctx):\n    return mystery(ctx)\n",
+            ),
+        ),
+        naming_hints={},
+        allowed_runtime_symbols=(),
+        expected_helper_name="combined_mystery",
+        contract="member_sweep",
+    )
+
+    def boom_build(*_args: object, **_kwargs: object) -> object:
+        raise RefactorReturnTypeInferenceError(
+            "could not infer return type from mechanical member source at index 0; "
+            "callee annotations and literals were insufficient"
+        )
+
+    monkeypatch.setattr(module, "REFACTOR_FAILURE_DUMP_DIR", dump_root)
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: cluster_ctx
+    )
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: draft)
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: None)
+    monkeypatch.setattr(module, "build_mechanical_cluster_response", boom_build)
+    monkeypatch.setattr(
+        module,
+        "compute_refactor_schedule",
+        lambda *_a, **_k: (
+            SimpleNamespace(
+                parent_cluster_id=7,
+                refactor_group_id=0,
+                members=cluster.members,
+                as_formula_cluster=lambda: cluster,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "allocate_schedule_helper_names",
+        lambda *_a, **_k: ("combined_mystery",),
+    )
+
+    with pytest.raises(RefactorReturnTypeInferenceError, match="index 0"):
+        module.refactor_internals_all_clusters(
+            cast(ProjectionResult, _Projection()),
+            (cluster,),
+            internals_path=internals_path,
+            bindings_path=tmp_path / "bindings",
+            workbook_path=tmp_path / "workbook.xlsx",
+            dry_run=False,
+            parity_gate=False,
+            address_to_series_id={
+                "Engine!C4": "mystery_series",
+                "Engine!D4": "mystery_series",
+            },
+        )
+
+    failure_dirs = list(dump_root.iterdir())
+    assert len(failure_dirs) == 1
+    dump_dir = failure_dirs[0]
+    manifest = json.loads((dump_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source"] == "mechanical"
+    assert manifest["kind"] == "cluster"
+    assert "index 0" in manifest["error_message"]
+    context = json.loads((dump_dir / "context.json").read_text(encoding="utf-8"))
+    assert context["cluster_id"] == 7
+    assert context["members"][0]["address"] == "Engine!C4"
+    assert context["mechanical_draft"]["body"] == "return mystery(ctx)"
+
+
+def test_pass1_mechanical_singleton_failure_writes_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pass-1 singleton mechanical failures must also dump diagnostics."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import FormulaCluster
+    from src.mechanical_body import MechanicalBodyDraft
+    from src.refactor_return_types import RefactorReturnTypeInferenceError
+
+    cluster = FormulaCluster(
+        cluster_id=3,
+        members=("Engine!C9",),
+        canonical_template="=1",
+        row=9,
+    )
+
+    class _Projection:
+        def get_dependencies(self, _address: str) -> tuple[str, ...]:
+            return ()
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_c9(ctx):\n    return mystery(ctx)\n",
+        encoding="utf-8",
+    )
+    dump_root = tmp_path / "refactor_failures"
+    draft = MechanicalBodyDraft(
+        body="return mystery(ctx)",
+        renameable_locals=(),
+        lookup_table_names=(),
+        group_count=1,
+    )
+    singleton_ctx = SimpleNamespace(
+        address="Engine!C9",
+        function_name="cell_engine_c9",
+        canonical_template="=1",
+        normalized_formula="=1",
+        python_source="def cell_engine_c9(ctx):\n    return mystery(ctx)\n",
+        naming_hints={},
+        allowed_runtime_symbols=(),
+        expected_helper_name="mystery_singleton",
+    )
+
+    def boom_build(*_args: object, **_kwargs: object) -> object:
+        raise RefactorReturnTypeInferenceError(
+            "could not infer return type from mechanical member source at index 0; "
+            "callee annotations and literals were insufficient"
+        )
+
+    monkeypatch.setattr(module, "REFACTOR_FAILURE_DUMP_DIR", dump_root)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", lambda *_a, **_k: singleton_ctx
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: draft)
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(module, "build_mechanical_singleton_response", boom_build)
+    monkeypatch.setattr(
+        module,
+        "compute_refactor_schedule",
+        lambda *_a, **_k: (
+            SimpleNamespace(
+                parent_cluster_id=3,
+                refactor_group_id=0,
+                members=cluster.members,
+                as_formula_cluster=lambda: cluster,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "allocate_schedule_helper_names",
+        lambda *_a, **_k: ("mystery_singleton",),
+    )
+
+    with pytest.raises(RefactorReturnTypeInferenceError, match="index 0"):
+        module.refactor_internals_all_clusters(
+            cast(ProjectionResult, _Projection()),
+            (cluster,),
+            internals_path=internals_path,
+            bindings_path=tmp_path / "bindings",
+            workbook_path=tmp_path / "workbook.xlsx",
+            dry_run=False,
+            parity_gate=False,
+            address_to_series_id={"Engine!C9": "mystery_series"},
+        )
+
+    failure_dirs = list(dump_root.iterdir())
+    assert len(failure_dirs) == 1
+    dump_dir = failure_dirs[0]
+    manifest = json.loads((dump_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source"] == "mechanical"
+    assert manifest["kind"] == "singleton"
+    context = json.loads((dump_dir / "context.json").read_text(encoding="utf-8"))
+    assert context["address"] == "Engine!C9"
+    assert context["mechanical_draft"]["body"] == "return mystery(ctx)"
 
 
 def test_write_refactor_failure_diagnostic_persists_all_attempts(
@@ -648,6 +910,40 @@ def shocked_path_internal(ctx):
 """
     with pytest.raises(ValueError, match="duplicate top-level function"):
         validate_refactored_internals(source)
+
+
+def test_record_name_deltas_reject_duplicates() -> None:
+    import src.internals_refactor as module
+
+    names = {"cell_engine_c6", "cell_engine_d6"}
+    with pytest.raises(ValueError, match="duplicate top-level function"):
+        module._record_cluster_name_delta(
+            names,
+            helper_name="cell_engine_c6",
+            removed_names=("cell_engine_d6",),
+        )
+    names = {"cell_engine_c6"}
+    module._record_cluster_name_delta(
+        names,
+        helper_name="combined_helper",
+        removed_names=("cell_engine_c6",),
+    )
+    assert names == {"combined_helper"}
+
+    names = {"cell_engine_c9", "existing_helper"}
+    with pytest.raises(ValueError, match="duplicate top-level function"):
+        module._record_singleton_name_delta(
+            names,
+            old_name="cell_engine_c9",
+            new_name="existing_helper",
+        )
+    names = {"cell_engine_c9"}
+    module._record_singleton_name_delta(
+        names,
+        old_name="cell_engine_c9",
+        new_name="renamed_helper",
+    )
+    assert names == {"renamed_helper"}
 
 
 def test_insert_helper_source_rejects_existing_helper_name() -> None:
@@ -1136,6 +1432,509 @@ def test_apply_cluster_collapse_rewrites_and_removes_wrappers() -> None:
     assert "def cell_engine_c6" not in updated
     assert "def cell_engine_d6" not in updated
     assert "def combined_input_passthrough" in updated
+
+
+def _count_full_module_parses(
+    fn: Callable[..., tuple[str, int]],
+    *args: object,
+    **kwargs: object,
+) -> tuple[tuple[str, int], int]:
+    """Count ``ast.parse`` calls on full internals modules (not helper snippets)."""
+    parse_calls = {"count": 0}
+    real_parse = ast.parse
+
+    def counting_parse(
+        source_text: str, *_args: object, **_kwargs: object
+    ) -> ast.Module:
+        if (
+            FORMULA_SECTION_MARKER in source_text
+            or RESOLVER_SECTION_MARKER in source_text
+        ):
+            parse_calls["count"] += 1
+        return real_parse(source_text)
+
+    with patch("src.internals_refactor.ast.parse", side_effect=counting_parse):
+        result = fn(*args, **kwargs)
+    return result, parse_calls["count"]
+
+
+def test_apply_cluster_collapse_parses_full_module_once() -> None:
+    """Apply must not re-parse the multi-megabyte module for substitute/remove/dispatch."""
+    source = (
+        RUNTIME_IMPORT
+        + """
+# --- Formula cell functions ---
+
+def cell_engine_c6(ctx):
+    return 1.0
+
+def cell_engine_d6(ctx):
+    return 2.0
+
+def consumer(ctx):
+    return cell_engine_c6(ctx) + cell_engine_d6(ctx)
+
+"""
+        + RESOLVER_SECTION
+    )
+    (updated, rewrite_count), full_parses = _count_full_module_parses(
+        apply_cluster_collapse,
+        source,
+        _cluster_response(),
+    )
+    assert full_parses == 1
+    assert rewrite_count == 2
+    assert "def cell_engine_c6" not in updated
+    assert "def cell_engine_d6" not in updated
+    assert "combined_input_passthrough(ctx, time_period=1)" in updated
+    assert "combined_input_passthrough(ctx, time_period=2)" in updated
+
+
+def test_apply_cluster_collapses_batch_parses_full_module_once() -> None:
+    """Independent collapses in one batch share a single full-module parse."""
+    import src.internals_refactor as module
+
+    source = (
+        RUNTIME_IMPORT
+        + """
+# --- Formula cell functions ---
+
+def cell_engine_c6(ctx):
+    return 1.0
+
+def cell_engine_d6(ctx):
+    return 2.0
+
+def cell_engine_c7(ctx):
+    return 3.0
+
+def cell_engine_d7(ctx):
+    return 4.0
+
+def consumer(ctx):
+    return (
+        cell_engine_c6(ctx)
+        + cell_engine_d6(ctx)
+        + cell_engine_c7(ctx)
+        + cell_engine_d7(ctx)
+    )
+
+"""
+        + RESOLVER_SECTION
+    )
+    first = _cluster_response()
+    second = ClusterRefactorResponse(
+        helper_name="combined_row7_passthrough",
+        helper_docstring=CLUSTER_DOCSTRING,
+        parameters=CLUSTER_PARAMETERS,
+        helper_source=(
+            "def combined_row7_passthrough(ctx: EvalContext, time_period: int) "
+            "-> CellValue:\n"
+            '    """doc"""\n'
+            "    return float(time_period)\n"
+        ),
+        member_keys=(
+            MemberKeys(
+                address="Engine!C7",
+                function_name="cell_engine_c7",
+                keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
+            ),
+            MemberKeys(
+                address="Engine!D7",
+                function_name="cell_engine_d7",
+                keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=2),),
+            ),
+        ),
+    )
+    typed_first = ClusterRefactorResponse(
+        helper_name="combined_input_passthrough",
+        helper_docstring=CLUSTER_DOCSTRING,
+        parameters=CLUSTER_PARAMETERS,
+        helper_source=(
+            "def combined_input_passthrough(ctx: EvalContext, time_period: int) "
+            "-> CellValue:\n"
+            '    """doc"""\n'
+            "    return float(time_period)\n"
+        ),
+        member_keys=first.member_keys,
+    )
+    (updated, rewrite_count), full_parses = _count_full_module_parses(
+        module.apply_cluster_collapses_batch,
+        source,
+        (typed_first, second),
+    )
+    assert full_parses == 1
+    assert rewrite_count == 4
+    assert "def cell_engine_c6" not in updated
+    assert "def cell_engine_d7" not in updated
+    assert "def combined_input_passthrough" in updated
+    assert "def combined_row7_passthrough" in updated
+    assert "combined_input_passthrough(ctx, time_period=1)" in updated
+    assert "combined_row7_passthrough(ctx, time_period=2)" in updated
+
+
+def test_apply_cluster_collapses_batch_merges_missing_imports_once() -> None:
+    """Adding typed imports for a batch must not parse once per response."""
+    import src.internals_refactor as module
+
+    source = (
+        """from __future__ import annotations
+
+from .runtime import (
+    XlError,
+    xl_cell,
+    xl_eval,
+)
+"""
+        + """
+# --- Formula cell functions ---
+
+def cell_engine_c6(ctx):
+    return 1.0
+
+def cell_engine_d6(ctx):
+    return 2.0
+
+def cell_engine_c7(ctx):
+    return 3.0
+
+def cell_engine_d7(ctx):
+    return 4.0
+
+"""
+        + RESOLVER_SECTION
+    )
+    responses = (
+        ClusterRefactorResponse(
+            helper_name="h1",
+            helper_docstring=CLUSTER_DOCSTRING,
+            parameters=CLUSTER_PARAMETERS,
+            helper_source=(
+                "def h1(ctx: EvalContext, time_period: int) -> CellValue:\n"
+                '    """doc"""\n'
+                "    return 1.0\n"
+            ),
+            member_keys=(
+                MemberKeys(
+                    address="Engine!C6",
+                    function_name="cell_engine_c6",
+                    keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
+                ),
+                MemberKeys(
+                    address="Engine!D6",
+                    function_name="cell_engine_d6",
+                    keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=2),),
+                ),
+            ),
+        ),
+        ClusterRefactorResponse(
+            helper_name="h2",
+            helper_docstring=CLUSTER_DOCSTRING,
+            parameters=CLUSTER_PARAMETERS,
+            helper_source=(
+                "def h2(ctx: EvalContext, time_period: int) -> CellValue:\n"
+                '    """doc"""\n'
+                "    return 2.0\n"
+            ),
+            member_keys=(
+                MemberKeys(
+                    address="Engine!C7",
+                    function_name="cell_engine_c7",
+                    keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
+                ),
+                MemberKeys(
+                    address="Engine!D7",
+                    function_name="cell_engine_d7",
+                    keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=2),),
+                ),
+            ),
+        ),
+    )
+    (updated, _), full_parses = _count_full_module_parses(
+        module.apply_cluster_collapses_batch,
+        source,
+        responses,
+    )
+    # One import-merge parse + one post-insert collapse parse — not one per response.
+    assert full_parses == 2
+    assert "EvalContext" in updated
+    assert "CellValue" in updated
+    assert "def h1" in updated
+    assert "def h2" in updated
+
+
+def test_pass_one_batches_independent_cluster_applies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Independent mechanical clusters in one layer share a single batch apply."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import FormulaCluster
+    from src.mechanical_body import MechanicalBodyDraft
+
+    class _Projection:
+        def get_dependencies(self, _address: str) -> tuple[str, ...]:
+            return ()
+
+    clusters = (
+        FormulaCluster(
+            cluster_id=0,
+            members=("Engine!C6", "Engine!D6"),
+            canonical_template="=Inputs!{col}1",
+            row=6,
+        ),
+        FormulaCluster(
+            cluster_id=1,
+            members=("Engine!C7", "Engine!D7"),
+            canonical_template="=Inputs!{col}1",
+            row=7,
+        ),
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        RUNTIME_IMPORT
+        + """
+# --- Formula cell functions ---
+
+def cell_engine_c6(ctx):
+    return 1.0
+
+def cell_engine_d6(ctx):
+    return 2.0
+
+def cell_engine_c7(ctx):
+    return 3.0
+
+def cell_engine_d7(ctx):
+    return 4.0
+
+"""
+        + RESOLVER_SECTION,
+        encoding="utf-8",
+    )
+    draft = MechanicalBodyDraft(
+        body="return float(time_period)",
+        renameable_locals=(),
+        lookup_table_names=(),
+        group_count=1,
+    )
+    batch_calls: list[int] = []
+    real_batch = module.apply_cluster_collapses_batch
+
+    def tracking_batch(
+        source: str,
+        responses: Sequence[ClusterRefactorResponse],
+        ctx: ClusterRefactorContext | None = None,
+    ) -> tuple[str, int]:
+        response_seq = tuple(responses)
+        batch_calls.append(len(response_seq))
+        return real_batch(source, response_seq, ctx=ctx)
+
+    def fake_build_cluster(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        helper = f"combined_row{cluster.row}"
+        return SimpleNamespace(
+            cluster_id=cluster.cluster_id,
+            canonical_template=cluster.canonical_template,
+            members=tuple(
+                SimpleNamespace(
+                    address=address,
+                    function_name=address_to_function_name(address),
+                    normalized_formula="=1",
+                    python_source=f"def {address_to_function_name(address)}(ctx):\n    return 1.0\n",
+                )
+                for address in cluster.members
+            ),
+            naming_hints={},
+            allowed_runtime_symbols=(),
+            expected_helper_name=helper,
+            contract="member_sweep",
+        )
+
+    def fake_mechanical_response(
+        ctx: SimpleNamespace, _draft: object, **_kwargs: object
+    ) -> ClusterRefactorResponse:
+        row = int("".join(ch for ch in ctx.expected_helper_name if ch.isdigit()) or "0")
+        return ClusterRefactorResponse(
+            helper_name=ctx.expected_helper_name,
+            helper_docstring=CLUSTER_DOCSTRING,
+            parameters=CLUSTER_PARAMETERS,
+            helper_source=(
+                f"def {ctx.expected_helper_name}(ctx, time_period):\n"
+                f"    return float(time_period)\n"
+            ),
+            member_keys=tuple(
+                MemberKeys(
+                    address=member.address,
+                    function_name=member.function_name,
+                    keys=(
+                        MemberKeyEntry(
+                            dimension_id="TIME_PERIOD",
+                            value=1 if member.address.endswith("C" + str(row)) else 2,
+                        ),
+                    ),
+                )
+                for member in ctx.members
+            ),
+        )
+
+    monkeypatch.setattr(module, "apply_cluster_collapses_batch", tracking_batch)
+    monkeypatch.setattr(module, "build_cluster_refactor_context", fake_build_cluster)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: draft)
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module, "build_mechanical_cluster_response", fake_mechanical_response
+    )
+    monkeypatch.setattr(
+        module, "validate_cluster_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        module,
+        "compute_refactor_schedule",
+        lambda *_a, **_k: tuple(
+            SimpleNamespace(
+                parent_cluster_id=cluster.cluster_id,
+                refactor_group_id=index,
+                members=cluster.members,
+                as_formula_cluster=lambda c=cluster: c,
+            )
+            for index, cluster in enumerate(clusters)
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "allocate_schedule_helper_names",
+        lambda *_a, **_k: tuple(f"combined_row{cluster.row}" for cluster in clusters),
+    )
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda _pending, *, internals_index, **_k: (internals_index, {}),
+    )
+    monkeypatch.setattr(
+        module,
+        "_refresh_mechanical_cluster_results",
+        lambda results, **_k: list(results),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, _Projection()),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!C6": "row6",
+            "Engine!D6": "row6",
+            "Engine!C7": "row7",
+            "Engine!D7": "row7",
+        },
+    )
+
+    assert batch_calls == [2]
+    source = internals_path.read_text(encoding="utf-8")
+    assert "def combined_row6" in source
+    assert "def combined_row7" in source
+    assert "def cell_engine_c6" not in source
+    assert "def cell_engine_d7" not in source
+
+
+def test_apply_cluster_collapse_parses_full_module_once_with_dispatch_updates() -> None:
+    """Non-engine collapses that rewrite ``_ADDRESS_DISPATCH`` still use one module parse."""
+    source = (
+        RUNTIME_IMPORT
+        + """
+# --- Formula cell functions ---
+
+def cell_outputs_c6(ctx):
+    return 1.0
+
+def consumer(ctx):
+    return cell_outputs_c6(ctx)
+
+"""
+        + RESOLVER_SECTION
+    )
+    response = ClusterRefactorResponse(
+        helper_name="output_passthrough",
+        helper_docstring=(
+            "Return an output measure.\n\n"
+            "Args:\n    ctx: Workbook evaluation context.\n"
+            "    time_period: Projection period.\n"
+        ),
+        parameters=CLUSTER_PARAMETERS,
+        helper_source=(
+            "def output_passthrough(ctx, time_period):\n    return float(time_period)\n"
+        ),
+        member_keys=(
+            MemberKeys(
+                address="Outputs!C6",
+                function_name="cell_outputs_c6",
+                keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
+            ),
+        ),
+    )
+    (updated, rewrite_count), full_parses = _count_full_module_parses(
+        apply_cluster_collapse,
+        source,
+        response,
+    )
+    assert full_parses == 1
+    assert rewrite_count == 1
+    assert "def cell_outputs_c6" not in updated
+    assert "def output_passthrough" in updated
+    assert "Outputs!C6" in updated
+    assert "output_passthrough" in updated
+    assert "_ADDRESS_DISPATCH" in updated
+
+
+def test_apply_singleton_refactor_plan_parses_full_module_once() -> None:
+    ctx = SingletonRefactorContext(
+        address="Engine!C20",
+        function_name="cell_engine_c20",
+        canonical_template="=1",
+        normalized_formula="=1",
+        python_source="def cell_engine_c20(ctx):\n    return 1.0\n",
+        dependency_addresses=("Engine!C10",),
+        external_dependencies=("shock_active",),
+        semantic_dependencies=(),
+        allowed_runtime_symbols=ALLOWED_RUNTIME_SYMBOLS,
+        naming_hints={},
+        expected_helper_name="projected_debt_to_gdp",
+        call_sites=(),
+    )
+    response = SingletonRefactorResponse(
+        symbol_name="projected_debt_to_gdp",
+        symbol_docstring=(
+            "Return projected debt-to-GDP for the first projection period.\n\n"
+            "Args:\n    ctx: Workbook evaluation context.\n\n"
+            "Returns:\n    Projected debt-to-GDP ratio.\n\n"
+            "Note:\n    Covers Engine!C20. Excel: =1."
+        ),
+        symbol_source=PROJECTED_DEBT_TO_GDP_SOURCE,
+    )
+    (updated, rewrite_count), full_parses = _count_full_module_parses(
+        apply_singleton_refactor_plan,
+        INTERNALS_WITH_SINGLETON_CALLER,
+        response,
+        ctx,
+    )
+    assert full_parses == 1
+    assert rewrite_count == 1
+    assert "def projected_debt_to_gdp" in updated
+    assert "xl_number(projected_debt_to_gdp(ctx))" in updated
 
 
 def test_apply_phase_c_prunes_unreferenced_thin_wrappers() -> None:
@@ -2770,7 +3569,10 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
         index = kwargs.get("internals_index")
         assert isinstance(index, module.InternalsSourceIndex)
         indices_seen.append(index)
-        return SimpleNamespace(address=cluster.members[0])
+        return SimpleNamespace(
+            address=cluster.members[0],
+            function_name=address_to_function_name(cluster.members[0]),
+        )
 
     def fake_singleton(
         ctx: SimpleNamespace,
@@ -2791,7 +3593,7 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
         updated = version_sources[apply_count["n"]]
         if not dry_run:
             internals_path.write_text(updated, encoding="utf-8")
-        return SimpleNamespace(source=updated)
+        return SimpleNamespace(source=updated, symbol_name=ctx.function_name)
 
     monkeypatch.setattr(
         module.InternalsSourceIndex,
@@ -2879,6 +3681,7 @@ def test_pass_one_defers_internals_write_until_single_flush(
     ) -> SimpleNamespace:
         return SimpleNamespace(
             address=cluster.members[0],
+            function_name=address_to_function_name(cluster.members[0]),
             canonical_template="=1",
             normalized_formula="=1",
             python_source="return 1.0",
@@ -2913,7 +3716,9 @@ def test_pass_one_defers_internals_write_until_single_flush(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda *_a, **_k: SimpleNamespace(symbol_name="cell_engine_b2"),
+        lambda ctx, *_a, **_k: SimpleNamespace(
+            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
+        ),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
@@ -2950,6 +3755,370 @@ def test_pass_one_defers_internals_write_until_single_flush(
         "write",
     ]
     assert events[4][1] == version_sources[4]
+
+
+def test_pass_one_defers_full_module_validate_until_end(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pass 1 must not parse/compile the full module after every unit apply."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.wide_layer import wide_layer_graph
+
+    graph, bindings = wide_layer_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    version_sources = [
+        f"def cell_engine_b2(ctx):\n    return {n}.0\n" for n in range(5)
+    ]
+    internals_path.write_text(version_sources[0], encoding="utf-8")
+
+    events: list[str] = []
+    apply_count = {"n": 0}
+    real_validate = module.validate_refactored_internals
+
+    def tracking_validate(source: str) -> None:
+        events.append("validate")
+        real_validate(source)
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            address=cluster.members[0],
+            function_name=address_to_function_name(cluster.members[0]),
+            canonical_template="=1",
+            normalized_formula="=1",
+            python_source="return 1.0",
+            allowed_runtime_symbols=(),
+        )
+
+    def fake_apply_plan(
+        _source: str, _response: object, _ctx: object
+    ) -> tuple[str, int]:
+        apply_count["n"] += 1
+        events.append("apply")
+        return version_sources[apply_count["n"]], 0
+
+    monkeypatch.setattr(module, "validate_refactored_internals", tracking_validate)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: object())
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module,
+        "build_mechanical_singleton_response",
+        lambda ctx, *_a, **_k: SimpleNamespace(
+            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
+        ),
+    )
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "apply_singleton_refactor_plan", fake_apply_plan)
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda _pending, *, internals_index, **_k: (internals_index, {}),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!D2": "family_d",
+            "Engine!E2": "family_e",
+        },
+    )
+
+    assert apply_count["n"] == 4
+    # Four applies, then one end-of-Pass-1 validate, then Phase C's validate —
+    # never a validate interleaved with each apply.
+    assert events == [
+        "apply",
+        "apply",
+        "apply",
+        "apply",
+        "validate",
+        "validate",
+    ]
+
+
+def test_pass_one_reindexes_lazily_per_layer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Units whose reads are untouched share one index; only dependents reseal.
+
+    Layer 1 (B2/C2/D2) is independent, so all three contexts must come from the
+    initial index with no rebuild in between. E2 reads all of layer 1, so it
+    must see an index rebuilt from the accumulated source, and every apply must
+    chain onto the previous apply's output rather than the stale index source.
+    """
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.wide_layer import wide_layer_graph
+
+    graph, bindings = wide_layer_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    version_sources = [
+        f"def cell_engine_b2(ctx):\n    return {n}.0\n" for n in range(5)
+    ]
+    internals_path.write_text(version_sources[0], encoding="utf-8")
+
+    from_source_sources: list[str] = []
+    real_from_source = module.InternalsSourceIndex.from_source
+    context_indices: list[tuple[str, module.InternalsSourceIndex]] = []
+    apply_bases: list[str] = []
+    apply_count = {"n": 0}
+
+    def tracking_from_source(source: str) -> module.InternalsSourceIndex:
+        from_source_sources.append(source)
+        return real_from_source(source)
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        index = kwargs.get("internals_index")
+        assert isinstance(index, module.InternalsSourceIndex)
+        address = cluster.members[0]
+        context_indices.append((address, index))
+        return SimpleNamespace(
+            address=address,
+            function_name=address_to_function_name(address),
+            canonical_template="=1",
+            normalized_formula="=1",
+            python_source="return 1.0",
+            allowed_runtime_symbols=(),
+        )
+
+    def fake_apply_plan(
+        source: str, _response: object, _ctx: object
+    ) -> tuple[str, int]:
+        apply_bases.append(source)
+        apply_count["n"] += 1
+        return version_sources[apply_count["n"]], 0
+
+    monkeypatch.setattr(
+        module.InternalsSourceIndex,
+        "from_source",
+        staticmethod(tracking_from_source),
+    )
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: object())
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module,
+        "build_mechanical_singleton_response",
+        lambda ctx, *_a, **_k: SimpleNamespace(
+            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
+        ),
+    )
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "apply_singleton_refactor_plan", fake_apply_plan)
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda _pending, *, internals_index, **_k: (internals_index, {}),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!D2": "family_d",
+            "Engine!E2": "family_e",
+        },
+    )
+
+    assert apply_count["n"] == 4
+    # Every apply chains onto the previous apply's output, not the index source.
+    assert apply_bases == version_sources[:4]
+    # Reindex cadence is per layer, not per unit: the initial file read, one
+    # reseal when E2 reads the three dirty collapses, and the end-of-pass seal.
+    assert from_source_sources == [
+        version_sources[0],
+        version_sources[3],
+        version_sources[4],
+    ]
+    # Layer 1 contexts share the initial index; E2's context sees the rebuilt
+    # index containing all upstream applies.
+    by_address = dict(context_indices)
+    assert len(context_indices) == 4
+    layer_one = [index for address, index in context_indices if address != "Engine!E2"]
+    assert len(layer_one) == 3
+    assert layer_one[0] is layer_one[1] is layer_one[2]
+    assert layer_one[0].source == version_sources[0]
+    assert by_address["Engine!E2"].source == version_sources[3]
+    assert context_indices[-1][0] == "Engine!E2"
+
+
+def test_pass_one_fallback_applies_onto_accumulated_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An LLM-fallback unit with clean reads keeps the stale index for context
+    but must apply onto the accumulated source, not the index's snapshot."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.wide_layer import wide_layer_graph
+
+    graph, bindings = wide_layer_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    version_sources = [
+        f"def cell_engine_b2(ctx):\n    return {n}.0\n" for n in range(5)
+    ]
+    internals_path.write_text(version_sources[0], encoding="utf-8")
+
+    apply_bases: list[str] = []
+    fallback_calls: list[tuple[str, module.InternalsSourceIndex]] = []
+    apply_count = {"n": 0}
+    fallback_address = "Engine!C2"
+
+    def _next_version(base: str) -> str:
+        apply_bases.append(base)
+        apply_count["n"] += 1
+        return version_sources[apply_count["n"]]
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            address=cluster.members[0],
+            function_name=address_to_function_name(cluster.members[0]),
+            canonical_template="=1",
+            normalized_formula="=1",
+            python_source="return 1.0",
+            allowed_runtime_symbols=(),
+        )
+
+    def fake_synthesize(ctx: SimpleNamespace) -> object | None:
+        return None if ctx.address == fallback_address else object()
+
+    def fake_fallback(
+        ctx: SimpleNamespace,
+        *,
+        internals_path: Path,
+        dry_run: bool = False,
+        internals_index: object = None,
+        apply_source: str | None = None,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        assert isinstance(internals_index, module.InternalsSourceIndex)
+        assert apply_source is not None
+        fallback_calls.append((apply_source, internals_index))
+        return SimpleNamespace(
+            source=_next_version(apply_source),
+            symbol_name=ctx.function_name,
+        )
+
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", fake_synthesize)
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(module, "refactor_internals_singleton", fake_fallback)
+    monkeypatch.setattr(
+        module,
+        "build_mechanical_singleton_response",
+        lambda ctx, *_a, **_k: SimpleNamespace(
+            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
+        ),
+    )
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        module,
+        "apply_singleton_refactor_plan",
+        lambda source, _response, _ctx: (_next_version(source), 0),
+    )
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda _pending, *, internals_index, **_k: (internals_index, {}),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!D2": "family_d",
+            "Engine!E2": "family_e",
+        },
+    )
+
+    assert apply_count["n"] == 4
+    # Mechanical and fallback applies alike chain onto the accumulated source.
+    assert apply_bases == version_sources[:4]
+    assert len(fallback_calls) == 1
+    fallback_apply_source, fallback_index = fallback_calls[0]
+    # The fallback unit is in the independent layer, so its index may lag at
+    # the initial snapshot — but its apply base must be fully up to date.
+    assert fallback_index.source == version_sources[0]
+    assert fallback_apply_source != fallback_index.source
 
 
 def test_llm_refactor_cluster_uses_dimension_aware_prompt(
