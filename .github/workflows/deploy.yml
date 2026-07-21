@@ -1,16 +1,31 @@
 name: Deploy generated package
 
+# Publish the committed dist/ package to its standalone package repository.
+# Generation is deliberately NOT run here: the extraction pipeline calls LLM
+# providers and can take hours, so it is run locally and dist/ is committed to
+# this repository. This workflow only rsyncs the committed dist/ into the
+# configured target repository and pushes it.
+
 on:
   workflow_dispatch:
 
 jobs:
-  generate:
+  publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Verify committed dist/
+        run: |
+          if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "No committed dist/ to publish. Generate the package locally" \
+              "and commit dist/ before dispatching this workflow (see README" \
+              "'Deploying the generated package')." >&2
+            exit 1
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -19,7 +34,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --no-dev
 
       - name: Resolve deploy target from workbook config
         id: target
@@ -31,11 +46,6 @@ jobs:
           else
             echo "No GitHub repository_url configured in DIST_METADATA; skipping package-repo publish."
           fi
-
-      - name: Run export pipeline
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: uv run python -m src.extraction_pipeline
 
       - name: Checkout target repository
         if: steps.target.outputs.slug != ''
