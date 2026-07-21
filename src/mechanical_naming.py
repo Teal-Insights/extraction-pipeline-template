@@ -252,7 +252,15 @@ def apply_naming_responses_to_module(
             docstring=unit.response.symbol_docstring,
             body=named_body,
         )
-        start = node.lineno - 1
+        # ``FunctionDef.lineno`` is the ``def`` line; include decorators so a
+        # rewrite does not leave an orphaned ``@xl_memoize`` above the unparsed
+        # replacement (which re-emits ``decorator_list``).
+        start_lineno = (
+            min(decorator.lineno for decorator in node.decorator_list)
+            if node.decorator_list
+            else node.lineno
+        )
+        start = start_lineno - 1
         end = node.end_lineno if node.end_lineno is not None else node.lineno
         replacements.append((start, end, rebuilt))
 

@@ -289,6 +289,8 @@ def _refactor_provider_key_present() -> bool:
 REFACTOR_CACHE_PATH = repo_root / ".cache/internals-refactors.json"
 REFACTOR_FAILURE_DUMP_DIR = repo_root / ".cache" / "refactor_failures"
 FORMULA_SECTION_MARKER = "# --- Formula cell functions ---"
+PROJECTION_ALIAS_SECTION_MARKER = "# --- Projection public address aliases ---"
+UNREFACTORED_CELLS_SECTION_MARKER = "# --- Unrefactored formula cells ---"
 RESOLVER_SECTION_MARKER = "# --- Formula resolver ---"
 
 AddressDispatch = dict[str, tuple[str, dict[str, BindingKeyValue]]]
@@ -4132,6 +4134,91 @@ def address_needs_resolver_dispatch(address: str) -> bool:
     return not address.startswith("Engine!")
 
 
+def _top_level_function_char_span(
+    source: str,
+    node: ast.FunctionDef,
+    *,
+    line_starts: list[int],
+    lines: list[str],
+) -> tuple[int, int]:
+    """Return the ``[start, end)`` char span for a top-level function, including decorators."""
+    start_line = node.lineno
+    if node.decorator_list:
+        start_line = min(decorator.lineno for decorator in node.decorator_list)
+    start = line_starts[start_line - 1]
+    end_line = node.end_lineno or node.lineno
+    while end_line < len(lines) and lines[end_line].strip() == "":
+        end_line += 1
+    end = line_starts[end_line] if end_line < len(lines) else len(source)
+    return start, end
+
+
+def rehome_unrefactored_cell_functions(source: str) -> str:
+    """Move residual ``cell_*`` defs into ``UNREFACTORED_CELLS_SECTION_MARKER``.
+
+    Helpers stay under ``FORMULA_SECTION_MARKER``. Remaining ``cell_*``
+    implementations — including those excel-grapher emitted under
+    ``PROJECTION_ALIAS_SECTION_MARKER`` — are collected into a clearly labeled
+    unrefactored section before the resolver. The projection-alias marker is
+    dropped when that section is rebuilt.
+    """
+    has_formula = FORMULA_SECTION_MARKER in source
+    has_resolver = RESOLVER_SECTION_MARKER in source
+    if not has_formula and not has_resolver:
+        # Synthetic fixtures and partial modules omit codegen section markers.
+        return source
+    if not has_formula:
+        raise ValueError(f"Missing section marker {FORMULA_SECTION_MARKER!r}")
+    if not has_resolver:
+        raise ValueError(f"Missing section marker {RESOLVER_SECTION_MARKER!r}")
+
+    formula_at = source.index(FORMULA_SECTION_MARKER)
+    after_formula_marker = source.index("\n", formula_at) + 1
+    resolver_at = source.index(RESOLVER_SECTION_MARKER)
+    formula_line = source.count("\n", 0, formula_at) + 1
+    resolver_line = source.count("\n", 0, resolver_at) + 1
+
+    module = ast.parse(source)
+    line_starts = _line_start_offsets(source)
+    lines = source.splitlines(keepends=True)
+    helpers: list[str] = []
+    residuals: list[str] = []
+    for node in module.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        start_line = node.lineno
+        if node.decorator_list:
+            start_line = min(decorator.lineno for decorator in node.decorator_list)
+        if start_line <= formula_line or start_line >= resolver_line:
+            continue
+        start, end = _top_level_function_char_span(
+            source,
+            node,
+            line_starts=line_starts,
+            lines=lines,
+        )
+        text = source[start:end].rstrip() + "\n"
+        if node.name.startswith("cell_"):
+            residuals.append(text)
+        else:
+            helpers.append(text)
+
+    parts: list[str] = [source[:after_formula_marker]]
+    if helpers:
+        parts.append("\n")
+        parts.append("\n\n".join(helpers))
+        parts.append("\n")
+    if residuals:
+        parts.append("\n")
+        parts.append(UNREFACTORED_CELLS_SECTION_MARKER)
+        parts.append("\n\n")
+        parts.append("\n\n".join(residuals))
+        parts.append("\n")
+    parts.append("\n")
+    parts.append(source[resolver_at:])
+    return "".join(parts)
+
+
 def apply_phase_c(source: str) -> tuple[str, int]:
     """Drop unreferenced thin ``cell_*`` wrappers and route them via ``_ADDRESS_DISPATCH``."""
     referenced = collect_static_cell_function_references(source)
@@ -5793,6 +5880,7 @@ def refactor_internals_all_clusters(
     if not dry_run and refactored_any:
         source = internals_path.read_text(encoding="utf-8")
         updated, phase_c_pruned = apply_phase_c(source)
+        updated = rehome_unrefactored_cell_functions(updated)
         validate_refactored_internals(updated)
         internals_path.write_text(updated, encoding="utf-8", newline="\n")
         if results:

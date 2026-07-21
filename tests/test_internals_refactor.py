@@ -30,13 +30,16 @@ from src.internals_refactor import (
     SingletonRefactorLLMResponse,
     SingletonRefactorResponse,
     FORMULA_SECTION_MARKER,
+    PROJECTION_ALIAS_SECTION_MARKER,
     RESOLVER_SECTION_MARKER,
+    UNREFACTORED_CELLS_SECTION_MARKER,
     address_to_function_name,
     apply_cluster_collapse,
     apply_phase_c,
     apply_singleton_refactor_plan,
     build_cluster_refactor_context,
     insert_helper_source,
+    rehome_unrefactored_cell_functions,
     validate_refactored_internals,
     build_cluster_refactor_prompt_context,
     build_singleton_refactor_context,
@@ -2154,6 +2157,81 @@ def cell_engine_c10(ctx):
     assert pruned >= 1
     assert "def cell_engine_c10" not in updated
     assert "_ADDRESS_DISPATCH" in updated
+
+
+def test_rehome_unrefactored_cell_functions_moves_residuals_out_of_alias_section() -> (
+    None
+):
+    source = (
+        RUNTIME_IMPORT
+        + f"""
+{FORMULA_SECTION_MARKER}
+
+@xl_memoize
+def shock_active(ctx, time_period):
+    \"\"\"Covers Engine!C10:G10.\"\"\"
+    return xl_cell(ctx, 'Inputs!B21')
+
+def cell_engine_c11(ctx):
+    return xl_cell(ctx, 'Inputs!C1')
+
+{PROJECTION_ALIAS_SECTION_MARKER}
+
+def cell_engine_c12(ctx):
+    _t1 = shock_active(ctx, time_period=1)
+    return xl_number(_t1)
+
+"""
+        + RESOLVER_SECTION
+    )
+    updated = rehome_unrefactored_cell_functions(source)
+    assert PROJECTION_ALIAS_SECTION_MARKER not in updated
+    assert UNREFACTORED_CELLS_SECTION_MARKER in updated
+    formula_at = updated.index(FORMULA_SECTION_MARKER)
+    unrefactored_at = updated.index(UNREFACTORED_CELLS_SECTION_MARKER)
+    resolver_at = updated.index(RESOLVER_SECTION_MARKER)
+    assert formula_at < unrefactored_at < resolver_at
+    helper_region = updated[formula_at:unrefactored_at]
+    residual_region = updated[unrefactored_at:resolver_at]
+    assert "def shock_active" in helper_region
+    assert "@xl_memoize" in helper_region
+    assert "def cell_engine_c11" not in helper_region
+    assert "def cell_engine_c12" not in helper_region
+    assert "def cell_engine_c11" in residual_region
+    assert "def cell_engine_c12" in residual_region
+    assert "def shock_active" not in residual_region
+    # Idempotent: a second pass keeps the same section layout.
+    again = rehome_unrefactored_cell_functions(updated)
+    assert again.index(UNREFACTORED_CELLS_SECTION_MARKER) == unrefactored_at
+    assert PROJECTION_ALIAS_SECTION_MARKER not in again
+
+
+def test_rehome_unrefactored_cell_functions_noop_without_section_markers() -> None:
+    source = "def cell_engine_b2(ctx):\n    return 4.0\n"
+    assert rehome_unrefactored_cell_functions(source) == source
+
+
+def test_rehome_unrefactored_cell_functions_omits_section_when_no_residuals() -> None:
+    source = (
+        RUNTIME_IMPORT
+        + f"""
+{FORMULA_SECTION_MARKER}
+
+def shock_active(ctx, time_period):
+    return xl_cell(ctx, 'Inputs!B21')
+
+{PROJECTION_ALIAS_SECTION_MARKER}
+
+"""
+        + RESOLVER_SECTION
+    )
+    updated = rehome_unrefactored_cell_functions(source)
+    assert PROJECTION_ALIAS_SECTION_MARKER not in updated
+    assert UNREFACTORED_CELLS_SECTION_MARKER not in updated
+    assert "def shock_active" in updated
+    assert updated.index(FORMULA_SECTION_MARKER) < updated.index(
+        RESOLVER_SECTION_MARKER
+    )
 
 
 def test_validate_allowed_global_references_allows_runtime_symbols() -> None:
