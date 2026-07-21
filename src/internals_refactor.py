@@ -2193,6 +2193,9 @@ def validate_cluster_refactor_response(
         | set(ALLOWED_REFACTOR_TYPE_HINT_NAMES)
         | {"ctx"}
         | {parameter.name for parameter in response.parameters}
+        # Always allow helper-memoization symbols; Pass 1 patches runtime.py
+        # when they are missing from older embedded exports.
+        | {"xl_helper", "xl_memoize"}
     )
     builtin_names = set(dir(builtins))
     for node in ast.walk(helper_def):
@@ -2824,7 +2827,12 @@ def build_mechanical_cluster_response(
     The draft body still uses mechanical local names (``_t1`` ...); the semantic
     layer (docstring and local names) is deferred to pass 2. A deterministic
     placeholder docstring keeps the helper valid until then.
+
+    Mechanical helpers are decorated with ``@xl_memoize`` so period-recurrence
+    chains share work under a warm ``EvalContext`` (library-visible caching).
     """
+    from src.helper_memoization import apply_xl_memoize_decorator
+
     parameters = synthesize_cluster_parameters(ctx)
     llm_response = ClusterRefactorLLMResponse(
         symbol_docstring=mechanical_placeholder_docstring(
@@ -2834,12 +2842,15 @@ def build_mechanical_cluster_response(
         error=None,
         error_reason=None,
     )
-    return prepare_cluster_refactor_response(
+    response = prepare_cluster_refactor_response(
         llm_response,
         ctx,
         runtime_source=runtime_source,
         internals_source=internals_source,
         callee_hints=callee_hints,
+    )
+    return response.model_copy(
+        update={"helper_source": apply_xl_memoize_decorator(response.helper_source)}
     )
 
 
@@ -2856,18 +2867,23 @@ def build_mechanical_singleton_response(
     As with clusters, the mechanical local names survive into pass 1 behind a
     placeholder docstring; pass 2 renames them and supplies the real docstring.
     """
+    from src.helper_memoization import apply_xl_memoize_decorator
+
     llm_response = SingletonRefactorLLMResponse(
         symbol_docstring=mechanical_placeholder_docstring(()),
         symbol_body=draft.body,
         error=None,
         error_reason=None,
     )
-    return prepare_singleton_refactor_response(
+    response = prepare_singleton_refactor_response(
         llm_response,
         ctx,
         runtime_source=runtime_source,
         internals_source=internals_source,
         callee_hints=callee_hints,
+    )
+    return response.model_copy(
+        update={"symbol_source": apply_xl_memoize_decorator(response.symbol_source)}
     )
 
 
@@ -3250,8 +3266,20 @@ def _missing_runtime_imports(source: str, symbols: set[str]) -> set[str]:
     return symbols - existing
 
 
+def _helper_memo_runtime_imports(helper_source: str) -> set[str]:
+    """Collect ``xl_memoize`` / ``xl_helper`` when referenced by a helper body."""
+    needed: set[str] = set()
+    if re.search(r"\bxl_memoize\b", helper_source):
+        needed.add("xl_memoize")
+    if re.search(r"\bxl_helper\b", helper_source):
+        needed.add("xl_helper")
+    return needed
+
+
 def _cluster_runtime_imports(response: ClusterRefactorResponse) -> set[str]:
-    return _type_hint_runtime_imports(response.helper_source)
+    return _type_hint_runtime_imports(response.helper_source) | (
+        _helper_memo_runtime_imports(response.helper_source)
+    )
 
 
 def ensure_cluster_refactor_imports(
@@ -3266,7 +3294,9 @@ def ensure_cluster_refactor_imports(
 
 
 def _singleton_runtime_imports(response: SingletonRefactorResponse) -> set[str]:
-    return _type_hint_runtime_imports(response.symbol_source)
+    return _type_hint_runtime_imports(response.symbol_source) | (
+        _helper_memo_runtime_imports(response.symbol_source)
+    )
 
 
 def _merge_runtime_imports(source: str, symbols: set[str]) -> str:
@@ -3407,6 +3437,7 @@ def validate_singleton_refactor_response(
         | semantic_helpers_available_for_calls(internals_source, existing_names)
         | set(ALLOWED_REFACTOR_TYPE_HINT_NAMES)
         | {"ctx"}
+        | {"xl_helper", "xl_memoize"}
     )
     builtin_names = set(dir(builtins))
     for node in ast.walk(symbol_def):
@@ -4938,6 +4969,24 @@ def refactor_internals_all_clusters(
     pristine_source: str | None = None
     input_vectors: Sequence[Mapping[str, object]] | None = None
     internals_index = _resolve_internals_index(internals_path)
+
+    # Patch package runtime early so mechanical @xl_memoize imports resolve and
+    # the allowlist / parity gate see xl_helper before Pass 1 applies units.
+    from src.helper_memoization import ensure_package_runtime_helper_memoization
+    from src.refactor_parity_gate import clear_parity_runtime_caches
+    from src.runtime_symbols import allowed_runtime_symbols
+
+    runtime_file = internals_path.parent / "runtime.py"
+    if runtime_file.is_file() and ensure_package_runtime_helper_memoization(
+        runtime_file
+    ):
+        clear_parity_runtime_caches()
+        allowed_runtime_symbols.cache_clear()
+        logger.info(
+            "pass1 patched package runtime with helper memoization: path=%s",
+            runtime_file,
+        )
+
     if parity_gate:
         from src.refactor_parity_gate import build_default_input_vectors
 
