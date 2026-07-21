@@ -59,6 +59,7 @@ from src.refactor_return_types import (
     _binding_dtype_to_python,
     build_callee_return_hints,
     infer_refactor_return_type_hint,
+    merge_callee_return_hints,
     normalize_return_type_hint_for_allowlist,
     validate_scalar_return_type_hint,
 )
@@ -5247,6 +5248,11 @@ def refactor_internals_all_clusters(
         current_source = updated
         per_unit_apply_s = batch_apply_seconds / batch_size
         for item in pending_cluster_applies:
+            merge_callee_return_hints(
+                callee_hints,
+                source=item.mechanical_response.helper_source,
+            )
+        for item in pending_cluster_applies:
             dirty_addresses.update(item.cluster_members)
             pass1_apply_count += 1
             results.append(
@@ -5405,6 +5411,10 @@ def refactor_internals_all_clusters(
                     )
                     raise
                 current_source = updated
+                merge_callee_return_hints(
+                    callee_hints,
+                    source=mechanical_response.symbol_source,
+                )
                 dirty_addresses.update(cluster.members)
                 pass1_apply_count += 1
                 pending_semantic.append(
