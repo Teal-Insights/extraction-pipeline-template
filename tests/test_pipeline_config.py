@@ -4,6 +4,7 @@ import pytest
 
 from src.pipeline_config import (
     DistProjectMetadata,
+    RunnableCellRule,
     load_pipeline_config,
     validate_pipeline_config,
 )
@@ -62,6 +63,60 @@ def test_load_pipeline_config_rejects_invalid_clustering_mode(
 
     monkeypatch.setattr(workbook_config, "CLUSTERING_MODE", "all_series")
     with pytest.raises(ValueError, match="CLUSTERING_MODE"):
+        load_pipeline_config()
+
+
+def test_load_pipeline_config_defaults_to_no_runnable_cell_rules() -> None:
+    config = load_pipeline_config()
+    assert config.runnable_cell_rules == ()
+
+
+def test_load_pipeline_config_reads_runnable_cell_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workbook_config
+
+    monkeypatch.setattr(
+        workbook_config,
+        "RUNNABLE_CELL_RULES",
+        (
+            RunnableCellRule(
+                pattern=r"\bcompute_fragile_\w+\s*\(",
+                message="fragile computes belong in prose",
+            ),
+            (r"""\bset_entity\s*\([^)]*['"]Atlantis['"]""", "use a real entity"),
+        ),
+        raising=False,
+    )
+    config = load_pipeline_config()
+    assert len(config.runnable_cell_rules) == 2
+    assert all(
+        isinstance(rule, RunnableCellRule) for rule in config.runnable_cell_rules
+    )
+    assert config.runnable_cell_rules[1].message == "use a real entity"
+
+
+def test_load_pipeline_config_rejects_invalid_runnable_cell_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workbook_config
+
+    monkeypatch.setattr(
+        workbook_config,
+        "RUNNABLE_CELL_RULES",
+        (("[unclosed", "bad regex"),),
+        raising=False,
+    )
+    with pytest.raises(ValueError, match="RUNNABLE_CELL_RULES"):
+        load_pipeline_config()
+
+    monkeypatch.setattr(
+        workbook_config,
+        "RUNNABLE_CELL_RULES",
+        ("not-a-pair",),
+        raising=False,
+    )
+    with pytest.raises(ValueError, match="RUNNABLE_CELL_RULES"):
         load_pipeline_config()
 
 
