@@ -433,6 +433,21 @@ def test_cluster_prompt_documents_error_escape_hatch() -> None:
     assert "error_reason" in required
 
 
+def test_cluster_prompts_teach_renaming_mechanical_temporaries() -> None:
+    """Exemplars may already contain _tN temps from unpack_return codegen."""
+    member_sweep = load_cluster_refactor_prompt_fixed_portion()
+    dimension_aware = load_cluster_refactor_prompt_fixed_portion("dimension_aware")
+
+    assert "Example 1: Unpacking nested calls" not in member_sweep
+    assert "Renaming mechanical temporaries" in member_sweep
+    for prompt in (member_sweep, dimension_aware):
+        assert "_tN" in prompt
+        assert "Rename every `_tN`" in prompt
+        assert "_t1 =" in prompt
+        assert "do not re-nest" in prompt.lower() or "do not eagerly" in prompt.lower()
+        assert "lazy" in prompt.lower() or "short-circuit" in prompt.lower()
+
+
 def test_append_cluster_refactor_note_section_covers_address_range() -> None:
     docstring = (
         "Return 1.0 when the observed value meets or exceeds the growth threshold.\n\n"
