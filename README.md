@@ -399,7 +399,18 @@ uv run ruff format
 uv run ty check
 ```
 
-Pull requests run the same test suite on Ubuntu via `.github/workflows/test.yml`. The deploy workflow (`.github/workflows/deploy.yml`) is available from the Actions tab via `workflow_dispatch`. It runs the export pipeline, uploads `dist/` as a build artifact, and — when `DIST_METADATA.repository_url` points at a GitHub repository — publishes `dist/` to that repository by rsyncing over its contents and pushing to `main`. Publishing requires a `DEPLOY_TOKEN` repository secret (a token with write access to the target repository); when `repository_url` is unset or not a GitHub URL, the publish steps are skipped and only the artifact is produced. The generated package ships its own docs deploy workflow (`dist/.github/workflows/deploy-docs.yml`), so the target repository can publish the user guide to GitHub Pages on push.
+Pull requests run the same test suite on Ubuntu via `.github/workflows/test.yml`.
+
+### Deploying the generated package
+
+The deploy workflow (`.github/workflows/deploy.yml`) is available from the Actions tab via `workflow_dispatch`. It is **publish-only**: the extraction pipeline calls LLM providers and can take hours, so generation is run locally and never in CI. Generate the package and commit `dist/`, then dispatch the workflow:
+
+```bash
+uv run python -m src.extraction_pipeline
+git add -f dist && git commit -m "Regenerate dist/"
+```
+
+`dist/` is gitignored by default; commit it explicitly (`git add -f dist`) so the deploy workflow has something to publish. On dispatch the workflow verifies the committed `dist/`, uploads it as a build artifact, and — when `DIST_METADATA.repository_url` points at a GitHub repository — publishes `dist/` to that repository by rsyncing over its contents and pushing to `main`. Publishing requires a `DEPLOY_TOKEN` repository secret (a token with write access to the target repository); when `repository_url` is unset or not a GitHub URL, the publish steps are skipped and only the artifact is produced. The generated package ships its own docs deploy workflow (`dist/.github/workflows/deploy-docs.yml`), so the target repository can publish the user guide to GitHub Pages on push.
 
 Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (workbook audits require `GRAPH_AUDIT_CASES` in `workbook_config.py`; synthetic fixture audits run without extra setup; provider API key required for `LLM_GRAPH_AUDIT_MODEL`).
 

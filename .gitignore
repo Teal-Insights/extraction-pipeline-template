@@ -4,6 +4,9 @@ __pycache__/
 .ruff_cache/
 .ty_cache/
 .cache/
+# Generated package. Derived repos that publish via the deploy workflow should
+# commit dist/ explicitly (git add -f dist); see README "Deploying the
+# generated package".
 dist/
 docs/dependency-graph/
 artifacts/dependency-graph/
