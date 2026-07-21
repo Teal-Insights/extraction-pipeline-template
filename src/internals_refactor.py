@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 import builtins
 import hashlib
 import json
@@ -22,6 +21,7 @@ from excel_grapher.exporter import ProjectionResult
 from excel_grapher.grapher.graph import DependencyGraph
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from src.async_gather import run_map_as_completed
 from src.formula_clustering import FormulaCluster
 from src.mechanical_body import MechanicalBodyDraft
 from src.mechanical_naming import ClusterNamingLLMResponse
@@ -4718,11 +4718,17 @@ def _apply_and_validate_semantic_naming(
     source: str,
     *,
     runtime_source: str,
-) -> tuple[str, dict[str, ClusterRefactorResponse | SingletonRefactorResponse]]:
+) -> tuple[
+    str,
+    dict[str, ClusterRefactorResponse | SingletonRefactorResponse],
+    list[tuple[str, str, BaseException]],
+]:
     """Validate naming responses, then apply them commutatively to ``source``.
 
     Each unit is prepared and fully validated (including semantic local names)
-    before any rewrite. Application goes through
+    before any rewrite. Units that fail prepare/validate are skipped (left
+    mechanical) and listed in the returned skip triples
+    ``(unit_id, helper_name, exc)``. Application goes through
     :func:`src.mechanical_naming.apply_naming_responses_to_module` so the live
     pass-2 path matches the order-independent applier covered by tests.
     Prepared responses have ``helper_source`` / ``symbol_source`` synced to the
@@ -4739,65 +4745,76 @@ def _apply_and_validate_semantic_naming(
         str, ClusterRefactorResponse | SingletonRefactorResponse
     ] = {}
     units: list[NamingUnit] = []
+    skipped: list[tuple[str, str, BaseException]] = []
 
     for pending in pending_units:
         naming_response = naming_by_unit[pending.unit_id]
-        named_body = apply_cluster_naming_response(
-            naming_response,
-            pending.draft,
-            parameter_names=pending.parameter_names,
-            forbidden_names=pending.forbidden_names,
-        )
-        if pending.kind == "cluster":
-            assert isinstance(pending.ctx, ClusterRefactorContext)
-            legacy = ClusterRefactorLLMResponse(
-                symbol_docstring=naming_response.symbol_docstring,
-                symbol_body=named_body,
-                error=None,
-                error_reason=None,
+        try:
+            named_body = apply_cluster_naming_response(
+                naming_response,
+                pending.draft,
+                parameter_names=pending.parameter_names,
+                forbidden_names=pending.forbidden_names,
             )
-            prepared: ClusterRefactorResponse | SingletonRefactorResponse = (
-                prepare_cluster_refactor_response(
-                    legacy,
+            if pending.kind == "cluster":
+                assert isinstance(pending.ctx, ClusterRefactorContext)
+                legacy = ClusterRefactorLLMResponse(
+                    symbol_docstring=naming_response.symbol_docstring,
+                    symbol_body=named_body,
+                    error=None,
+                    error_reason=None,
+                )
+                prepared: ClusterRefactorResponse | SingletonRefactorResponse = (
+                    prepare_cluster_refactor_response(
+                        legacy,
+                        pending.ctx,
+                        runtime_source=runtime_source,
+                        internals_source=source,
+                    )
+                )
+                assert isinstance(prepared, ClusterRefactorResponse)
+                prepared = _prepare_cluster_refactor_response(prepared, pending.ctx)
+                validate_cluster_refactor_response(
+                    pending.ctx,
+                    prepared,
+                    existing_names=existing_names,
+                    internals_source=source,
+                    require_semantic_locals=True,
+                )
+                enriched_docstring = prepared.helper_docstring
+            else:
+                assert isinstance(pending.ctx, SingletonRefactorContext)
+                legacy_singleton = SingletonRefactorLLMResponse(
+                    symbol_docstring=naming_response.symbol_docstring,
+                    symbol_body=named_body,
+                    error=None,
+                    error_reason=None,
+                )
+                prepared = prepare_singleton_refactor_response(
+                    legacy_singleton,
                     pending.ctx,
                     runtime_source=runtime_source,
                     internals_source=source,
                 )
+                assert isinstance(prepared, SingletonRefactorResponse)
+                prepared = _prepare_singleton_refactor_response(prepared, pending.ctx)
+                validate_singleton_refactor_response(
+                    pending.ctx,
+                    prepared,
+                    existing_names=existing_names,
+                    internals_source=source,
+                    require_semantic_locals=True,
+                )
+                enriched_docstring = prepared.symbol_docstring
+        except (ValueError, ValidationError, TypeError, RefactorDeclaredError) as exc:
+            logger.warning(
+                "pass2 semantic naming apply skipped: helper=%s unit=%s error=%s",
+                pending.helper_name,
+                pending.unit_id,
+                exc,
             )
-            assert isinstance(prepared, ClusterRefactorResponse)
-            prepared = _prepare_cluster_refactor_response(prepared, pending.ctx)
-            validate_cluster_refactor_response(
-                pending.ctx,
-                prepared,
-                existing_names=existing_names,
-                internals_source=source,
-                require_semantic_locals=True,
-            )
-            enriched_docstring = prepared.helper_docstring
-        else:
-            assert isinstance(pending.ctx, SingletonRefactorContext)
-            legacy_singleton = SingletonRefactorLLMResponse(
-                symbol_docstring=naming_response.symbol_docstring,
-                symbol_body=named_body,
-                error=None,
-                error_reason=None,
-            )
-            prepared = prepare_singleton_refactor_response(
-                legacy_singleton,
-                pending.ctx,
-                runtime_source=runtime_source,
-                internals_source=source,
-            )
-            assert isinstance(prepared, SingletonRefactorResponse)
-            prepared = _prepare_singleton_refactor_response(prepared, pending.ctx)
-            validate_singleton_refactor_response(
-                pending.ctx,
-                prepared,
-                existing_names=existing_names,
-                internals_source=source,
-                require_semantic_locals=True,
-            )
-            enriched_docstring = prepared.symbol_docstring
+            skipped.append((pending.unit_id, pending.helper_name, exc))
+            continue
 
         prepared_by_unit[pending.unit_id] = prepared
         units.append(
@@ -4812,23 +4829,28 @@ def _apply_and_validate_semantic_naming(
             )
         )
 
+    if not units:
+        return source, prepared_by_unit, skipped
+
     named_source = apply_naming_responses_to_module(source, units)
     for pending in pending_units:
-        prepared = prepared_by_unit[pending.unit_id]
+        prepared_unit = prepared_by_unit.get(pending.unit_id)
+        if prepared_unit is None:
+            continue
         helper_source = extract_function_source(
             named_source, pending.helper_name
         ).strip()
         if pending.kind == "cluster":
-            assert isinstance(prepared, ClusterRefactorResponse)
+            assert isinstance(prepared_unit, ClusterRefactorResponse)
             prepared_by_unit[pending.unit_id] = _align_cluster_response_docstring(
-                prepared.model_copy(update={"helper_source": helper_source})
+                prepared_unit.model_copy(update={"helper_source": helper_source})
             )
         else:
-            assert isinstance(prepared, SingletonRefactorResponse)
+            assert isinstance(prepared_unit, SingletonRefactorResponse)
             prepared_by_unit[pending.unit_id] = _align_singleton_response_docstring(
-                prepared.model_copy(update={"symbol_source": helper_source})
+                prepared_unit.model_copy(update={"symbol_source": helper_source})
             )
-    return named_source, prepared_by_unit
+    return named_source, prepared_by_unit, skipped
 
 
 def _refresh_mechanical_cluster_results(
@@ -4882,8 +4904,11 @@ def _run_semantic_naming_pass(
     Naming is a pure semantic layer over an already-verified body, so the calls
     are independent and run concurrently under the shared LLM semaphore. Results
     are cached on a key that omits the internals hash (the mechanical body fully
-    determines the answer), and all responses are applied to a single in-memory
-    source that is written and re-indexed once.
+    determines the answer). Each successful miss is written to the cache as it
+    arrives. Units that fail naming (after retries) or apply/validate are left
+    mechanical; a summary warning points at the standalone naming CLI for retry.
+    Successful responses are applied to a single in-memory source that is written
+    and re-indexed once.
     """
     from src.mechanical_naming import (
         ClusterNamingLLMResponse as ClusterNamingModel,
@@ -4945,24 +4970,68 @@ def _run_semantic_naming_pass(
             continue
         naming_by_unit[pending.unit_id] = naming_response
 
+    skipped: list[tuple[str, str, BaseException]] = []
     if misses:
-        fresh = _gather_semantic_naming(misses, model=model, prompts=prompts)
-        naming_by_unit.update(fresh)
-        for pending in misses:
-            naming_response = naming_by_unit[pending.unit_id]
-            cache[cache_keys[pending.unit_id]] = naming_response.model_dump_json()
 
-    source, prepared_by_unit = _apply_and_validate_semantic_naming(
-        pending_units,
-        naming_by_unit,
-        internals_index.source,
-        runtime_source=runtime_source,
-    )
+        def _persist_success(
+            unit_id: str, naming_response: ClusterNamingLLMResponse
+        ) -> None:
+            naming_by_unit[unit_id] = naming_response
+            if not dry_run:
+                cache[cache_keys[unit_id]] = naming_response.model_dump_json()
+                save_refactor_cache(cache)
 
-    validate_refactored_internals(source)
-    if not dry_run:
-        internals_path.write_text(source, encoding="utf-8", newline="\n")
+        _gathered, gather_skipped = _gather_semantic_naming(
+            misses,
+            model=model,
+            prompts=prompts,
+            on_success=_persist_success,
+        )
+        # Prefer gather's return over on_success alone so patched gathers that
+        # skip the callback still wire successes into apply.
+        naming_by_unit.update(_gathered)
+        skipped.extend(gather_skipped)
+
+    apply_units = [
+        pending for pending in pending_units if pending.unit_id in naming_by_unit
+    ]
+    if apply_units:
+        source, prepared_by_unit, apply_skipped = _apply_and_validate_semantic_naming(
+            apply_units,
+            naming_by_unit,
+            internals_index.source,
+            runtime_source=runtime_source,
+        )
+        for unit_id, helper_name, exc in apply_skipped:
+            skipped.append((unit_id, helper_name, exc))
+            cache_key = cache_keys.get(unit_id)
+            if cache_key is not None and cache_key in cache:
+                del cache[cache_key]
+                naming_by_unit.pop(unit_id, None)
+    else:
+        source = internals_index.source
+        prepared_by_unit = {}
+
+    if skipped:
+        helpers = ", ".join(sorted({helper for _, helper, _ in skipped}))
+        logger.warning(
+            "pass2 semantic naming skipped %d helper(s) (%s); left mechanical. "
+            "Retry with: uv run python -m scripts.run_semantic_naming "
+            "--internals %s",
+            len(skipped),
+            helpers,
+            internals_path,
+        )
+
+    if apply_units:
+        validate_refactored_internals(source)
+        if not dry_run:
+            internals_path.write_text(source, encoding="utf-8", newline="\n")
+            save_refactor_cache(cache)
+    elif skipped and not dry_run:
+        # Evict any sticky bad cache entries even when nothing was rewritten.
         save_refactor_cache(cache)
+
     return InternalsSourceIndex.from_source(source), prepared_by_unit
 
 
@@ -4971,7 +5040,11 @@ def _gather_semantic_naming(
     *,
     model: str,
     prompts: Mapping[str, str],
-) -> dict[str, ClusterNamingLLMResponse]:
+    on_success: Callable[[str, ClusterNamingLLMResponse], None] | None = None,
+) -> tuple[
+    dict[str, ClusterNamingLLMResponse],
+    list[tuple[str, str, BaseException]],
+]:
     from src.mechanical_naming import (
         ClusterNamingLLMResponse as ClusterNamingModel,
         SingletonNamingLLMResponse,
@@ -4980,6 +5053,7 @@ def _gather_semantic_naming(
 
     client, provider = build_async_client(model)
     semaphore = get_llm_semaphore()
+    failures: list[tuple[str, str, BaseException]] = []
 
     def _make_post_validate(pending: _PendingSemanticUnit):
         def _post_validate(
@@ -5021,11 +5095,23 @@ def _gather_semantic_naming(
         )
         return pending.unit_id, parsed
 
-    async def _run() -> dict[str, ClusterNamingLLMResponse]:
-        pairs = await asyncio.gather(*[_one(pending) for pending in misses])
-        return dict(pairs)
+    def _on_error(pending: _PendingSemanticUnit, exc: BaseException) -> None:
+        logger.warning(
+            "pass2 semantic naming gather skipped: helper=%s unit=%s error=%s",
+            pending.helper_name,
+            pending.unit_id,
+            exc,
+        )
+        failures.append((pending.unit_id, pending.helper_name, exc))
 
-    return asyncio.run(_run())
+    successes = run_map_as_completed(
+        misses,
+        _one,
+        on_success=on_success,
+        on_error=_on_error,
+        raise_on_error=False,
+    )
+    return successes, failures
 
 
 def refactor_internals_all_clusters(
