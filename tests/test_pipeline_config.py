@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -159,3 +160,36 @@ def test_dist_project_metadata_install_command_without_repo() -> None:
         documentation_url="https://example.com/",
     )
     assert metadata.resolved_install_command() == "uv add forecast-kit"
+
+
+def test_dist_project_metadata_repository_slug_from_github_url() -> None:
+    metadata = DistProjectMetadata(
+        project_name="forecast-kit",
+        package_name="forecast_kit",
+        library_name="Forecast Kit",
+        description="Example library.",
+        documentation_url="https://example.com/",
+        repository_url="https://github.com/example-org/forecast-kit",
+    )
+    assert metadata.repository_slug() == "example-org/forecast-kit"
+
+    trailing = replace(
+        metadata, repository_url="https://github.com/example-org/forecast-kit.git"
+    )
+    assert trailing.repository_slug() == "example-org/forecast-kit"
+
+
+def test_dist_project_metadata_repository_slug_without_repo() -> None:
+    metadata = DistProjectMetadata(
+        project_name="forecast-kit",
+        package_name="forecast_kit",
+        library_name="Forecast Kit",
+        description="Example library.",
+        documentation_url="https://example.com/",
+    )
+    assert metadata.repository_slug() is None
+
+    non_github = replace(
+        metadata, repository_url="https://gitlab.com/example-org/forecast-kit"
+    )
+    assert non_github.repository_slug() is None

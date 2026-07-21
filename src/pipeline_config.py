@@ -44,6 +44,23 @@ class DistProjectMetadata:
             return f'uv add "{self.project_name} @ git+{self.repository_url}"'
         return f"uv add {self.project_name}"
 
+    def repository_slug(self) -> str | None:
+        """Return ``owner/repo`` when ``repository_url`` is a GitHub repository.
+
+        The deploy workflow uses this slug as the target repository for
+        publishing the generated ``dist/`` package. Returns ``None`` for
+        non-GitHub or unset URLs, which disables the publish steps.
+        """
+        if self.repository_url is None:
+            return None
+        match = re.fullmatch(
+            r"https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?",
+            self.repository_url,
+        )
+        if match is None:
+            return None
+        return f"{match.group('owner')}/{match.group('repo')}"
+
 
 @dataclass(frozen=True)
 class RunnableCellRule:
