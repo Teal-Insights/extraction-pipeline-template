@@ -3839,6 +3839,22 @@ def test_refactor_schedule_rebuilds_index_only_after_apply(
     assert from_source_sources[1] == version_sources[1]
 
 
+def _fake_mechanical_singleton_response(ctx: object) -> Any:
+    """Minimal mechanical response stub including ``symbol_source`` for Pass 1."""
+    from types import SimpleNamespace
+
+    address = getattr(ctx, "address", "Engine!A1")
+    symbol_name = "helper_" + str(address).replace("!", "_").lower()
+    return SimpleNamespace(
+        symbol_name=symbol_name,
+        symbol_source=(
+            f"def {symbol_name}(ctx):\n"
+            f'    """Stub helper for {address}."""\n'
+            f"    return 0.0\n"
+        ),
+    )
+
+
 def test_pass_one_defers_internals_write_until_single_flush(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3920,9 +3936,7 @@ def test_pass_one_defers_internals_write_until_single_flush(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda ctx, *_a, **_k: SimpleNamespace(
-            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
-        ),
+        lambda ctx, *_a, **_k: _fake_mechanical_singleton_response(ctx),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
@@ -4055,9 +4069,7 @@ def test_pass_one_writes_mechanical_checkpoint_before_parity_gate(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda ctx, *_a, **_k: SimpleNamespace(
-            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
-        ),
+        lambda ctx, *_a, **_k: _fake_mechanical_singleton_response(ctx),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
@@ -4168,9 +4180,7 @@ def test_pass_one_parity_failure_keeps_package_internals_pristine(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda ctx, *_a, **_k: SimpleNamespace(
-            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
-        ),
+        lambda ctx, *_a, **_k: _fake_mechanical_singleton_response(ctx),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
@@ -4277,9 +4287,7 @@ def test_pass_one_defers_full_module_validate_until_end(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda ctx, *_a, **_k: SimpleNamespace(
-            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
-        ),
+        lambda ctx, *_a, **_k: _fake_mechanical_singleton_response(ctx),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
@@ -4400,9 +4408,7 @@ def test_pass_one_reindexes_lazily_per_layer(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda ctx, *_a, **_k: SimpleNamespace(
-            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
-        ),
+        lambda ctx, *_a, **_k: _fake_mechanical_singleton_response(ctx),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
@@ -4532,9 +4538,7 @@ def test_pass_one_fallback_applies_onto_accumulated_source(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda ctx, *_a, **_k: SimpleNamespace(
-            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
-        ),
+        lambda ctx, *_a, **_k: _fake_mechanical_singleton_response(ctx),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
@@ -4632,9 +4636,7 @@ def _run_wide_layer_mechanical_pass1(
     monkeypatch.setattr(
         module,
         "build_mechanical_singleton_response",
-        lambda ctx, *_a, **_k: SimpleNamespace(
-            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
-        ),
+        lambda ctx, *_a, **_k: _fake_mechanical_singleton_response(ctx),
     )
     monkeypatch.setattr(
         module, "validate_singleton_refactor_response", lambda *_a, **_k: None
