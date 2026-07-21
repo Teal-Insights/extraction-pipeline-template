@@ -31,3 +31,8 @@ dev = [
 
 [tool.pytest.ini_options]
 addopts = "-v -p no:faulthandler -p no:cacheprovider"
+
+[tool.ruff.format]
+# Keep formatted Python on LF so Windows checkouts cannot reintroduce the CRLF
+# bytes that `git diff --check` flags as trailing whitespace.
+line-ending = "lf"
