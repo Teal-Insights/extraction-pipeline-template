@@ -444,6 +444,202 @@ def test_pass1_mechanical_cluster_failure_writes_diagnostic(
     assert context["mechanical_draft"]["body"] == "return mystery(ctx)"
 
 
+def test_pass1_refreshes_callee_hints_after_mechanical_cluster_flush(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Downstream units must see upstream helper return annotations after flush."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import FormulaCluster
+    from src.mechanical_body import MechanicalBodyDraft
+
+    upstream = FormulaCluster(
+        cluster_id=1,
+        members=("Engine!C12", "Engine!D12"),
+        canonical_template="=1",
+        row=12,
+    )
+    downstream = FormulaCluster(
+        cluster_id=2,
+        members=("Engine!C4", "Engine!D4"),
+        canonical_template="=IF(...)",
+        row=4,
+    )
+
+    class _Projection:
+        def get_dependencies(self, address: str) -> tuple[str, ...]:
+            if address in {"Engine!C4", "Engine!D4"}:
+                return ("Engine!C12", "Engine!D12")
+            return ()
+
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        RUNTIME_IMPORT
+        + """
+# --- Formula cell functions ---
+
+def cell_engine_c12(ctx):
+    return 1.0
+
+def cell_engine_d12(ctx):
+    return 2.0
+
+def cell_engine_c4(ctx):
+    return population_medium(ctx, time_period=1)
+
+def cell_engine_d4(ctx):
+    return population_medium(ctx, time_period=2)
+
+"""
+        + RESOLVER_SECTION,
+        encoding="utf-8",
+    )
+    draft = MechanicalBodyDraft(
+        body="return 1.0",
+        renameable_locals=(),
+        lookup_table_names=(),
+        group_count=1,
+    )
+    hints_by_helper: dict[str, dict[str, str]] = {}
+
+    def fake_build_cluster(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        helper = (
+            "population_medium"
+            if cluster.cluster_id == 1
+            else "demography_total_population"
+        )
+        return SimpleNamespace(
+            cluster_id=cluster.cluster_id,
+            canonical_template=cluster.canonical_template,
+            members=tuple(
+                SimpleNamespace(
+                    address=address,
+                    function_name=address_to_function_name(address),
+                    normalized_formula="=1",
+                    python_source=(
+                        f"def {address_to_function_name(address)}(ctx):\n"
+                        f"    return 1.0\n"
+                    ),
+                )
+                for address in cluster.members
+            ),
+            naming_hints={},
+            allowed_runtime_symbols=(),
+            expected_helper_name=helper,
+            contract="member_sweep",
+        )
+
+    def tracking_mechanical_response(
+        ctx: SimpleNamespace, _draft: object, **kwargs: object
+    ) -> ClusterRefactorResponse:
+        hints = kwargs.get("callee_hints")
+        captured: dict[str, str] = {}
+        if isinstance(hints, dict):
+            for key, value in hints.items():
+                if isinstance(key, str) and isinstance(value, str):
+                    captured[key] = value
+        hints_by_helper[ctx.expected_helper_name] = captured
+        return ClusterRefactorResponse(
+            helper_name=ctx.expected_helper_name,
+            helper_docstring=CLUSTER_DOCSTRING,
+            parameters=CLUSTER_PARAMETERS,
+            helper_source=(
+                f"def {ctx.expected_helper_name}"
+                "(ctx, time_period: int) -> float:\n"
+                f'    """{CLUSTER_DOCSTRING}"""\n'
+                "    return float(time_period)\n"
+            ),
+            member_keys=tuple(
+                MemberKeys(
+                    address=member.address,
+                    function_name=member.function_name,
+                    keys=(
+                        MemberKeyEntry(
+                            dimension_id="TIME_PERIOD",
+                            value=(1 if member.address.endswith(("C12", "C4")) else 2),
+                        ),
+                    ),
+                )
+                for member in ctx.members
+            ),
+        )
+
+    monkeypatch.setattr(module, "build_cluster_refactor_context", fake_build_cluster)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: draft)
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module, "build_mechanical_cluster_response", tracking_mechanical_response
+    )
+    monkeypatch.setattr(
+        module, "validate_cluster_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        module,
+        "compute_refactor_schedule",
+        lambda *_a, **_k: (
+            SimpleNamespace(
+                parent_cluster_id=1,
+                refactor_group_id=0,
+                members=upstream.members,
+                as_formula_cluster=lambda: upstream,
+            ),
+            SimpleNamespace(
+                parent_cluster_id=2,
+                refactor_group_id=0,
+                members=downstream.members,
+                as_formula_cluster=lambda: downstream,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "allocate_schedule_helper_names",
+        lambda *_a, **_k: ("population_medium", "demography_total_population"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda _pending, *, internals_index, **_k: (internals_index, {}),
+    )
+    monkeypatch.setattr(
+        module,
+        "_refresh_mechanical_cluster_results",
+        lambda results, **_k: list(results),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, _Projection()),
+        (upstream, downstream),
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!C12": "population_medium",
+            "Engine!D12": "population_medium",
+            "Engine!C4": "demography_total_population",
+            "Engine!D4": "demography_total_population",
+        },
+    )
+
+    assert "population_medium" not in hints_by_helper["population_medium"]
+    assert hints_by_helper["demography_total_population"]["population_medium"] == (
+        "float"
+    )
+
+
 def test_pass1_mechanical_singleton_failure_writes_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
