@@ -19,11 +19,16 @@ from tests.fixtures.test_state import REPO_CODEGEN_CACHE_DIR
 
 _SAMPLE_MODULES = {
     "__init__.py": "# init\n",
-    "api.py": "def api():\n    return 1\n",
+    "api.py": ("from .runtime import EvalContext\n\ndef api():\n    return 1\n"),
     "data.py": "DATA = {}\n",
     "runtime.py": "def run():\n    pass\n",
     "internals.py": "def internal():\n    pass\n",
 }
+
+# run_export_stage post-processes api.py to import XlErrorException.
+_EXPORTED_API_PY = (
+    "from .runtime import EvalContext, XlErrorException\n\ndef api():\n    return 1\n"
+)
 
 
 class _CodegenKeyKwargs(TypedDict):
@@ -284,7 +289,7 @@ def test_run_export_stage_skips_generate_modules_on_cache_hit(
 
     assert configure_cb.call_count == 1
     assert generator.generate_modules.call_count == 1
-    assert (config.package_root / "api.py").read_text(encoding="utf-8") == sample[
-        "api.py"
-    ]
+    assert (config.package_root / "api.py").read_text(
+        encoding="utf-8"
+    ) == _EXPORTED_API_PY
     assert list(codegen_dir.glob("*.pkl.gz"))

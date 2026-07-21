@@ -25,6 +25,10 @@ from src.dependency_graph_viz import (
 )
 from src.internal_bindings import binding_node_labels, build_internal_binding_index
 from src.internal_binding_coverage import enforce_internal_binding_coverage
+from src.soft_error_compute_codegen import (
+    ensure_xl_error_exception_import,
+    rewrite_compute_measure_assignment,
+)
 from src.codegen_cache import (
     get_or_build_codegen_modules,
     guide_fingerprint,
@@ -456,7 +460,18 @@ def run_export_stage(
         no_cache=no_cache,
         force_rebuild=force_rebuild,
     )
-    modules = codegen_result.modules
+    modules = dict(codegen_result.modules)
+    api_source = modules.get("api.py")
+    if api_source is not None:
+        # Capture Excel error codes in OBS_VALUE instead of aborting the series.
+        # No-op on excel-grapher 3.17+ output, which emits soft-capture natively
+        # (Teal-Insights/excel-grapher#436); still repairs older cached api.py.
+        rewritten = "\n".join(
+            rewrite_compute_measure_assignment(api_source.splitlines())
+        )
+        if api_source.endswith("\n"):
+            rewritten += "\n"
+        modules["api.py"] = ensure_xl_error_exception_import(rewritten)
 
     package_root = config.package_root
     write_generated_modules(package_root, modules)
