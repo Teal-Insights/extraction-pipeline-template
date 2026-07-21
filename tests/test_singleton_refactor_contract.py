@@ -294,6 +294,18 @@ def test_singleton_prompt_documents_error_escape_hatch() -> None:
     assert "error_reason" in required
 
 
+def test_singleton_prompt_teaches_renaming_mechanical_temporaries() -> None:
+    """Mechanical codegen already unpacks nested xl_* calls into _tN temps."""
+    prompt = load_singleton_refactor_prompt_fixed_portion()
+    assert "unpacking nested calls" not in prompt.lower()
+    assert "_tN" in prompt
+    assert "rename" in prompt.lower()
+    assert "do not re-nest" in prompt.lower()
+    assert "_t1 =" in prompt
+    assert "total_deaths =" in prompt
+    assert "lazy" in prompt.lower() or "short-circuit" in prompt.lower()
+
+
 def test_strip_python_string_delimiters_removes_triple_quotes() -> None:
     raw = '''"""
 Summary line.
