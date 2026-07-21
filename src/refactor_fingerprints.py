@@ -4,6 +4,15 @@ Under ``series_ast`` clustering, members of one refactor unit share a structural
 skeleton and differ only in which concrete cells fill each ref slot. A complete
 description of the cluster is therefore: one exemplar translation + a per-ref
 relation matrix relating each slot's binding keys to the member's own keys.
+
+When a shared skeleton still mixes binding series behind any ``ref_N`` (regime
+boundaries inside one owning series), members are partitioned into separate
+fingerprint groups so each group keeps a uniform ``series_id`` per slot.
+
+Incomplete ``address_to_series_id`` maps leave unbound operands under regime
+``None``. Those mates stay together only when they share operand sheet/row
+geometry; mixed unbound geometry falls back rather than emitting one semantic
+group.
 """
 
 from __future__ import annotations
@@ -434,6 +443,86 @@ def _series_id_for_refs(
     return None
 
 
+def _ref_series_regime_key(
+    ref_addresses: Sequence[str],
+    address_to_series_id: Mapping[str, str] | None,
+) -> tuple[str | None, ...]:
+    """Per-slot series identity for one member (``None`` when unbound/unknown)."""
+    if not address_to_series_id:
+        return tuple(None for _ in ref_addresses)
+    return tuple(address_to_series_id.get(address) for address in ref_addresses)
+
+
+def _partition_members_by_ref_series_regime(
+    group_members: Sequence[MemberContext],
+    refs_by_address: Mapping[str, tuple[str, ...]],
+    address_to_series_id: Mapping[str, str] | None,
+) -> tuple[tuple[MemberContext, ...], ...]:
+    """Split skeleton-mates whose ref slots land in different binding series.
+
+    Mechanical synthesis and LLM prompts assume each fingerprint group has one
+    series behind each ``ref_N``. When AST clustering keeps regime boundaries
+    together, partition here so each group gets uniform ``series_id`` / reads.
+
+    Unbound / incomplete maps: slots whose ``series_id`` is ``None`` are not
+    further partitioned here. Callers must reject groups whose unbound members
+    disagree on operand ``(sheet, row)`` geometry — see
+    ``_unbound_ref_slot_geometry_conflict``. Same-geometry unbound mates (for
+    example a column sweep on one row) may remain one group.
+    """
+    if not address_to_series_id or len(group_members) < 2:
+        return (tuple(group_members),)
+
+    partitions: dict[tuple[str | None, ...], list[MemberContext]] = {}
+    order: list[tuple[str | None, ...]] = []
+    for member in group_members:
+        regime = _ref_series_regime_key(
+            refs_by_address[member.address], address_to_series_id
+        )
+        if regime not in partitions:
+            partitions[regime] = []
+            order.append(regime)
+        partitions[regime].append(member)
+    return tuple(tuple(partitions[regime]) for regime in order)
+
+
+def _unbound_ref_slot_geometry_conflict(
+    group_members: Sequence[MemberContext],
+    refs_by_address: Mapping[str, tuple[str, ...]],
+    address_to_series_id: Mapping[str, str] | None,
+) -> str | None:
+    """Return a fallback reason when unbound ref slots mix sheet/row geometry.
+
+    Regime split keys only on ``series_id`` (``None`` when the operand is
+    missing from ``address_to_series_id``). After that split, a multi-member
+    group whose unbound slot operands disagree on ``(sheet, row)`` is unsafe
+    to treat as one semantic helper — fall back. Column variation on a shared
+    sheet/row is allowed. Applies only when a series map is present; a
+    missing/empty map leaves prior behavior unchanged.
+    """
+    if not address_to_series_id or len(group_members) < 2:
+        return None
+
+    regime = _ref_series_regime_key(
+        refs_by_address[group_members[0].address], address_to_series_id
+    )
+    for slot_index, series_id in enumerate(regime):
+        if series_id is not None:
+            continue
+        geometries: set[tuple[str, int]] = set()
+        for member in group_members:
+            sheet, _column, row = parse_workbook_address(
+                refs_by_address[member.address][slot_index]
+            )
+            geometries.add((sheet, row))
+        if len(geometries) > 1:
+            return (
+                "unbound_ref_slot_geometry_conflict:"
+                f"ref_{slot_index} mixes sheet/row among unbound operands"
+            )
+    return None
+
+
 def _resolve_ref(
     ref_addresses_by_member: Mapping[str, str],
     *,
@@ -645,89 +734,110 @@ def build_cluster_fingerprint_summary(
         groups_by_skeleton[skeleton].append(member)
 
     group_records: list[FingerprintGroup] = []
-    for skeleton, group_members in groups_by_skeleton.items():
-        member_addresses = tuple(member.address for member in group_members)
-        member_keys = {
-            address: dict(expected_member_keys.get(address, {}))
-            for address in member_addresses
-        }
-        relation_member_keys = member_keys
-
-        ref_count = len(refs_by_address[member_addresses[0]])
-        if any(
-            len(refs_by_address[address]) != ref_count for address in member_addresses
-        ):
-            return _fallback_summary(
-                "ref_count_mismatch",
-                members=members,
-                expected_member_keys=expected_member_keys,
-                layout=layout,
+    for skeleton, skeleton_members in groups_by_skeleton.items():
+        member_partitions = _partition_members_by_ref_series_regime(
+            skeleton_members,
+            refs_by_address,
+            address_to_series_id,
+        )
+        for group_members in member_partitions:
+            geometry_conflict = _unbound_ref_slot_geometry_conflict(
+                group_members,
+                refs_by_address,
+                address_to_series_id,
             )
-
-        ref_values_by_member: dict[str, list[dict[str, BindingKeyValue]]] = {}
-        for address in member_addresses:
-            ref_values = _ref_position_key_values(
-                address,
-                formula_by_address[address],
-                bound_address_keys,
-                workbook_path=workbook_path,
-                layout=layout,
-                key_cache=key_cache,
-            )
-            if ref_values is None:
+            if geometry_conflict is not None:
                 return _fallback_summary(
-                    "missing_ref_key_values",
+                    geometry_conflict,
                     members=members,
                     expected_member_keys=expected_member_keys,
                     layout=layout,
                 )
-            ref_values_by_member[address] = ref_values
 
-        relations: list[RefRelation] = []
-        for ref_index in range(ref_count):
-            ref_keys_by_member = {
-                address: ref_values_by_member[address][ref_index]
+            member_addresses = tuple(member.address for member in group_members)
+            member_keys = {
+                address: dict(expected_member_keys.get(address, {}))
                 for address in member_addresses
             }
-            ref_addresses = {
-                address: refs_by_address[address][ref_index]
+            relation_member_keys = member_keys
+
+            ref_count = len(refs_by_address[member_addresses[0]])
+            if any(
+                len(refs_by_address[address]) != ref_count
                 for address in member_addresses
-            }
-            series_id = _series_id_for_refs(
-                tuple(ref_addresses.values()), address_to_series_id
-            )
-            resolution = _resolve_ref(
-                ref_addresses,
-                cluster_member_addresses=cluster_addresses,
-                semantic_dependencies=semantic_dependencies,
-                member_keys=relation_member_keys,
-            )
-            relations.append(
-                classify_ref_relation(
-                    ref_index,
-                    relation_member_keys,
-                    ref_keys_by_member,
-                    series_id=series_id,
-                    resolution=resolution,
+            ):
+                return _fallback_summary(
+                    "ref_count_mismatch",
+                    members=members,
+                    expected_member_keys=expected_member_keys,
+                    layout=layout,
+                )
+
+            ref_values_by_member: dict[str, list[dict[str, BindingKeyValue]]] = {}
+            for address in member_addresses:
+                ref_values = _ref_position_key_values(
+                    address,
+                    formula_by_address[address],
+                    bound_address_keys,
+                    workbook_path=workbook_path,
+                    layout=layout,
+                    key_cache=key_cache,
+                )
+                if ref_values is None:
+                    return _fallback_summary(
+                        "missing_ref_key_values",
+                        members=members,
+                        expected_member_keys=expected_member_keys,
+                        layout=layout,
+                    )
+                ref_values_by_member[address] = ref_values
+
+            relations: list[RefRelation] = []
+            for ref_index in range(ref_count):
+                ref_keys_by_member = {
+                    address: ref_values_by_member[address][ref_index]
+                    for address in member_addresses
+                }
+                ref_addresses = {
+                    address: refs_by_address[address][ref_index]
+                    for address in member_addresses
+                }
+                series_id = _series_id_for_refs(
+                    tuple(ref_addresses.values()), address_to_series_id
+                )
+                resolution = _resolve_ref(
+                    ref_addresses,
+                    cluster_member_addresses=cluster_addresses,
+                    semantic_dependencies=semantic_dependencies,
+                    member_keys=relation_member_keys,
+                )
+                relations.append(
+                    classify_ref_relation(
+                        ref_index,
+                        relation_member_keys,
+                        ref_keys_by_member,
+                        series_id=series_id,
+                        resolution=resolution,
+                    )
+                )
+
+            exemplar = group_members[0]
+            group_records.append(
+                FingerprintGroup(
+                    skeleton_text=format_structural_skeleton(skeleton),
+                    members=member_addresses,
+                    exemplar=exemplar,
+                    ref_relations=tuple(relations),
+                    ref_addresses_by_member=tuple(
+                        (address, refs_by_address[address])
+                        for address in member_addresses
+                    ),
+                    ref_keys_by_member=tuple(
+                        (address, tuple(ref_values_by_member[address]))
+                        for address in member_addresses
+                    ),
                 )
             )
-
-        exemplar = group_members[0]
-        group_records.append(
-            FingerprintGroup(
-                skeleton_text=format_structural_skeleton(skeleton),
-                members=member_addresses,
-                exemplar=exemplar,
-                ref_relations=tuple(relations),
-                ref_addresses_by_member=tuple(
-                    (address, refs_by_address[address]) for address in member_addresses
-                ),
-                ref_keys_by_member=tuple(
-                    (address, tuple(ref_values_by_member[address]))
-                    for address in member_addresses
-                ),
-            )
-        )
 
     key_space = _key_space_from_expected(expected_member_keys)
     key_to_column = _key_to_column_from_layout(key_space, layout)

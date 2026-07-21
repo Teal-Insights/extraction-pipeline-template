@@ -457,3 +457,200 @@ def test_format_ref_relation_col_by_includes_numeric_indices() -> None:
     assert "2090: BZ=78" in text
     assert "2029: Q," not in text
     assert "2029: Q}" not in text
+
+
+def test_build_summary_splits_groups_when_ref_slot_series_mix() -> None:
+    """Members sharing a skeleton but landing in different ref series are split.
+
+    Mirrors cluster 236 / ``interest_rate_long_run_real_interest_rate``: one
+    formula shape, three ``ref_1`` operand regimes. Without a split the dump
+    emits one mixed ``table[TIME_PERIOD]`` and no ``series`` / ``reads`` line.
+    """
+    members = (
+        _member(
+            "Rate!B19",
+            "=(1+Anchor!B5/100)*(1+Macro!AE15/100)*100-100",
+        ),
+        _member(
+            "Rate!C19",
+            "=(1+Anchor!B5/100)*(1+Inflation!B9/100)*100-100",
+        ),
+        _member(
+            "Rate!D19",
+            "=(1+Anchor!B5/100)*(1+Inflation!BC3/100)*100-100",
+        ),
+    )
+    bound_keys = {
+        "Rate!B19": {"TIME_PERIOD": 2002},
+        "Rate!C19": {"TIME_PERIOD": 2003},
+        "Rate!D19": {"TIME_PERIOD": 2028},
+        "Anchor!B5": {},
+        "Macro!AE15": {"TIME_PERIOD": 2029},
+        "Inflation!B9": {"TIME_PERIOD": 2002},
+        "Inflation!BC3": {"TIME_PERIOD": 2055},
+    }
+    expected = {
+        "Rate!B19": {"TIME_PERIOD": 2002},
+        "Rate!C19": {"TIME_PERIOD": 2003},
+        "Rate!D19": {"TIME_PERIOD": 2028},
+    }
+    address_to_series_id = {
+        "Anchor!B5": "anchor_series",
+        "Macro!AE15": "macrofiscal_gdp_deflator_growth",
+        "Inflation!B9": "inflation_convergence_trajectory",
+        "Inflation!BC3": "inflation_path",
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+        address_to_series_id=address_to_series_id,
+    )
+    assert summary.fallback_reason is None
+    assert len(summary.groups) == 3
+    members_by_group = {group.members: group for group in summary.groups}
+    assert set(members_by_group) == {
+        ("Rate!B19",),
+        ("Rate!C19",),
+        ("Rate!D19",),
+    }
+    assert (
+        members_by_group[("Rate!B19",)].ref_relations[1].series_id
+        == "macrofiscal_gdp_deflator_growth"
+    )
+    assert (
+        members_by_group[("Rate!C19",)].ref_relations[1].series_id
+        == "inflation_convergence_trajectory"
+    )
+    assert (
+        members_by_group[("Rate!D19",)].ref_relations[1].series_id == "inflation_path"
+    )
+    for group in summary.groups:
+        ref1 = group.ref_relations[1]
+        assert ref1.series_id is not None
+        # No group may keep a helper-oriented table that spans regimes.
+        period_lookup = ref1.lookups.get("TIME_PERIOD", {})
+        assert not ({2002, 2028} <= set(period_lookup))
+
+    dump = format_cluster_fingerprint_dump(summary)
+    assert "2002: 2029" not in dump
+    assert "2028: 2055" not in dump
+    assert "table[TIME_PERIOD]" not in dump
+    assert "series macrofiscal_gdp_deflator_growth" in dump
+    assert "series inflation_convergence_trajectory" in dump
+    assert "series inflation_path" in dump
+
+
+def test_build_summary_keeps_uniform_ref_series_together() -> None:
+    """Same skeleton + same per-slot series stays one fingerprint group."""
+    members = (
+        _member("Rate!C19", "=(1+Anchor!B5/100)*(1+Inflation!B9/100)*100-100"),
+        _member("Rate!D19", "=(1+Anchor!B5/100)*(1+Inflation!C9/100)*100-100"),
+    )
+    bound_keys = {
+        "Rate!C19": {"TIME_PERIOD": 2003},
+        "Rate!D19": {"TIME_PERIOD": 2004},
+        "Anchor!B5": {},
+        "Inflation!B9": {"TIME_PERIOD": 2002},
+        "Inflation!C9": {"TIME_PERIOD": 2003},
+    }
+    expected = {
+        "Rate!C19": {"TIME_PERIOD": 2003},
+        "Rate!D19": {"TIME_PERIOD": 2004},
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+        address_to_series_id={
+            "Anchor!B5": "anchor_series",
+            "Inflation!B9": "inflation_convergence_trajectory",
+            "Inflation!C9": "inflation_convergence_trajectory",
+        },
+    )
+    assert summary.fallback_reason is None
+    assert len(summary.groups) == 1
+    assert summary.groups[0].members == ("Rate!C19", "Rate!D19")
+    assert (
+        summary.groups[0].ref_relations[1].series_id
+        == "inflation_convergence_trajectory"
+    )
+    assert summary.groups[0].ref_relations[1].tier == "offset"
+    assert summary.groups[0].ref_relations[1].offsets == {"TIME_PERIOD": -1}
+
+
+def test_build_summary_falls_back_when_unbound_refs_mix_sheet_row() -> None:
+    """Incomplete series maps: unbound mates with mixed sheet/row → fallback.
+
+    Members whose operands are all unbound share regime ``(None,)`` and would
+    otherwise stay one fingerprint group even when they land on different
+    sheets / latent series.
+    """
+    members = (
+        _member("Result!B1", "=X!A1"),
+        _member("Result!C1", "=W!A1"),
+        _member("Result!D1", "=Y!A1"),
+    )
+    bound_keys = {
+        "Result!B1": {"TIME_PERIOD": 2002},
+        "Result!C1": {"TIME_PERIOD": 2003},
+        "Result!D1": {"TIME_PERIOD": 2004},
+        "X!A1": {"TIME_PERIOD": 2002},
+        "W!A1": {"TIME_PERIOD": 2003},
+        "Y!A1": {"TIME_PERIOD": 2004},
+    }
+    expected = {
+        "Result!B1": {"TIME_PERIOD": 2002},
+        "Result!C1": {"TIME_PERIOD": 2003},
+        "Result!D1": {"TIME_PERIOD": 2004},
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+        # Only Y is bound; X and W share regime (None,) after series partition.
+        address_to_series_id={"Y!A1": "ya"},
+    )
+    assert summary.fallback_reason is not None
+    assert "unbound_ref_slot_geometry_conflict" in summary.fallback_reason
+    assert summary.groups == ()
+
+
+def test_build_summary_keeps_same_geometry_unbound_refs_together() -> None:
+    """Unbound column-sweep mates that share sheet/row stay one group."""
+    members = (
+        _member("Result!B1", "=X!A1"),
+        _member("Result!C1", "=X!B1"),
+    )
+    bound_keys = {
+        "Result!B1": {"TIME_PERIOD": 2002},
+        "Result!C1": {"TIME_PERIOD": 2003},
+        "X!A1": {"TIME_PERIOD": 2002},
+        "X!B1": {"TIME_PERIOD": 2003},
+    }
+    expected = {
+        "Result!B1": {"TIME_PERIOD": 2002},
+        "Result!C1": {"TIME_PERIOD": 2003},
+    }
+    summary = build_cluster_fingerprint_summary(
+        members,
+        expected_member_keys=expected,
+        bound_address_keys=bound_keys,
+        workbook_path=None,
+        layout=None,
+        # Partial map: neither operand bound, but geometry agrees on (X, 1).
+        address_to_series_id={
+            "Result!B1": "result_series",
+            "Result!C1": "result_series",
+        },
+    )
+    assert summary.fallback_reason is None
+    assert len(summary.groups) == 1
+    assert summary.groups[0].members == ("Result!B1", "Result!C1")
+    assert summary.groups[0].ref_relations[0].series_id is None
