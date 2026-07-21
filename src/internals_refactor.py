@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from src.async_gather import run_map_as_completed
 from src.formula_clustering import FormulaCluster
+from src.key_dispatch_synthesis import KeyDispatchPlan, plan_key_dispatch
 from src.mechanical_body import MechanicalBodyDraft
 from src.mechanical_naming import ClusterNamingLLMResponse
 from src.llm_json import (
@@ -671,6 +672,10 @@ class ClusterRefactorContext:
     expected_helper_name: str
     contract: ClusterRefactorContract = "member_sweep"
     fingerprint_summary: ClusterFingerprintSummary | None = None
+    key_dispatch_plan: KeyDispatchPlan | None = None
+    """Multi-regime series plan used by the ``key_dispatch`` contract."""
+    key_dispatch_bound_keys: Mapping[str, Mapping[str, BindingKeyValue]] | None = None
+    """Bound-address keys used to synthesize each regime body."""
 
 
 class HelperParameter(BaseModel):
@@ -912,6 +917,7 @@ CLUSTER_REFACTOR_PROMPT_FIXTURES: dict[ClusterRefactorContract, Path] = {
     "dimension_aware": (
         repo_root / "tests" / "fixtures" / "cluster_refactor_prompt_dimension_aware.md"
     ),
+    "key_dispatch": repo_root / "tests" / "fixtures" / "cluster_refactor_prompt.md",
 }
 CLUSTER_REFACTOR_PROMPT_FIXTURE = CLUSTER_REFACTOR_PROMPT_FIXTURES["member_sweep"]
 
@@ -1225,22 +1231,49 @@ def build_cluster_refactor_context(
     varying_dimension_ids = frozenset(
         dimension_id for keys in expected_member_keys.values() for dimension_id in keys
     )
+    formula_nodes = {member.address: member.normalized_formula for member in members}
+    active_cluster = replace(cluster, members=member_address_list)
     contract = select_cluster_refactor_contract(
-        replace(cluster, members=member_address_list),
-        {member.address: member.normalized_formula for member in members},
+        active_cluster,
+        formula_nodes,
         resolved_bound_keys,
         varying_dimension_ids,
         key_vocabulary=resolved_vocabulary,
         workbook_path=workbook_path,
         layout=resolved_layout,
     )
+    key_dispatch_plan: KeyDispatchPlan | None = None
     if contract is None:
-        logger.warning(
-            "cluster %s skipped: operand-level variation is not routable by the "
-            "declared binding dimension ids (operand_level_variation_unsupported)",
-            cluster.cluster_id,
+        planned_helper_name = expected_helper_name
+        if planned_helper_name is None:
+            if address_to_series_id is None:
+                raise ValueError(
+                    "address_to_series_id is required to lock cluster helper names"
+                )
+            planned_helper_name = sole_series_id_for_addresses(
+                member_address_list,
+                address_to_series_id,
+            )
+        key_dispatch_plan = plan_key_dispatch(
+            active_cluster,
+            formula_nodes,
+            expected_member_keys,
+            helper_name=planned_helper_name,
         )
-        return None
+        if key_dispatch_plan is None:
+            logger.warning(
+                "cluster %s skipped: operand-level variation is not routable by the "
+                "declared binding dimension ids (operand_level_variation_unsupported)",
+                cluster.cluster_id,
+            )
+            return None
+        contract = "key_dispatch"
+        logger.info(
+            "cluster %s rescued as key_dispatch on %s (%d regimes)",
+            cluster.cluster_id,
+            key_dispatch_plan.dispatch_dimension_id,
+            len(key_dispatch_plan.regimes),
+        )
 
     external_dependency_addresses = sorted(
         {
@@ -1331,6 +1364,10 @@ def build_cluster_refactor_context(
         expected_helper_name=expected_helper_name,
         contract=contract,
         fingerprint_summary=fingerprint_summary,
+        key_dispatch_plan=key_dispatch_plan,
+        key_dispatch_bound_keys=(
+            dict(resolved_bound_keys) if key_dispatch_plan is not None else None
+        ),
     )
 
 
@@ -6141,14 +6178,133 @@ def _mechanical_bodies_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _synthesize_key_dispatch_cluster_body(
+    ctx: ClusterRefactorContext,
+) -> MechanicalBodyDraft:
+    """Assemble a key-dispatch body from per-regime mechanical drafts."""
+    from src.key_dispatch_synthesis import (
+        is_difference_composition_formula,
+        regime_callee_key,
+        synthesize_key_dispatch_body,
+    )
+    from src.mechanical_body import MechanicalSynthesisError, synthesize_cluster_body
+
+    plan = ctx.key_dispatch_plan
+    if plan is None:
+        raise MechanicalSynthesisError("missing_key_dispatch_plan")
+    bound_keys = ctx.key_dispatch_bound_keys
+    if bound_keys is None:
+        raise MechanicalSynthesisError("missing_key_dispatch_bound_keys")
+
+    members_by_address = {member.address: member for member in ctx.members}
+    regime_callees: dict[tuple[tuple[str, BindingKeyValue], ...], str] = {}
+    regime_bodies: dict[tuple[tuple[str, BindingKeyValue], ...], str] = {}
+    renameable: list[str] = []
+    lookup_tables: list[str] = []
+    semantic_refs = tuple(
+        SemanticDependencyRef(
+            helper_name=dependency.helper_name,
+            call_form=dependency.call_form,
+            address_template=dependency.address_template,
+            addresses=dependency.addresses,
+        )
+        for dependency in ctx.semantic_dependencies
+    )
+
+    for regime in plan.regimes:
+        key = regime_callee_key(regime.dispatch_key_values)
+        if is_difference_composition_formula(regime.canonical_formula):
+            regime_callees[key] = ""
+            continue
+        regime_members = [
+            members_by_address[address]
+            for address in regime.members
+            if address in members_by_address
+        ]
+        if len(regime_members) != len(regime.members):
+            missing = sorted(set(regime.members) - set(members_by_address))
+            raise MechanicalSynthesisError(
+                "key_dispatch_partial_regime_members:"
+                f"{regime.dispatch_key_values!r}:missing={missing}"
+            )
+        if not plan.sweep_dimension_ids:
+            raise MechanicalSynthesisError("key_dispatch_regime_without_sweep_dims")
+        sweep_keys = {
+            address: {
+                dimension_id: ctx.expected_member_keys[address][dimension_id]
+                for dimension_id in plan.sweep_dimension_ids
+            }
+            for address in regime.members
+        }
+        sweep_vocabulary = tuple(
+            spec
+            for spec in ctx.key_vocabulary
+            if spec.dimension_id in plan.sweep_dimension_ids
+        )
+        summary = build_cluster_fingerprint_summary(
+            regime_members,
+            expected_member_keys=sweep_keys,
+            bound_address_keys=bound_keys,
+            workbook_path=None,
+            layout=None,
+            semantic_dependencies=semantic_refs,
+        )
+        draft = synthesize_cluster_body(
+            summary,
+            key_vocabulary=sweep_vocabulary,
+            expected_member_keys=sweep_keys,
+            helper_name=ctx.expected_helper_name,
+        )
+        regime_bodies[key] = draft.body
+        renameable.extend(draft.renameable_locals)
+        lookup_tables.extend(draft.lookup_table_names)
+
+    body = synthesize_key_dispatch_body(
+        plan,
+        regime_callees=regime_callees,
+        regime_bodies=regime_bodies,
+        include_ctx=True,
+    )
+    return MechanicalBodyDraft(
+        body=body,
+        renameable_locals=tuple(dict.fromkeys(renameable)),
+        lookup_table_names=tuple(dict.fromkeys(lookup_tables)),
+        group_count=len(plan.regimes),
+    )
+
+
 def _try_synthesize_cluster_body(ctx: ClusterRefactorContext):
     """Return a verified mechanical body draft, or None to use the legacy contract."""
     if not _mechanical_bodies_enabled():
         return None
+    from src.mechanical_body import MechanicalSynthesisError, synthesize_cluster_body
+
+    if ctx.contract == "key_dispatch":
+        try:
+            draft = _synthesize_key_dispatch_cluster_body(ctx)
+        except (MechanicalSynthesisError, ValueError) as error:
+            reason = (
+                error.reason
+                if isinstance(error, MechanicalSynthesisError)
+                else str(error)
+            )
+            logger.info(
+                "cluster %s key-dispatch mechanical synthesis unavailable (%s); "
+                "using full-body contract",
+                ctx.cluster_id,
+                reason,
+            )
+            return None
+        logger.info(
+            "cluster %s key-dispatch mechanical draft verified; "
+            "using naming-only contract",
+            ctx.cluster_id,
+        )
+        return draft
+
     summary = ctx.fingerprint_summary
     if summary is None or summary.fallback_reason is not None:
         return None
-    from src.mechanical_body import MechanicalSynthesisError, synthesize_cluster_body
 
     try:
         draft = synthesize_cluster_body(
