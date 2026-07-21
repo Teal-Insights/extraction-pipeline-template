@@ -15,10 +15,7 @@ from excel_grapher.grapher import (
 )
 from excel_grapher.exporter import CodeGenerator
 from excel_grapher.exporter.codegen import GraphLike
-from excel_grapher.series_bindings import (
-    load_series_bindings,
-    validate_series_bindings,
-)
+from excel_grapher.series_bindings import load_series_bindings
 from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
 from src.dependency_graph_viz import (
@@ -63,6 +60,7 @@ from src.qmd_python_validation import (
     render_dist_pyproject_toml,
     write_dist_readme,
 )
+from src.bindings_validation_cache import get_or_build_bindings_validation
 from src.graph_cache import get_or_build_dependency_graph
 from src.series_resolution_cache import get_or_build_series_resolution
 from src.subgraph_projection import build_refactor_projection
@@ -338,11 +336,15 @@ def build_pipeline_graph(
         graph_cache_key = graph_result.cache_key
 
     with stage("validate_series_bindings"):
-        binding_validation_report = validate_series_bindings(
+        validation_result = get_or_build_bindings_validation(
             graph,
             series_bindings,
-            workbook=config.workbook_path,
+            workbook_path=config.workbook_path,
+            graph_cache_key=graph_cache_key,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
         )
+        binding_validation_report = validation_result.report
         if not binding_validation_report["ok"]:
             raise ValueError(
                 f"Invalid series bindings: {binding_validation_report['issues']!r}"
