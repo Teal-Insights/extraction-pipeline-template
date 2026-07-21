@@ -5406,7 +5406,7 @@ def test_build_cluster_refactor_prompt_context_falls_back_when_summary_unusable(
 
 
 def test_cluster_refactor_prompts_document_fingerprint_and_mechanical_fields() -> None:
-    for contract in ("member_sweep", "dimension_aware"):
+    for contract in ("member_sweep", "dimension_aware", "key_dispatch"):
         prompt = load_cluster_refactor_prompt_fixed_portion(contract)
         assert "fingerprint" in prompt.lower() or "Reference relations" in prompt
         assert "mechanically" in prompt.lower()

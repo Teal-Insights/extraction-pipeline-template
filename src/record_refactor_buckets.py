@@ -235,9 +235,10 @@ def _cluster_contract_and_skip_reason(
         workbook_path=workbook_path,
         layout=layout,
     )
+    formula_nodes = formula_nodes_for_clustering(graph)
     contract = select_cluster_refactor_contract(
         cluster,
-        formula_nodes_for_clustering(graph),
+        formula_nodes,
         bound_address_keys,
         varying,
         key_vocabulary=key_vocabulary,
@@ -245,7 +246,24 @@ def _cluster_contract_and_skip_reason(
         layout=layout,
     )
     if contract is None:
-        return None, "operand_level_variation_unsupported"
+        from src.key_dispatch_synthesis import plan_key_dispatch
+        from src.refactor_bindings import expected_member_keys_for_cluster
+
+        member_keys = expected_member_keys_for_cluster(
+            cluster.members,
+            bound_address_keys=bound_address_keys,
+            workbook_path=workbook_path,
+            layout=layout,
+        )
+        plan = plan_key_dispatch(
+            cluster,
+            formula_nodes,
+            member_keys,
+            helper_name="key_dispatch_probe",
+        )
+        if plan is None:
+            return None, "operand_level_variation_unsupported"
+        return "key_dispatch", None
     return contract, None
 
 
