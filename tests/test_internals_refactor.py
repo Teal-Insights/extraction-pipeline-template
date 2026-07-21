@@ -3160,6 +3160,14 @@ TRADE_BALANCE_SERIES_MAP = {
     "Engine!B5": "trade_balance",
     "Engine!C5": "trade_balance",
     "Engine!D5": "trade_balance",
+    # Operand series ids so unbound-ref geometry checks do not fall back
+    # when Inputs cells sweep by row under TIME_PERIOD.
+    "Inputs!B10": "exports",
+    "Inputs!B11": "exports",
+    "Inputs!B12": "exports",
+    "Inputs!C10": "imports",
+    "Inputs!C11": "imports",
+    "Inputs!C12": "imports",
 }
 
 TRADE_BALANCE_CLUSTER = FormulaCluster(
@@ -3953,6 +3961,259 @@ def test_pass_one_defers_internals_write_until_single_flush(
     assert events[4][1] == version_sources[4]
 
 
+def test_pass_one_writes_mechanical_checkpoint_before_parity_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pass 1 must persist mechanical source before the batched parity gate."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
+
+    graph, bindings = inter_cluster_cycle_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    checkpoint_path = module.mechanical_internals_checkpoint_path(internals_path)
+    pristine = "def cell_engine_b2(ctx):\n    return 0.0\n"
+    version_sources = [
+        f"def cell_engine_b2(ctx):\n    return {n}.0\n" for n in range(5)
+    ]
+    internals_path.write_text(pristine, encoding="utf-8")
+    version_sources[0] = pristine
+
+    events: list[str] = []
+    apply_count = {"n": 0}
+    gate_kwargs: dict[str, object] = {}
+    real_validate = module.validate_refactored_internals
+    original_write_text = Path.write_text
+
+    def tracking_validate(source: str) -> None:
+        # Only the Pass 1 validate must precede the checkpoint; Phase C validates
+        # again after promote and is outside this ordering contract.
+        if "checkpoint" not in events:
+            events.append("validate")
+            assert not checkpoint_path.exists()
+        real_validate(source)
+
+    def tracking_write_text(
+        self: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if self == checkpoint_path:
+            assert events[-1] == "validate"
+            events.append("checkpoint")
+        return original_write_text(
+            self, data, encoding=encoding, errors=errors, newline=newline
+        )
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            address=cluster.members[0],
+            function_name=address_to_function_name(cluster.members[0]),
+            canonical_template="=1",
+            normalized_formula="=1",
+            python_source="return 1.0",
+            allowed_runtime_symbols=(),
+        )
+
+    def fake_apply_plan(
+        _source: str, _response: object, _ctx: object
+    ) -> tuple[str, int]:
+        apply_count["n"] += 1
+        events.append("apply")
+        return version_sources[apply_count["n"]], 0
+
+    def fake_gate(**kwargs: object) -> None:
+        events.append("parity_gate")
+        gate_kwargs.update(kwargs)
+        assert checkpoint_path.is_file(), "checkpoint missing before parity gate"
+        assert checkpoint_path.read_text(encoding="utf-8") == version_sources[4]
+        assert internals_path.read_text(encoding="utf-8") == pristine
+
+    monkeypatch.setattr(module, "validate_refactored_internals", tracking_validate)
+    monkeypatch.setattr(Path, "write_text", tracking_write_text)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: object())
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module,
+        "build_mechanical_singleton_response",
+        lambda ctx, *_a, **_k: SimpleNamespace(
+            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
+        ),
+    )
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "apply_singleton_refactor_plan", fake_apply_plan)
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda _pending, *, internals_index, **_k: (internals_index, {}),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(
+        "src.refactor_parity_gate.build_default_input_vectors",
+        lambda: ({},),
+    )
+    monkeypatch.setattr(
+        "src.refactor_parity_gate.check_batched_mechanical_parity",
+        fake_gate,
+    )
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=True,
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!B3": "family_b",
+            "Engine!C3": "family_c",
+        },
+    )
+
+    assert events == [
+        "apply",
+        "apply",
+        "apply",
+        "apply",
+        "validate",
+        "checkpoint",
+        "parity_gate",
+    ]
+    assert gate_kwargs["mechanical_source"] == version_sources[4]
+    assert internals_path.read_text(encoding="utf-8") == version_sources[4]
+    assert checkpoint_path.read_text(encoding="utf-8") == version_sources[4]
+
+
+def test_pass_one_parity_failure_keeps_package_internals_pristine(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Parity failure must not promote the mechanical sidecar to package path."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
+
+    graph, bindings = inter_cluster_cycle_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    checkpoint_path = module.mechanical_internals_checkpoint_path(internals_path)
+    pristine = "def cell_engine_b2(ctx):\n    return 0.0\n"
+    version_sources = [
+        f"def cell_engine_b2(ctx):\n    return {n}.0\n" for n in range(5)
+    ]
+    internals_path.write_text(pristine, encoding="utf-8")
+    version_sources[0] = pristine
+    apply_count = {"n": 0}
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            address=cluster.members[0],
+            function_name=address_to_function_name(cluster.members[0]),
+            canonical_template="=1",
+            normalized_formula="=1",
+            python_source="return 1.0",
+            allowed_runtime_symbols=(),
+        )
+
+    def fake_apply_plan(
+        _source: str, _response: object, _ctx: object
+    ) -> tuple[str, int]:
+        apply_count["n"] += 1
+        return version_sources[apply_count["n"]], 0
+
+    def failing_gate(**_kwargs: object) -> None:
+        raise ParityError("mechanical divergence")
+
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: object())
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module,
+        "build_mechanical_singleton_response",
+        lambda ctx, *_a, **_k: SimpleNamespace(
+            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
+        ),
+    )
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "apply_singleton_refactor_plan", fake_apply_plan)
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("pass2 must not run")),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(
+        "src.refactor_parity_gate.build_default_input_vectors",
+        lambda: ({},),
+    )
+    monkeypatch.setattr(
+        "src.refactor_parity_gate.check_batched_mechanical_parity",
+        failing_gate,
+    )
+
+    with pytest.raises(ParityError, match="mechanical divergence"):
+        module.refactor_internals_all_clusters(
+            cast(ProjectionResult, graph),
+            clusters,
+            internals_path=internals_path,
+            bindings_path=tmp_path / "bindings",
+            workbook_path=tmp_path / "workbook.xlsx",
+            dry_run=False,
+            parity_gate=True,
+            address_to_series_id={
+                "Engine!B2": "family_b",
+                "Engine!C2": "family_c",
+                "Engine!B3": "family_b",
+                "Engine!C3": "family_c",
+            },
+        )
+
+    assert apply_count["n"] == 4
+    assert checkpoint_path.is_file()
+    assert checkpoint_path.read_text(encoding="utf-8") == version_sources[4]
+    assert internals_path.read_text(encoding="utf-8") == pristine
+
+
 def test_pass_one_defers_full_module_validate_until_end(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4315,6 +4576,201 @@ def test_pass_one_fallback_applies_onto_accumulated_source(
     # the initial snapshot — but its apply base must be fully up to date.
     assert fallback_index.source == version_sources[0]
     assert fallback_apply_source != fallback_index.source
+
+
+def _run_wide_layer_mechanical_pass1(
+    module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    """Drive a four-singleton mechanical Pass 1 with stubbed synthesize/apply."""
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from tests.fixtures.wide_layer import wide_layer_graph
+
+    graph, bindings = wide_layer_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    version_sources = [
+        f"def cell_engine_b2(ctx):\n    return {n}.0\n" for n in range(5)
+    ]
+    internals_path.write_text(version_sources[0], encoding="utf-8")
+    apply_count = {"n": 0}
+
+    def fake_build_singleton(
+        _projection: object,
+        cluster: FormulaCluster,
+        _internals_path: Path,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            address=cluster.members[0],
+            function_name=address_to_function_name(cluster.members[0]),
+            canonical_template="=1",
+            normalized_formula="=1",
+            python_source="return 1.0",
+            allowed_runtime_symbols=(),
+        )
+
+    def fake_apply_plan(
+        _source: str, _response: object, _ctx: object
+    ) -> tuple[str, int]:
+        apply_count["n"] += 1
+        return version_sources[apply_count["n"]], 0
+
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", fake_build_singleton
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: object())
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+    monkeypatch.setattr(
+        module,
+        "build_mechanical_singleton_response",
+        lambda ctx, *_a, **_k: SimpleNamespace(
+            symbol_name="helper_" + ctx.address.replace("!", "_").lower()
+        ),
+    )
+    monkeypatch.setattr(
+        module, "validate_singleton_refactor_response", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "apply_singleton_refactor_plan", fake_apply_plan)
+    monkeypatch.setattr(
+        module,
+        "_run_semantic_naming_pass",
+        lambda _pending, *, internals_index, **_k: (internals_index, {}),
+    )
+    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=False,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!D2": "family_d",
+            "Engine!E2": "family_e",
+        },
+    )
+    return internals_path
+
+
+def test_pass_one_unit_timing_observer_records_phases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Observer receives one record per applied unit with phase fields present."""
+    import src.internals_refactor as module
+
+    recorded: list[module.Pass1UnitTiming] = []
+    module.set_pass1_unit_timing_observer(recorded.append)
+    try:
+        _run_wide_layer_mechanical_pass1(module, monkeypatch, tmp_path)
+    finally:
+        module.set_pass1_unit_timing_observer(None)
+
+    assert len(recorded) == 4
+    targets = {item.unit_id for item in recorded}
+    assert targets == {
+        "cluster_0_g0",
+        "cluster_1_g1",
+        "cluster_2_g2",
+        "cluster_3_g3",
+    }
+    for item in recorded:
+        assert item.kind == "singleton"
+        assert item.member_count == 1
+        assert item.mechanical is True
+        assert item.context_s >= 0.0
+        assert item.synthesize_s >= 0.0
+        assert item.apply_s >= 0.0
+        assert item.validate_s >= 0.0
+        assert item.reindex_s >= 0.0
+        assert item.apply_batch_size >= 1
+        assert item.source_bytes > 0
+        assert isinstance(item.reindexed, bool)
+        assert isinstance(item.dirty_count, int)
+
+    # Dependent layer-2 unit must reseal before context build.
+    by_target = {item.unit_id: item for item in recorded}
+    assert by_target["cluster_3_g3"].reindexed is True
+    assert by_target["cluster_3_g3"].reindex_s >= 0.0
+    assert all(
+        not by_target[unit_id].reindexed
+        for unit_id in ("cluster_0_g0", "cluster_1_g1", "cluster_2_g2")
+    )
+
+
+def test_pass_one_unit_timing_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without the env flag or observer, Pass 1 emits no per-unit timing lines."""
+    import logging
+
+    import src.internals_refactor as module
+
+    monkeypatch.delenv("PASS1_UNIT_TIMERS", raising=False)
+    monkeypatch.delenv("PASS1_UNIT_TIMERS_JSONL", raising=False)
+    module.set_pass1_unit_timing_observer(None)
+    with caplog.at_level(logging.INFO, logger="src.internals_refactor"):
+        _run_wide_layer_mechanical_pass1(module, monkeypatch, tmp_path)
+
+    assert not any("pass1 unit timing:" in message for message in caplog.messages)
+
+
+def test_pass_one_unit_timing_logs_and_writes_jsonl(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Env flag logs one INFO line per unit and appends JSONL when configured."""
+    import logging
+
+    import src.internals_refactor as module
+
+    jsonl_path = tmp_path / "pass1-unit-timings.jsonl"
+    monkeypatch.setenv("PASS1_UNIT_TIMERS", "1")
+    monkeypatch.setenv("PASS1_UNIT_TIMERS_JSONL", str(jsonl_path))
+    module.set_pass1_unit_timing_observer(None)
+
+    with caplog.at_level(logging.INFO, logger="src.internals_refactor"):
+        _run_wide_layer_mechanical_pass1(module, monkeypatch, tmp_path)
+
+    timing_lines = [
+        message
+        for message in caplog.messages
+        if message.startswith("pass1 unit timing:")
+    ]
+    assert len(timing_lines) == 4
+    assert any("members=1" in line for line in timing_lines)
+    assert any("synthesize=" in line for line in timing_lines)
+
+    rows = [
+        json.loads(line)
+        for line in jsonl_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 4
+    assert {row["unit_id"] for row in rows} == {
+        "cluster_0_g0",
+        "cluster_1_g1",
+        "cluster_2_g2",
+        "cluster_3_g3",
+    }
+    assert all("member_count" in row for row in rows)
+    assert all("synthesize_s" in row for row in rows)
 
 
 def test_llm_refactor_cluster_uses_dimension_aware_prompt(

@@ -92,9 +92,16 @@ repo_root = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
 REFACTOR_MODEL_ENV = "REFACTOR_MODEL"
-REFACTOR_PROMPT_VERSION = 31
+REFACTOR_PROMPT_VERSION = 32
 CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT = 30
 _FINGERPRINT_FALLBACK_COUNT = 0
+MECHANICAL_INTERNALS_CHECKPOINT_NAME = "internals.mechanical.py"
+
+
+def mechanical_internals_checkpoint_path(internals_path: Path) -> Path:
+    """Sidecar path for the Pass 1 mechanical module prior to package promotion."""
+    return internals_path.with_name(MECHANICAL_INTERNALS_CHECKPOINT_NAME)
+
 
 RefactorPromptObserver = Callable[[str, str, str], None]
 """Hook receiving ``(kind, target, prompt)`` for each refactor unit's user prompt."""
@@ -146,6 +153,106 @@ def set_singleton_context_observer(
     """
     global _SINGLETON_CONTEXT_OBSERVER
     _SINGLETON_CONTEXT_OBSERVER = observer
+
+
+@dataclass(frozen=True)
+class Pass1UnitTiming:
+    """Wall-clock phase timings for one Pass 1 schedule unit."""
+
+    unit_id: str
+    kind: Literal["singleton", "cluster"]
+    member_count: int
+    context_s: float
+    synthesize_s: float
+    apply_s: float
+    validate_s: float
+    reindex_s: float
+    reindexed: bool
+    apply_batch_size: int
+    dirty_count: int
+    source_bytes: int
+    mechanical: bool
+
+    def as_log_fields(self) -> dict[str, object]:
+        return {
+            "unit_id": self.unit_id,
+            "kind": self.kind,
+            "member_count": self.member_count,
+            "context_s": self.context_s,
+            "synthesize_s": self.synthesize_s,
+            "apply_s": self.apply_s,
+            "validate_s": self.validate_s,
+            "reindex_s": self.reindex_s,
+            "reindexed": self.reindexed,
+            "apply_batch_size": self.apply_batch_size,
+            "dirty_count": self.dirty_count,
+            "source_bytes": self.source_bytes,
+            "mechanical": self.mechanical,
+        }
+
+
+Pass1UnitTimingObserver = Callable[[Pass1UnitTiming], None]
+"""Hook receiving each Pass 1 unit timing record after that unit's apply."""
+
+_PASS1_UNIT_TIMING_OBSERVER: Pass1UnitTimingObserver | None = None
+
+
+def set_pass1_unit_timing_observer(
+    observer: Pass1UnitTimingObserver | None,
+) -> None:
+    """Install (or clear) a hook that receives per-unit Pass 1 phase timings.
+
+    When set, timings are collected even if ``PASS1_UNIT_TIMERS`` is unset so
+    tests and diagnostics can observe cadence without enabling log spam.
+    """
+    global _PASS1_UNIT_TIMING_OBSERVER
+    _PASS1_UNIT_TIMING_OBSERVER = observer
+
+
+def _pass1_unit_timers_enabled() -> bool:
+    value = os.environ.get("PASS1_UNIT_TIMERS", "0").strip().lower()
+    return value not in {"", "0", "false", "no", "off"}
+
+
+def _pass1_unit_timers_jsonl_path() -> Path | None:
+    raw = os.environ.get("PASS1_UNIT_TIMERS_JSONL", "").strip()
+    return Path(raw) if raw else None
+
+
+def _pass1_unit_timing_active() -> bool:
+    return _PASS1_UNIT_TIMING_OBSERVER is not None or _pass1_unit_timers_enabled()
+
+
+def _emit_pass1_unit_timing(timing: Pass1UnitTiming) -> None:
+    if _PASS1_UNIT_TIMING_OBSERVER is not None:
+        _PASS1_UNIT_TIMING_OBSERVER(timing)
+    if not _pass1_unit_timers_enabled():
+        return
+    logger.info(
+        "pass1 unit timing: target=%s kind=%s members=%d mechanical=%s "
+        "context=%.3fs synthesize=%.3fs apply=%.3fs validate=%.3fs "
+        "reindex=%.3fs reindexed=%s apply_batch_size=%d dirty=%d "
+        "source_bytes=%d",
+        timing.unit_id,
+        timing.kind,
+        timing.member_count,
+        timing.mechanical,
+        timing.context_s,
+        timing.synthesize_s,
+        timing.apply_s,
+        timing.validate_s,
+        timing.reindex_s,
+        int(timing.reindexed),
+        timing.apply_batch_size,
+        timing.dirty_count,
+        timing.source_bytes,
+    )
+    jsonl_path = _pass1_unit_timers_jsonl_path()
+    if jsonl_path is None:
+        return
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    with jsonl_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(timing.as_log_fields(), sort_keys=True) + "\n")
 
 
 def fingerprint_fallback_count() -> int:
@@ -2194,6 +2301,9 @@ def validate_cluster_refactor_response(
         | set(ALLOWED_REFACTOR_TYPE_HINT_NAMES)
         | {"ctx"}
         | {parameter.name for parameter in response.parameters}
+        # Always allow helper-memoization symbols; Pass 1 patches runtime.py
+        # when they are missing from older embedded exports.
+        | {"xl_helper", "xl_memoize"}
     )
     builtin_names = set(dir(builtins))
     for node in ast.walk(helper_def):
@@ -2825,7 +2935,12 @@ def build_mechanical_cluster_response(
     The draft body still uses mechanical local names (``_t1`` ...); the semantic
     layer (docstring and local names) is deferred to pass 2. A deterministic
     placeholder docstring keeps the helper valid until then.
+
+    Mechanical helpers are decorated with ``@xl_memoize`` so period-recurrence
+    chains share work under a warm ``EvalContext`` (library-visible caching).
     """
+    from src.helper_memoization import apply_xl_memoize_decorator
+
     parameters = synthesize_cluster_parameters(ctx)
     llm_response = ClusterRefactorLLMResponse(
         symbol_docstring=mechanical_placeholder_docstring(
@@ -2835,12 +2950,15 @@ def build_mechanical_cluster_response(
         error=None,
         error_reason=None,
     )
-    return prepare_cluster_refactor_response(
+    response = prepare_cluster_refactor_response(
         llm_response,
         ctx,
         runtime_source=runtime_source,
         internals_source=internals_source,
         callee_hints=callee_hints,
+    )
+    return response.model_copy(
+        update={"helper_source": apply_xl_memoize_decorator(response.helper_source)}
     )
 
 
@@ -2857,18 +2975,23 @@ def build_mechanical_singleton_response(
     As with clusters, the mechanical local names survive into pass 1 behind a
     placeholder docstring; pass 2 renames them and supplies the real docstring.
     """
+    from src.helper_memoization import apply_xl_memoize_decorator
+
     llm_response = SingletonRefactorLLMResponse(
         symbol_docstring=mechanical_placeholder_docstring(()),
         symbol_body=draft.body,
         error=None,
         error_reason=None,
     )
-    return prepare_singleton_refactor_response(
+    response = prepare_singleton_refactor_response(
         llm_response,
         ctx,
         runtime_source=runtime_source,
         internals_source=internals_source,
         callee_hints=callee_hints,
+    )
+    return response.model_copy(
+        update={"symbol_source": apply_xl_memoize_decorator(response.symbol_source)}
     )
 
 
@@ -3251,8 +3374,20 @@ def _missing_runtime_imports(source: str, symbols: set[str]) -> set[str]:
     return symbols - existing
 
 
+def _helper_memo_runtime_imports(helper_source: str) -> set[str]:
+    """Collect ``xl_memoize`` / ``xl_helper`` when referenced by a helper body."""
+    needed: set[str] = set()
+    if re.search(r"\bxl_memoize\b", helper_source):
+        needed.add("xl_memoize")
+    if re.search(r"\bxl_helper\b", helper_source):
+        needed.add("xl_helper")
+    return needed
+
+
 def _cluster_runtime_imports(response: ClusterRefactorResponse) -> set[str]:
-    return _type_hint_runtime_imports(response.helper_source)
+    return _type_hint_runtime_imports(response.helper_source) | (
+        _helper_memo_runtime_imports(response.helper_source)
+    )
 
 
 def ensure_cluster_refactor_imports(
@@ -3267,7 +3402,9 @@ def ensure_cluster_refactor_imports(
 
 
 def _singleton_runtime_imports(response: SingletonRefactorResponse) -> set[str]:
-    return _type_hint_runtime_imports(response.symbol_source)
+    return _type_hint_runtime_imports(response.symbol_source) | (
+        _helper_memo_runtime_imports(response.symbol_source)
+    )
 
 
 def _merge_runtime_imports(source: str, symbols: set[str]) -> str:
@@ -3408,6 +3545,7 @@ def validate_singleton_refactor_response(
         | semantic_helpers_available_for_calls(internals_source, existing_names)
         | set(ALLOWED_REFACTOR_TYPE_HINT_NAMES)
         | {"ctx"}
+        | {"xl_helper", "xl_memoize"}
     )
     builtin_names = set(dir(builtins))
     for node in ast.walk(symbol_def):
@@ -4514,6 +4652,10 @@ class _PendingMechanicalClusterApply:
     mechanical_response: ClusterRefactorResponse
     existing_names: frozenset[str]
     diagnostic_target: str
+    timing_context_s: float = 0.0
+    timing_synthesize_s: float = 0.0
+    timing_reindex_s: float = 0.0
+    timing_reindexed: bool = False
 
 
 def _member_fingerprint(
@@ -4927,9 +5069,13 @@ def refactor_internals_all_clusters(
     one shot, and fully re-validated (including semantic local names).
 
     Disk flush boundary: Pass 1 never writes ``internals_path`` per unit.
-    Cumulative source is threaded through the in-memory ``internals_index`` and
-    flushed to disk exactly once after Pass 1 completes — after the batched
-    mechanical parity gate, before Pass 2 — unless ``dry_run``. Pass 2 and
+    Cumulative source is threaded through the in-memory ``current_source``. After
+    Pass 1 structural validate succeeds, the mechanical module is checkpointed to
+    a sidecar (``internals.mechanical.py`` next to ``internals_path``) before the
+    batched parity gate runs so a mid-gate kill does not lose the apply work.
+    The package ``internals_path`` is promoted only after the gate passes (or when
+    the gate is skipped), still before Pass 2 — unless ``dry_run``. A parity
+    failure leaves the package path pristine and retains the sidecar. Pass 2 and
     Phase C keep their own single writes.
 
     Pass ``bound_address_keys`` from the extract stage when available so cluster
@@ -4939,6 +5085,24 @@ def refactor_internals_all_clusters(
     pristine_source: str | None = None
     input_vectors: Sequence[Mapping[str, object]] | None = None
     internals_index = _resolve_internals_index(internals_path)
+
+    # Patch package runtime early so mechanical @xl_memoize imports resolve and
+    # the allowlist / parity gate see xl_helper before Pass 1 applies units.
+    from src.helper_memoization import ensure_package_runtime_helper_memoization
+    from src.refactor_parity_gate import clear_parity_runtime_caches
+    from src.runtime_symbols import allowed_runtime_symbols
+
+    runtime_file = internals_path.parent / "runtime.py"
+    if runtime_file.is_file() and ensure_package_runtime_helper_memoization(
+        runtime_file
+    ):
+        clear_parity_runtime_caches()
+        allowed_runtime_symbols.cache_clear()
+        logger.info(
+            "pass1 patched package runtime with helper memoization: path=%s",
+            runtime_file,
+        )
+
     if parity_gate:
         from src.refactor_parity_gate import build_default_input_vectors
 
@@ -4972,6 +5136,8 @@ def refactor_internals_all_clusters(
     pass1_started = time.perf_counter()
     pass1_apply_seconds = 0.0
     pass1_validate_seconds = 0.0
+    pass1_reindex_seconds = 0.0
+    timing_active = _pass1_unit_timing_active()
 
     def _unit_reads_addresses(members: Sequence[str], addresses: set[str]) -> bool:
         if not addresses:
@@ -4992,13 +5158,51 @@ def refactor_internals_all_clusters(
         # two dependency levels bounds every source a unit can read.
         return _unit_reads_addresses(members, dirty_addresses)
 
-    def _seal_index() -> None:
-        nonlocal internals_index, pass1_reindex_count
+    def _seal_index() -> float:
+        nonlocal internals_index, pass1_reindex_count, pass1_reindex_seconds
         if not dirty_addresses:
-            return
+            return 0.0
+        seal_started = time.perf_counter()
         internals_index = InternalsSourceIndex.from_source(current_source)
+        seal_seconds = time.perf_counter() - seal_started
         pass1_reindex_count += 1
+        pass1_reindex_seconds += seal_seconds
         dirty_addresses.clear()
+        return seal_seconds
+
+    def _emit_unit_timing(
+        *,
+        unit_id: str,
+        kind: Literal["singleton", "cluster"],
+        member_count: int,
+        context_s: float,
+        synthesize_s: float,
+        apply_s: float,
+        reindex_s: float,
+        reindexed: bool,
+        apply_batch_size: int,
+        mechanical: bool,
+    ) -> None:
+        if not timing_active:
+            return
+        _emit_pass1_unit_timing(
+            Pass1UnitTiming(
+                unit_id=unit_id,
+                kind=kind,
+                member_count=member_count,
+                context_s=context_s,
+                synthesize_s=synthesize_s,
+                apply_s=apply_s,
+                # Full-module validate is deferred to end of Pass 1.
+                validate_s=0.0,
+                reindex_s=reindex_s,
+                reindexed=reindexed,
+                apply_batch_size=apply_batch_size,
+                dirty_count=len(dirty_addresses),
+                source_bytes=len(current_source.encode("utf-8")),
+                mechanical=mechanical,
+            )
+        )
 
     def _flush_mechanical_cluster_batch() -> None:
         nonlocal current_source, pass1_apply_count, pass1_apply_seconds
@@ -5006,6 +5210,7 @@ def refactor_internals_all_clusters(
         if not pending_cluster_applies:
             return
         responses = tuple(item.mechanical_response for item in pending_cluster_applies)
+        batch_size = len(pending_cluster_applies)
         apply_started = time.perf_counter()
         try:
             updated, _rewrite_count = apply_cluster_collapses_batch(
@@ -5037,9 +5242,11 @@ def refactor_internals_all_clusters(
                 ),
             )
             raise
-        pass1_apply_seconds += time.perf_counter() - apply_started
+        batch_apply_seconds = time.perf_counter() - apply_started
+        pass1_apply_seconds += batch_apply_seconds
         pass1_batch_count += 1
         current_source = updated
+        per_unit_apply_s = batch_apply_seconds / batch_size
         for item in pending_cluster_applies:
             merge_callee_return_hints(
                 callee_hints,
@@ -5098,27 +5305,41 @@ def refactor_internals_all_clusters(
                 )
             )
             refactored_any = True
+            _emit_unit_timing(
+                unit_id=item.diagnostic_target,
+                kind="cluster",
+                member_count=len(item.cluster_members),
+                context_s=item.timing_context_s,
+                synthesize_s=item.timing_synthesize_s,
+                apply_s=per_unit_apply_s,
+                reindex_s=item.timing_reindex_s,
+                reindexed=item.timing_reindexed,
+                apply_batch_size=batch_size,
+                mechanical=True,
+            )
         pending_cluster_applies.clear()
         pending_batch_members.clear()
 
-    def _prepare_for_unit(members: Sequence[str]) -> None:
+    def _prepare_for_unit(members: Sequence[str]) -> tuple[float, bool]:
         if pending_batch_members and _unit_reads_addresses(
             members, pending_batch_members
         ):
             _flush_mechanical_cluster_batch()
         if dirty_addresses and _unit_reads_dirty(members):
             _flush_mechanical_cluster_batch()
-            _seal_index()
+            return _seal_index(), True
+        return 0.0, False
 
     for unit, helper_name in zip(ordered_units, allocated_helper_names, strict=True):
         cluster = unit.as_formula_cluster()
         diagnostic_target = refactor_failure_target(unit)
-        _prepare_for_unit(cluster.members)
+        unit_reindex_s, unit_reindexed = _prepare_for_unit(cluster.members)
         reserved_for_others = (
             frozenset(allocated_helper_names) | existing_helper_names
         ) - {helper_name}
         if len(cluster.members) == 1:
             _flush_mechanical_cluster_batch()
+            context_started = time.perf_counter() if timing_active else 0.0
             singleton_ctx = build_singleton_refactor_context(
                 projection,
                 cluster,
@@ -5130,11 +5351,16 @@ def refactor_internals_all_clusters(
                 expected_helper_name=helper_name,
                 existing_helper_names=reserved_for_others,
             )
+            context_s = time.perf_counter() - context_started if timing_active else 0.0
             if singleton_ctx is None:
                 continue
             if _SINGLETON_CONTEXT_OBSERVER is not None:
                 _SINGLETON_CONTEXT_OBSERVER(singleton_ctx)
+            synthesize_started = time.perf_counter() if timing_active else 0.0
             draft = _try_synthesize_singleton_body(singleton_ctx)
+            synthesize_s = (
+                time.perf_counter() - synthesize_started if timing_active else 0.0
+            )
             if draft is not None:
                 internals_source = internals_index.source
                 existing_names = _function_names(
@@ -5166,7 +5392,8 @@ def refactor_internals_all_clusters(
                     updated, _rewrites = apply_singleton_refactor_plan(
                         current_source, mechanical_response, singleton_ctx
                     )
-                    pass1_apply_seconds += time.perf_counter() - apply_started
+                    apply_s = time.perf_counter() - apply_started
+                    pass1_apply_seconds += apply_s
                 except Exception as error:
                     _log_mechanical_pass1_failure(
                         kind="singleton",
@@ -5215,7 +5442,20 @@ def refactor_internals_all_clusters(
                     )
                 )
                 refactored_any = True
+                _emit_unit_timing(
+                    unit_id=diagnostic_target,
+                    kind="singleton",
+                    member_count=1,
+                    context_s=context_s,
+                    synthesize_s=synthesize_s,
+                    apply_s=apply_s,
+                    reindex_s=unit_reindex_s,
+                    reindexed=unit_reindexed,
+                    apply_batch_size=1,
+                    mechanical=True,
+                )
                 continue
+            apply_started = time.perf_counter() if timing_active else 0.0
             singleton_result = refactor_internals_singleton(
                 singleton_ctx,
                 internals_path=internals_path,
@@ -5229,6 +5469,7 @@ def refactor_internals_all_clusters(
                 apply_source=current_source,
                 validate_module=False,
             )
+            apply_s = time.perf_counter() - apply_started if timing_active else 0.0
             if not dry_run:
                 _record_singleton_name_delta(
                     live_function_names,
@@ -5238,9 +5479,23 @@ def refactor_internals_all_clusters(
                 current_source = singleton_result.source
                 dirty_addresses.update(cluster.members)
                 pass1_apply_count += 1
+                pass1_apply_seconds += apply_s
             refactored_any = True
+            _emit_unit_timing(
+                unit_id=diagnostic_target,
+                kind="singleton",
+                member_count=1,
+                context_s=context_s,
+                synthesize_s=synthesize_s,
+                apply_s=apply_s,
+                reindex_s=unit_reindex_s,
+                reindexed=unit_reindexed,
+                apply_batch_size=1,
+                mechanical=False,
+            )
             continue
 
+        context_started = time.perf_counter() if timing_active else 0.0
         cluster_ctx = build_cluster_refactor_context(
             projection,
             cluster,
@@ -5256,11 +5511,16 @@ def refactor_internals_all_clusters(
             expected_helper_name=helper_name,
             existing_helper_names=reserved_for_others,
         )
+        context_s = time.perf_counter() - context_started if timing_active else 0.0
         if cluster_ctx is None:
             continue
         if _CLUSTER_CONTEXT_OBSERVER is not None:
             _CLUSTER_CONTEXT_OBSERVER(cluster_ctx)
+        synthesize_started = time.perf_counter() if timing_active else 0.0
         draft = _try_synthesize_cluster_body(cluster_ctx)
+        synthesize_s = (
+            time.perf_counter() - synthesize_started if timing_active else 0.0
+        )
         if draft is not None:
             internals_source = internals_index.source
             existing_names = _function_names(internals_source, index=internals_index)
@@ -5313,13 +5573,19 @@ def refactor_internals_all_clusters(
                     mechanical_response=mechanical_response,
                     existing_names=existing_names,
                     diagnostic_target=diagnostic_target,
+                    timing_context_s=context_s,
+                    timing_synthesize_s=synthesize_s,
+                    timing_reindex_s=unit_reindex_s,
+                    timing_reindexed=unit_reindexed,
                 )
             )
             pending_batch_members.update(cluster.members)
             continue
         _flush_mechanical_cluster_batch()
         if dirty_addresses and _unit_reads_dirty(cluster.members):
-            _seal_index()
+            unit_reindex_s += _seal_index()
+            unit_reindexed = True
+        apply_started = time.perf_counter() if timing_active else 0.0
         result = refactor_internals_cluster(
             cluster_ctx,
             internals_path=internals_path,
@@ -5333,6 +5599,7 @@ def refactor_internals_all_clusters(
             apply_source=current_source,
             validate_module=False,
         )
+        apply_s = time.perf_counter() - apply_started if timing_active else 0.0
         if not dry_run:
             _record_cluster_name_delta(
                 live_function_names,
@@ -5342,8 +5609,21 @@ def refactor_internals_all_clusters(
             current_source = result.source
             dirty_addresses.update(cluster.members)
             pass1_apply_count += 1
+            pass1_apply_seconds += apply_s
         results.append(result)
         refactored_any = True
+        _emit_unit_timing(
+            unit_id=diagnostic_target,
+            kind="cluster",
+            member_count=len(cluster.members),
+            context_s=context_s,
+            synthesize_s=synthesize_s,
+            apply_s=apply_s,
+            reindex_s=unit_reindex_s,
+            reindexed=unit_reindexed,
+            apply_batch_size=1,
+            mechanical=False,
+        )
 
     _flush_mechanical_cluster_batch()
     _seal_index()
@@ -5360,15 +5640,30 @@ def refactor_internals_all_clusters(
         len(ordered_units),
     )
     logger.info(
-        "pass1 timings: apply=%.1fs validate=%.1fs reindex_count=%d "
+        "pass1 timings: apply=%.1fs validate=%.1fs reindex=%.1fs reindex_count=%d "
         "apply_batches=%d applied_units=%d elapsed=%.1fs",
         pass1_apply_seconds,
         pass1_validate_seconds,
+        pass1_reindex_seconds,
         pass1_reindex_count,
         pass1_batch_count,
         pass1_apply_count,
         pass1_elapsed,
     )
+
+    # Use the validated live source for checkpoint / parity / promote. After the
+    # end-of-pass seal this matches ``internals_index.source``; binding all three
+    # to one name keeps them from drifting if that invariant is ever weakened.
+    mechanical_source = current_source
+    checkpoint_path = mechanical_internals_checkpoint_path(internals_path)
+    if not dry_run and refactored_any:
+        checkpoint_path.write_text(mechanical_source, encoding="utf-8", newline="\n")
+        logger.info(
+            "pass1 mechanical checkpoint: path=%s bytes=%d applied_units=%d",
+            checkpoint_path,
+            checkpoint_path.stat().st_size,
+            pass1_apply_count,
+        )
 
     if parity_gate and pending_semantic and pristine_source is not None:
         from src.refactor_parity_gate import (
@@ -5378,7 +5673,7 @@ def refactor_internals_all_clusters(
 
         check_batched_mechanical_parity(
             pristine_source=pristine_source,
-            mechanical_source=internals_index.source,
+            mechanical_source=mechanical_source,
             units=[
                 MechanicalParityUnit(
                     unit_id=pending.unit_id,
@@ -5392,9 +5687,7 @@ def refactor_internals_all_clusters(
         )
 
     if not dry_run and refactored_any:
-        internals_path.write_text(
-            internals_index.source, encoding="utf-8", newline="\n"
-        )
+        internals_path.write_text(mechanical_source, encoding="utf-8", newline="\n")
 
     if pending_semantic:
         internals_index, prepared_by_unit = _run_semantic_naming_pass(

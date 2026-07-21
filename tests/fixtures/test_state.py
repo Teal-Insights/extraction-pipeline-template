@@ -91,17 +91,9 @@ def clear_runtime_caches() -> None:
 
     allowed_runtime_symbols.cache_clear()
     try:
-        from src.refactor_parity_gate import (
-            _dist_data,
-            _golden_namespace,
-            _readers_namespace,
-            _runtime,
-        )
+        from src.refactor_parity_gate import clear_parity_runtime_caches
 
-        _runtime.cache_clear()
-        _readers_namespace.cache_clear()
-        _golden_namespace.cache_clear()
-        _dist_data.cache_clear()
+        clear_parity_runtime_caches()
     except ImportError:
         pass
 

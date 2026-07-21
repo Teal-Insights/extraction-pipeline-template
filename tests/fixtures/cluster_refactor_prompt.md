@@ -85,15 +85,28 @@ Do not emit `parameters` or `member_keys`. The pipeline synthesizes both mechani
 - Call only runtime symbols from the exemplar translation and, if necessary, Python stdlib functions/operators.
 - Preserve dependency function names and signatures.
 - Where appropriate, directly pass through parameters in function calls; e.g. `prior_period_total(ctx, reporting_period=reporting_period)`.
-- Rename local temporaries to domain-meaningful `snake_case` informed by naming hints.
-- Leave `xl_cell(ctx, 'Sheet!Address')` calls unchanged; this helper reads input/constant values. (Assigning the return value to a semantic local temporary is okay!)
+- The exemplar translation may already contain statement-level `_tN` temporaries from mechanical codegen. Rename every `_tN` (numbers may be large / non-local) to domain-meaningful `snake_case` informed by naming hints. Do not leave opaque `_tN` names in the refactored body. Do not re-nest those temps into a single return expression.
+- Preserve lazy / short-circuit shapes left nested by codegen (`IF` / `CHOOSE` / `IFERROR` thunks, `IS*` lambdas, DIV-guard lambdas). Do not eagerly evaluate them.
+- Deduping repeated identical `_tN = xl_cell(ctx, 'Same!Addr')` loads into one semantic local is fine.
+- Leave `xl_cell(ctx, 'Sheet!Address')` call shapes intact aside from renaming and parameterization; this helper reads input/constant values.
 - Prefer the exemplar's call pattern over `reads:` formatting. Address maps may use Excel column letters even when the exemplar uses 1-based column indices in tuples.
 - Prefer concise lookup tables over verbose `if`/`elif` ladders.
 - Derive lagged or offset periods inside the body from member parameters and the stated reference relations; do not invent extra parameters for operand positions.
 
-## Example 1: Unpacking nested calls
+## Example 1: Renaming mechanical temporaries / generalizing the exemplar
 
-Suppose the dump shows fingerprint `=IF(ref_0[REPORTING_PERIOD]>=ref_1,1,0)` over `Forecast!B12:F12` with locked `helper_name=growth_threshold_met`, `REPORTING_PERIOD: 1..5` and engine columns, identity on `ref_0`, and constant `Assumptions!C2` for `ref_1`, plus one exemplar `cell_forecast_b12`. Generalize the exemplar with a period→column table:
+Suppose the dump shows fingerprint `=IF(ref_0[REPORTING_PERIOD]>=ref_1,1,0)` over `Forecast!B12:F12` with locked `helper_name=growth_threshold_met`, `REPORTING_PERIOD: 1..5` and engine columns, identity on `ref_0`, and constant `Assumptions!C2` for `ref_1`, plus one exemplar that already shows `_tN` statements:
+
+```python
+def cell_forecast_b12(ctx):
+    '''Formula: =IF(Forecast!B4>=Assumptions!C2,1,0).'''
+    _t1 = xl_cell(ctx, 'Forecast!B4')
+    _t2 = xl_cell(ctx, 'Assumptions!C2')
+    _t3 = xl_compare('>=', _t1, _t2)
+    return 1.0 if _t3 else 0.0
+```
+
+Generalize **and** rename those temps (period→column table), rather than inventing a different unpacking:
 
 ```json
 {

@@ -28,6 +28,7 @@ from typing import Protocol
 
 from fastpyxl.utils.cell import column_index_from_string
 
+from src.empty_if_rewrite import rewrite_empty_if_none_literals
 from src.refactor_bindings import BindingKeyValue, KeyConceptSpec
 from src.refactor_fingerprints import (
     ClusterFingerprintSummary,
@@ -205,6 +206,7 @@ def synthesize_singleton_body(
         }
     )
     body = "\n".join(ast.unparse(statement) for statement in rewritten)
+    body = rewrite_empty_if_none_literals(body)
     indented = "\n".join(f"    {line}" for line in body.splitlines())
     try:
         ast.parse(f"def _draft(ctx):\n{indented}\n")
@@ -1357,6 +1359,9 @@ def synthesize_cluster_body(
     module = ast.Module(body=body_statements, type_ignores=[])
     ast.fix_missing_locations(module)
     body = "\n".join(ast.unparse(statement) for statement in module.body)
+    # Exemplars from excel-grapher < 3.15.3 still emit None for empty IF arms;
+    # lower those to 0.0 so helpers match xl_cell's numeric-blank coercion.
+    body = rewrite_empty_if_none_literals(body)
 
     params = ", ".join(sorted(param_by_dim[dim] for dim in varying_dims))
     indented = "\n".join(f"    {line}" for line in body.splitlines())
