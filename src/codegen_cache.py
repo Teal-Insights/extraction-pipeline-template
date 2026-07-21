@@ -19,7 +19,9 @@ from src.llm_providers import model_from_env
 CODEGEN_CACHE_SCHEMA_VERSION = "1.0.0"
 DEFAULT_CODEGEN_CACHE_DIR = Path(__file__).resolve().parents[1] / ".cache" / "codegen"
 
-OPTIONAL_GENERATED_MODULES = frozenset({"_readers.py", "_api_helpers.py"})
+OPTIONAL_GENERATED_MODULES = frozenset(
+    {"_readers.py", "_api_helpers.py", "_output_leaves.py"}
+)
 
 CodegenModules = dict[str, str]
 
