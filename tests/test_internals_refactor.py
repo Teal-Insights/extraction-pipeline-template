@@ -2964,6 +2964,14 @@ TRADE_BALANCE_SERIES_MAP = {
     "Engine!B5": "trade_balance",
     "Engine!C5": "trade_balance",
     "Engine!D5": "trade_balance",
+    # Operand series ids so unbound-ref geometry checks do not fall back
+    # when Inputs cells sweep by row under TIME_PERIOD.
+    "Inputs!B10": "exports",
+    "Inputs!B11": "exports",
+    "Inputs!B12": "exports",
+    "Inputs!C10": "imports",
+    "Inputs!C11": "imports",
+    "Inputs!C12": "imports",
 }
 
 TRADE_BALANCE_CLUSTER = FormulaCluster(
