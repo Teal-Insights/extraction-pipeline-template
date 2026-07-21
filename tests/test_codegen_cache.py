@@ -206,6 +206,7 @@ def test_write_generated_modules_removes_stale_optional(tmp_path: Path) -> None:
     package_root.mkdir()
     (package_root / "_readers.py").write_text("stale\n", encoding="utf-8")
     (package_root / "_api_helpers.py").write_text("stale\n", encoding="utf-8")
+    (package_root / "_output_leaves.py").write_text("stale\n", encoding="utf-8")
 
     write_generated_modules(package_root, _SAMPLE_MODULES)
 
@@ -214,6 +215,7 @@ def test_write_generated_modules_removes_stale_optional(tmp_path: Path) -> None:
     ]
     assert not (package_root / "_readers.py").is_file()
     assert not (package_root / "_api_helpers.py").is_file()
+    assert not (package_root / "_output_leaves.py").is_file()
 
 
 def test_run_export_stage_skips_generate_modules_on_cache_hit(
