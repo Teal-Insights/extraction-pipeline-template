@@ -24,13 +24,21 @@ callers consume.
 
 Both harnesses import shared scenario types from
 [`differential_types.py`](differential_types.py) (`Scenario`, optional `Axis` /
-`AxisPoint`, `ATOL`, and `RTOL`) and input-isolation helpers from
-[`differential_scenario_inputs.py`](differential_scenario_inputs.py). Numeric
-comparison is shared via [`comparison_utils.py`](comparison_utils.py). Golden-master
-cell reads go through [`differential_excel.py`](differential_excel.py), which sets
-xlwings `err_to_str=True` so Excel error cells (`#VALUE!`, `#N/A`, …) are returned as
-strings rather than `None`. Workbook-specific hooks live at the bottom of each
-harness module.
+`AxisPoint`, `ATOL`, and `RTOL`). Numeric comparison is shared via
+[`comparison_utils.py`](comparison_utils.py). Golden-master cell reads go through
+[`differential_excel.py`](differential_excel.py) (`err_to_str=True`); the exported
+harness additionally uses `read_cells_batched()` for one COM span-read per
+`(sheet, row)`.
+
+**Graph-only:** input isolation helpers in
+[`differential_scenario_inputs.py`](differential_scenario_inputs.py) collect the
+union of scenario write addresses so the graph harness can restore workbook
+baselines between scenarios. The exported harness does **not** use that module —
+it opens a fresh Excel instance per scenario and relies on
+[input symmetry](#input-symmetry) between `inputs_for_excel` and public setters.
+
+Workbook-specific hooks live at the bottom of each harness module (or in a
+workbook matrix module that those hooks import).
 
 ### Address keys
 
@@ -94,15 +102,69 @@ itself a differential signal about extraction coverage.
 
 ### Exported-library harness hooks
 
+Exactly five hooks:
+
 1. **`build_scenarios()`** — representative input combinations.
-2. **`output_cell_labels()`** and **`output_ranges()`** — mirror output bindings.
-3. **`inputs_for_excel()`** — map each scenario to Excel cell writes.
-4. **`apply_inputs_to_mvp()`** — map each scenario to Records-shaped `set_*` calls.
+2. **`output_cell_labels()`** — `(label, address)` pairs, one per bound output
+   cell. Prefer generating from derived output series (see [Full-API
+   coverage](#full-api-coverage)).
+3. **`inputs_for_excel(scenario)`** — map each scenario to Excel cell writes.
+4. **`apply_inputs_to_mvp(api, ctx, scenario)`** — map each scenario to
+   Records-shaped `set_*` calls.
+5. **`mvp_outputs_for_scenario(api, scenario)`** — compute every public
+   endpoint once and return `{label: OBS_VALUE-or-None}`; missing or ambiguous
+   records resolve to `None` (see [Full-API coverage](#full-api-coverage)).
+
+Optional sixth hook:
+
+- **`expressible_input_cells() -> frozenset[str] | None`** — cells reachable via
+  public setters. Return `None` (template default) to skip the symmetry
+  preflight until the workbook matrix is authored.
 
 Commit reference reports under `data/differential/graph/` and
 `data/differential/exported_library/` after passing Windows sweeps. The export
 step copies the exported-library harness, workbook fixture, and reports into
 `dist/tests/`.
+
+### Input symmetry
+
+For the exported harness, every address written by `inputs_for_excel` must also
+be expressible through a public `set_*` in `apply_inputs_to_mvp`. Otherwise the
+two oracles receive different inputs and comparison is unsatisfiable.
+
+When `expressible_input_cells()` returns a frozenset, `_verify_input_symmetry`
+fails the run (exit **2**) if any scenario write falls outside that set. Leave
+the hook as `None` only while hooks are still stubs.
+
+### Full-API coverage
+
+Prefer building output specs from derived output series
+(`id`, `compute_name`, `key_fields`, `cells[{address, key}]`) via
+[`output_specs.py`](output_specs.py):
+
+- `specs_from_output_series(...)` → one `OutputCellSpec` per bound cell
+- `outputs_from_records(specs, records_by_compute)` → `{label: value}`
+
+Excel outputs are keyed by **address**; MVP outputs by **label**. Specs whose
+`(compute, keys)` pair is shared by more than one series are inherently
+ambiguous (bindings/codegen collision); every spec in that group resolves to
+`None` so the cell fails deterministically instead of silently cross-matching.
+
+### Crash attribution and reports
+
+Oracles run in separate try/except blocks. When one side crashes,
+`crash_comparisons` records the exception repr only on the crashed side and
+keeps the surviving oracle's values (MVP crash after Excel succeeded preserves
+`excel_value`). The TXT report includes:
+
+- `Workbook SHA-256`
+- `ENVIRONMENT` (Python, OS, xlwings, Excel)
+- `FAILING COMPARISONS (n)` listing every failure
+- hybrid `atol` / `rtol` tolerance line
+
+When an exported layout ships a workbook fixture under
+`dist/tests/fixtures/`, a SHA-256 mismatch against the current workbook hard-fails
+(exit **2**). Otherwise mtime vs `data.py` only warns.
 
 ## Run
 
@@ -127,7 +189,7 @@ listed in the report and **fail the run** unless the scenario sets
 `expects_error_values=True`. Pass `--allow-matched-errors` on either harness to
 downgrade them to warnings during triage.
 
-Exit codes: **`0`** all comparisons pass and no unexpected matched errors, **`1`** any failure or unexpected matched error, **`2`** prerequisite missing or scenarios not configured.
+Exit codes: **`0`** all comparisons pass and no unexpected matched errors, **`1`** any failure or unexpected matched error, **`2`** prerequisite missing, scenarios not configured, input-symmetry preflight failure, or workbook SHA-256 staleness hard-fail.
 
 ## Golden-master conformance
 
@@ -140,7 +202,8 @@ exported-library harness helpers (`compare_cell`, `crash_comparisons`,
 required.
 
 CSV columns use `excel_value` / `mvp_value` as aliases for the standard's
-`golden_value` / `sut_value` terminology.
+`golden_value` / `sut_value` terminology (the graph harness CSV uses
+`golden` / `mvp`).
 
 ## Output locations
 
