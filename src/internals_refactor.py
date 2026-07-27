@@ -77,6 +77,7 @@ from src.refactor_fingerprints import (
     build_cluster_fingerprint_summary,
     format_cluster_fingerprint_dump,
 )
+from src.peel_entrypoint_dispatch import inject_peel_entrypoint_dispatch
 from src.refactor_order import compute_refactor_schedule, refactor_failure_target
 from src.runtime_symbols import allowed_runtime_module_symbols, allowed_runtime_symbols
 from src.semantic_naming import (
@@ -3746,6 +3747,56 @@ def _replace_function_definition(
     return source[:start] + replacement + source[end:]
 
 
+def _unify_peel_split_entrypoints(
+    source: str,
+    *,
+    scheduled_helper_by_address: Mapping[str, str],
+    address_to_series_id: Mapping[str, str],
+    bound_address_keys: Mapping[str, Mapping[str, BindingKeyValue]] | None,
+    layout: ProjectionColumnLayout | None,
+) -> str:
+    """Make each peel-split published series' base helper span the full range (#143).
+
+    Derives every scheduled address's dispatch-key value (the projection period)
+    from ``bound_address_keys`` and delegates sibling-owned years from the base
+    (``series_id``) helper to the owning ``series_id_2`` sibling, so the api-layer
+    ``compute_*`` loop -- which only ever calls the bare series id -- no longer runs
+    the base regime for years it never covered. A no-op when binding keys are
+    unavailable or nothing was peeled.
+    """
+    if not bound_address_keys:
+        return source
+    projection_dimension_id = (
+        layout.projection_dimension_id if layout is not None else "TIME_PERIOD"
+    )
+    address_time_periods: dict[str, int] = {}
+    for address in scheduled_helper_by_address:
+        keys = bound_address_keys.get(address)
+        if not keys:
+            continue
+        period = keys.get(projection_dimension_id)
+        if period is None and projection_dimension_id != "TIME_PERIOD":
+            period = keys.get("TIME_PERIOD")
+        if isinstance(period, int):
+            address_time_periods[address] = period
+    if not address_time_periods:
+        return source
+    updated, rewritten = inject_peel_entrypoint_dispatch(
+        source,
+        scheduled_helper_by_address=scheduled_helper_by_address,
+        address_to_series_id=address_to_series_id,
+        address_time_periods=address_time_periods,
+    )
+    if rewritten:
+        logger.info(
+            "pass1 peel entry-point unify: %d base helper(s) now dispatch to "
+            "sibling peels: %s",
+            len(rewritten),
+            ", ".join(rewritten),
+        )
+    return updated
+
+
 def apply_singleton_refactor_plan(
     source: str,
     response: SingletonRefactorResponse,
@@ -6416,6 +6467,13 @@ def refactor_internals_all_clusters(
         source = internals_path.read_text(encoding="utf-8")
         updated, phase_c_pruned = apply_phase_c(source)
         updated = rehome_unrefactored_cell_functions(updated)
+        updated = _unify_peel_split_entrypoints(
+            updated,
+            scheduled_helper_by_address=scheduled_helper_by_address,
+            address_to_series_id=address_to_series_id,
+            bound_address_keys=bound_address_keys,
+            layout=layout,
+        )
         validate_refactored_internals(updated)
         internals_path.write_text(updated, encoding="utf-8", newline="\n")
         if results:
