@@ -22,14 +22,29 @@ def _load_harness_module():
 
 def _sample_config(tmp_path: Path):
     harness = _load_harness_module()
+    workbook = tmp_path / "workbook.xlsx"
+    workbook.write_bytes(b"fake-workbook")
     return harness.DifferentialConfig(
-        workbook_path=tmp_path / "workbook.xlsx",
+        workbook_path=workbook,
         package_dir=tmp_path / "package",
         package_name="example.api",
         import_root=tmp_path,
         report_dir=tmp_path / "reports",
         library_name="Example",
     )
+
+
+def _txt_kwargs(tmp_path: Path) -> dict[str, object]:
+    return {
+        "config": _sample_config(tmp_path),
+        "environment": {
+            "python": "3.13.0",
+            "os": "test-os",
+            "xlwings": "0.0.0",
+            "excel": "not launched",
+        },
+        "workbook_sha256": "abc123",
+    }
 
 
 def _sample_comparisons(harness) -> list:
@@ -213,9 +228,12 @@ def test_txt_summary_header_reports_both_tolerances(tmp_path: Path) -> None:
         )
     ]
     report_path = tmp_path / "parity_report.txt"
-    harness.write_txt_summary(comparisons, report_path, config=_sample_config(tmp_path))
+    harness.write_txt_summary(comparisons, report_path, **_txt_kwargs(tmp_path))
     text = report_path.read_text(encoding="utf-8")
     assert "Tolerance: atol = 1e-06, rtol = 1e-12" in text
+    assert "Workbook SHA-256: abc123" in text
+    assert "ENVIRONMENT" in text
+    assert "Python:  3.13.0" in text
 
 
 def test_compare_cell_matches_excel_error_string_to_xlerror() -> None:
@@ -301,11 +319,10 @@ def _matched_error_comparison(harness):
 
 def test_write_txt_summary_fails_on_flagged_matched_errors(tmp_path: Path) -> None:
     harness = _load_harness_module()
-    config = _sample_config(tmp_path)
     comparisons = [_matched_error_comparison(harness)]
     report_path = tmp_path / "parity_report.txt"
 
-    harness.write_txt_summary(comparisons, report_path, config=config)
+    harness.write_txt_summary(comparisons, report_path, **_txt_kwargs(tmp_path))
 
     text = report_path.read_text(encoding="utf-8")
     assert "Result:            FAIL" in text
@@ -318,11 +335,23 @@ def test_write_txt_summary_passes_when_matched_errors_allowed(tmp_path: Path) ->
     comparisons = [_matched_error_comparison(harness)]
     report_path = tmp_path / "parity_report.txt"
 
-    harness.write_txt_summary(comparisons, report_path, config=config)
+    harness.write_txt_summary(
+        comparisons,
+        report_path,
+        config=config,
+        environment={
+            "python": "3.13.0",
+            "os": "test-os",
+            "xlwings": "0.0.0",
+            "excel": "not launched",
+        },
+        workbook_sha256="abc123",
+    )
 
     text = report_path.read_text(encoding="utf-8")
     assert "Result:            PASS" in text
     assert "MATCHED ERROR VALUES" in text
+    assert "allowed by --allow-matched-errors" in text
 
 
 def test_parse_args_accepts_allow_matched_errors() -> None:
@@ -338,16 +367,23 @@ def test_parse_args_rejects_removed_warn_flag() -> None:
         harness.parse_args(["--warn-on-error-values"])
 
 
-def test_crash_comparisons_marks_every_output_cell_failed() -> None:
+def test_crash_comparisons_attribute_mvp_crash_and_keep_excel_values() -> None:
     harness = _load_harness_module()
     scenario = Scenario(id="scenario:crash", inputs={})
     cell_labels = (
         ("result[year=1]", "Outputs!B1"),
         ("result[year=2]", "Outputs!B2"),
     )
+    excel_outputs = {"Outputs!B1": 1.0, "Outputs!B2": 2.0}
     exc = RuntimeError("oracle crashed")
 
-    comparisons = harness.crash_comparisons(scenario, cell_labels, exc)
+    comparisons = harness.crash_comparisons(
+        scenario,
+        cell_labels,
+        exc,
+        crashed_oracle="mvp",
+        excel_outputs=excel_outputs,
+    )
 
     assert len(comparisons) == len(cell_labels)
     err_repr = f"<exception: {type(exc).__name__}: {exc}>"
@@ -357,11 +393,33 @@ def test_crash_comparisons_marks_every_output_cell_failed() -> None:
         assert comparison.scenario_id == scenario.id
         assert comparison.cell_address == cell_address
         assert comparison.cell_label == cell_label
-        assert comparison.excel_value == err_repr
+        assert comparison.excel_value == excel_outputs[cell_address]
         assert comparison.mvp_value == err_repr
         assert comparison.abs_diff is None
         assert comparison.rel_diff is None
         assert comparison.passed is False
+        assert comparison.note == "mvp oracle crashed"
+
+
+def test_crash_comparisons_attribute_excel_crash() -> None:
+    harness = _load_harness_module()
+    scenario = Scenario(id="scenario:crash", inputs={})
+    cell_labels = (("result[year=1]", "Outputs!B1"),)
+    exc = RuntimeError("excel down")
+
+    comparisons = harness.crash_comparisons(
+        scenario, cell_labels, exc, crashed_oracle="excel"
+    )
+
+    assert len(comparisons) == 1
+    comparison = comparisons[0]
+    err_repr = f"<exception: {type(exc).__name__}: {exc}>"
+    assert comparison.excel_value == err_repr
+    assert comparison.mvp_value is None
+    assert comparison.abs_diff is None
+    assert comparison.rel_diff is None
+    assert comparison.passed is False
+    assert comparison.note == "excel oracle crashed"
 
 
 def test_write_csv_report_round_trip(tmp_path: Path) -> None:
@@ -379,7 +437,6 @@ def test_write_csv_report_round_trip(tmp_path: Path) -> None:
 
 def test_write_txt_summary_pass(tmp_path: Path) -> None:
     harness = _load_harness_module()
-    config = _sample_config(tmp_path)
     comparisons = [
         harness.compare_cell(
             "scenario:a",
@@ -393,21 +450,21 @@ def test_write_txt_summary_pass(tmp_path: Path) -> None:
     ]
     report_path = tmp_path / "parity_report.txt"
 
-    harness.write_txt_summary(comparisons, report_path, config=config)
+    harness.write_txt_summary(comparisons, report_path, **_txt_kwargs(tmp_path))
 
     text = report_path.read_text(encoding="utf-8")
     assert "Acceptance bar:    100.00%" in text
     assert "Result:            PASS" in text
     assert "First divergence:" not in text
+    assert "FAILING COMPARISONS" not in text
 
 
 def test_write_txt_summary_fail_includes_first_divergence(tmp_path: Path) -> None:
     harness = _load_harness_module()
-    config = _sample_config(tmp_path)
     comparisons = _sample_comparisons(harness)
     report_path = tmp_path / "parity_report.txt"
 
-    harness.write_txt_summary(comparisons, report_path, config=config)
+    harness.write_txt_summary(comparisons, report_path, **_txt_kwargs(tmp_path))
 
     text = report_path.read_text(encoding="utf-8")
     assert "Acceptance bar:    100.00%" in text
@@ -415,6 +472,20 @@ def test_write_txt_summary_fail_includes_first_divergence(tmp_path: Path) -> Non
     assert "First divergence:" in text
     assert "Outputs!B2" in text
     assert "result[year=2]" in text
+    assert "FAILING COMPARISONS (1):" in text
+
+
+def test_txt_summary_lists_every_failing_comparison(tmp_path: Path) -> None:
+    harness = _load_harness_module()
+    comparisons = [
+        harness.compare_cell("s", "A1", "a", 1.0, 2.0, atol=ATOL, rtol=RTOL),
+        harness.compare_cell("s", "A2", "b", 3.0, 4.0, atol=ATOL, rtol=RTOL),
+    ]
+    report_path = tmp_path / "parity_report.txt"
+    harness.write_txt_summary(comparisons, report_path, **_txt_kwargs(tmp_path))
+    text = report_path.read_text(encoding="utf-8")
+    assert "FAILING COMPARISONS (2):" in text
+    assert "A1" in text and "A2" in text
 
 
 def test_harness_conforms_to_standard() -> None:
@@ -437,6 +508,7 @@ def test_harness_conforms_to_standard() -> None:
         "passed",
         "matched_error",
         "flagged_matched_error",
+        "note",
     )
 
     both_blank = harness.compare_cell(
@@ -461,16 +533,13 @@ def test_harness_conforms_to_standard() -> None:
     assert nan_vs_number.passed is False
 
 
-def test_run_differential_test_requires_scenarios(tmp_path: Path) -> None:
+def test_run_differential_test_requires_scenarios(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     harness = _load_harness_module()
-    config = harness.DifferentialConfig(
-        workbook_path=tmp_path / "workbook.xlsx",
-        package_dir=tmp_path / "package",
-        package_name="example.api",
-        import_root=tmp_path,
-        report_dir=tmp_path / "reports",
-        library_name="Example",
-    )
+    config = _sample_config(tmp_path)
+    monkeypatch.setattr(harness, "_verify_paths", lambda config: None)
+    monkeypatch.setattr(harness, "_check_staleness", lambda config: None)
     with pytest.raises(RuntimeError, match="No differential scenarios"):
         harness.run_differential_test(config)
 
@@ -484,24 +553,21 @@ def _run_with_stub_oracles(tmp_path, excel_oracle, mvp_oracle, monkeypatch):
     scenario = Scenario(id="stub:one", inputs={})
     monkeypatch.setattr(harness, "build_scenarios", lambda: (scenario,))
     monkeypatch.setattr(harness, "output_cell_labels", _stub_cell_labels)
-    monkeypatch.setattr(
-        harness,
-        "output_ranges",
-        lambda: (("demo", ("Outputs!B1", "Outputs!B2")),),
-    )
     monkeypatch.setattr(harness, "inputs_for_excel", lambda s: {})
     monkeypatch.setattr(harness, "apply_inputs_to_mvp", lambda *a, **k: None)
+    monkeypatch.setattr(harness, "mvp_outputs_for_scenario", lambda api, scenario: {})
+    monkeypatch.setattr(harness, "expressible_input_cells", lambda: None)
     monkeypatch.setattr(harness, "_verify_paths", lambda config: None)
     monkeypatch.setattr(harness, "_check_staleness", lambda config: None)
     monkeypatch.setattr(harness, "load_exported_library", lambda root, name: object())
-    monkeypatch.setattr(harness, "run_excel_oracle", excel_oracle)
-    monkeypatch.setattr(
-        harness, "run_mvp_oracle", lambda api, scenario: mvp_oracle(scenario)
-    )
     config = dataclasses.replace(
         _sample_config(tmp_path), report_dir=tmp_path / "reports"
     )
-    return harness.run_differential_test(config)
+    return harness.run_differential_test(
+        config,
+        excel_oracle=excel_oracle,
+        mvp_oracle=mvp_oracle,
+    )
 
 
 def test_runner_passes_relative_branch_noise_via_config(tmp_path, monkeypatch) -> None:
@@ -509,11 +575,11 @@ def test_runner_passes_relative_branch_noise_via_config(tmp_path, monkeypatch) -
     reaches exit 0 only if run_differential_test hands config.rtol to the gate."""
     exit_code = _run_with_stub_oracles(
         tmp_path,
-        excel_oracle=lambda workbook, scenario, addrs: {
+        excel_oracle=lambda scenario, addrs: {
             "Outputs!B1": 1.0e16,
             "Outputs!B2": 2.0,
         },
-        mvp_oracle=lambda s: {"Outputs!B1": 1.0e16 + 2.0, "Outputs!B2": 2.0},
+        mvp_oracle=lambda s: {"out[1]": 1.0e16 + 2.0, "out[2]": 2.0},
         monkeypatch=monkeypatch,
     )
     assert exit_code == 0
@@ -526,14 +592,47 @@ def test_runner_fails_divergence_between_rtol_and_atol_scales(
     under which 1e-9 <= 1e-6 would silently pass."""
     exit_code = _run_with_stub_oracles(
         tmp_path,
-        excel_oracle=lambda workbook, scenario, addrs: {
+        excel_oracle=lambda scenario, addrs: {
             "Outputs!B1": 1.0e16,
             "Outputs!B2": 2.0,
         },
-        mvp_oracle=lambda s: {"Outputs!B1": 1.0e16 + 1.0e7, "Outputs!B2": 2.0},
+        mvp_oracle=lambda s: {"out[1]": 1.0e16 + 1.0e7, "out[2]": 2.0},
         monkeypatch=monkeypatch,
     )
     assert exit_code == 1
+
+
+def test_runner_attributes_mvp_crash(tmp_path, monkeypatch) -> None:
+    def boom(scenario: Scenario) -> dict[str, Any]:
+        raise RuntimeError("mvp boom")
+
+    exit_code = _run_with_stub_oracles(
+        tmp_path,
+        excel_oracle=lambda scenario, addrs: {
+            "Outputs!B1": 1.0,
+            "Outputs!B2": 2.0,
+        },
+        mvp_oracle=boom,
+        monkeypatch=monkeypatch,
+    )
+    assert exit_code == 1
+    csv_text = (tmp_path / "reports" / "parity_report.csv").read_text(encoding="utf-8")
+    assert "mvp oracle crashed" in csv_text
+    assert "1.0" in csv_text
+    assert "RuntimeError: mvp boom" in csv_text
+
+
+def test_matching_stub_oracles_yield_exit_0(tmp_path, monkeypatch) -> None:
+    exit_code = _run_with_stub_oracles(
+        tmp_path,
+        excel_oracle=lambda scenario, addrs: {
+            "Outputs!B1": 1.0,
+            "Outputs!B2": 2.0,
+        },
+        mvp_oracle=lambda s: {"out[1]": 1.0, "out[2]": 2.0},
+        monkeypatch=monkeypatch,
+    )
+    assert exit_code == 0
 
 
 def test_comparison_stage_crash_is_contained_per_scenario(
@@ -549,15 +648,139 @@ def test_comparison_stage_crash_is_contained_per_scenario(
     monkeypatch.setattr(harness, "compare_scenario", _boom)
     exit_code = _run_with_stub_oracles(
         tmp_path,
-        excel_oracle=lambda workbook, scenario, addrs: {
+        excel_oracle=lambda scenario, addrs: {
             "Outputs!B1": 1.0,
             "Outputs!B2": 2.0,
         },
-        mvp_oracle=lambda s: {"Outputs!B1": 1.0, "Outputs!B2": 2.0},
+        mvp_oracle=lambda s: {"out[1]": 1.0, "out[2]": 2.0},
         monkeypatch=monkeypatch,
     )
     assert exit_code == 1
     text = (tmp_path / "reports" / "parity_report.txt").read_text(encoding="utf-8")
     assert "Result:            FAIL" in text
     csv_text = (tmp_path / "reports" / "parity_report.csv").read_text(encoding="utf-8")
-    assert "RuntimeError: comparison exploded" in csv_text
+    assert "comparison oracle crashed" in csv_text
+    assert "1.0" in csv_text
+    assert "2.0" in csv_text
+
+
+def test_preflight_rejects_non_expressible_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _load_harness_module()
+    scenario = Scenario(id="rogue", inputs={})
+    monkeypatch.setattr(harness, "build_scenarios", lambda: (scenario,))
+    monkeypatch.setattr(harness, "output_cell_labels", _stub_cell_labels)
+    monkeypatch.setattr(
+        harness, "inputs_for_excel", lambda s: {"Inputs!A1": 1.0, "Hidden!Z9": 0}
+    )
+    monkeypatch.setattr(harness, "apply_inputs_to_mvp", lambda *a, **k: None)
+    monkeypatch.setattr(harness, "mvp_outputs_for_scenario", lambda *a, **k: {})
+    monkeypatch.setattr(
+        harness, "expressible_input_cells", lambda: frozenset({"Inputs!A1"})
+    )
+    monkeypatch.setattr(harness, "_verify_paths", lambda config: None)
+    monkeypatch.setattr(harness, "_check_staleness", lambda config: None)
+    monkeypatch.setattr(harness, "load_exported_library", lambda root, name: object())
+
+    with pytest.raises(RuntimeError, match="Input-symmetry pre-flight"):
+        harness.run_differential_test(_sample_config(tmp_path))
+
+
+def test_preflight_skips_when_expressible_set_is_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exit_code = _run_with_stub_oracles(
+        tmp_path,
+        excel_oracle=lambda scenario, addrs: {
+            "Outputs!B1": 1.0,
+            "Outputs!B2": 2.0,
+        },
+        mvp_oracle=lambda s: {"out[1]": 1.0, "out[2]": 2.0},
+        monkeypatch=monkeypatch,
+    )
+    assert exit_code == 0
+
+
+def test_staleness_hard_fails_on_fixture_hash_mismatch(tmp_path: Path) -> None:
+    harness = _load_harness_module()
+    package_dir = tmp_path / "dist" / "pkg"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "api.py").write_text("", encoding="utf-8")
+    workbook = tmp_path / "workbook.xlsx"
+    workbook.write_bytes(b"current")
+    fixture_dir = tmp_path / "dist" / "tests" / "fixtures"
+    fixture_dir.mkdir(parents=True)
+    (fixture_dir / "workbook.xlsx").write_bytes(b"exported")
+    config = harness.DifferentialConfig(
+        workbook_path=workbook,
+        package_dir=package_dir,
+        package_name="pkg.api",
+        import_root=tmp_path / "dist",
+        report_dir=tmp_path / "reports",
+        library_name="Example",
+    )
+    with pytest.raises(RuntimeError, match="Workbook SHA-256 mismatch"):
+        harness._check_staleness(config)
+
+
+def test_staleness_passes_on_identical_fixture(tmp_path: Path) -> None:
+    harness = _load_harness_module()
+    package_dir = tmp_path / "dist" / "pkg"
+    package_dir.mkdir(parents=True)
+    workbook = tmp_path / "workbook.xlsx"
+    workbook.write_bytes(b"same-bytes")
+    fixture_dir = tmp_path / "dist" / "tests" / "fixtures"
+    fixture_dir.mkdir(parents=True)
+    (fixture_dir / "workbook.xlsx").write_bytes(b"same-bytes")
+    config = harness.DifferentialConfig(
+        workbook_path=workbook,
+        package_dir=package_dir,
+        package_name="pkg.api",
+        import_root=tmp_path / "dist",
+        report_dir=tmp_path / "reports",
+        library_name="Example",
+    )
+    harness._check_staleness(config)
+
+
+def test_read_cells_batched_groups_row_spans() -> None:
+    harness = _load_harness_module()
+    calls: list[str] = []
+
+    class FakeRange:
+        def __init__(self, span: str) -> None:
+            self.span = span
+
+        def options(self, **_kwargs: object) -> FakeRange:
+            return self
+
+        @property
+        def value(self) -> Any:
+            calls.append(self.span)
+            if ":" in self.span:
+                return [10.0, 20.0, 30.0]
+            return 99.0
+
+    class FakeSheet:
+        def range(self, span: str) -> FakeRange:
+            return FakeRange(span)
+
+    sheets = {"Sheet": FakeSheet()}
+    values = harness.read_cells_batched(
+        sheets,
+        ("Sheet!B2", "Sheet!D2", "Sheet!A3"),
+    )
+    assert values == {"Sheet!B2": 10.0, "Sheet!D2": 30.0, "Sheet!A3": 99.0}
+    assert calls == ["B2:D2", "A3"]
+
+
+def test_read_cells_batched_rejects_unparseable_cell() -> None:
+    harness = _load_harness_module()
+
+    class FakeSheets:
+        pass
+
+    with pytest.raises(ValueError, match="Cannot parse cell reference"):
+        harness.read_cells_batched(FakeSheets(), ("Sheet!2B",))
