@@ -19,7 +19,6 @@ import argparse
 import csv
 import importlib
 import logging
-import math
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,7 +26,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal, cast
 
-from excel_grapher import XlError
 from excel_grapher.core.address_keys import normalize_key, parse_address
 
 from .differential_excel import (
@@ -36,7 +34,8 @@ from .differential_excel import (
     parity_exit_code,
     read_cell_value,
 )
-from .differential_types import ATOL, Scenario
+from .comparison_utils import classify_comparison
+from .differential_types import ATOL, RTOL, Scenario
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +53,7 @@ class DifferentialConfig:
     report_dir: Path
     library_name: str
     atol: float = ATOL
+    rtol: float = RTOL
     allow_matched_errors: bool = False
 
 
@@ -192,6 +192,7 @@ def resolve_config(
         report_dir=(report_dir or defaults.report_dir).resolve(),
         library_name=library_name,
         atol=ATOL,
+        rtol=RTOL,
         allow_matched_errors=allow_matched_errors,
     )
 
@@ -216,74 +217,50 @@ def compare_cell(
     mvp: Any,
     *,
     atol: float,
+    rtol: float,
     expects_error_values: bool = False,
 ) -> Comparison:
-    raw_excel = excel
-    raw_mvp = mvp
-    excel = coerce_excel_error(excel)
-    mvp = coerce_excel_error(mvp)
+    passed, _healthy, _outcome, abs_diff, rel_diff, _note = classify_comparison(
+        excel, mvp, atol=atol, rtol=rtol
+    )
+    excel_c = coerce_excel_error(excel)
+    mvp_c = coerce_excel_error(mvp)
+    matched_error = matched_error_values(excel, mvp) and passed
 
-    if isinstance(excel, XlError) or isinstance(mvp, XlError):
-        passed = (
-            isinstance(excel, XlError) and isinstance(mvp, XlError) and excel == mvp
-        )
-        matched_error = passed
-        return Comparison(
-            scenario_id,
-            cell_address,
-            cell_label,
-            excel,
-            mvp,
-            None,
-            None,
-            passed,
-            matched_error=matched_error,
-            flagged_matched_error=matched_error and not expects_error_values,
-        )
+    excel_out: Any = excel_c
+    mvp_out: Any = mvp_c
+    if (
+        abs_diff is not None
+        and isinstance(excel_c, int | float)
+        and isinstance(mvp_c, int | float)
+        and not isinstance(excel_c, bool)
+        and not isinstance(mvp_c, bool)
+    ):
+        excel_out = float(excel_c)
+        mvp_out = float(mvp_c)
+    elif (
+        isinstance(excel_c, int | float)
+        and isinstance(mvp_c, int | float)
+        and not isinstance(excel_c, bool)
+        and not isinstance(mvp_c, bool)
+    ):
+        try:
+            excel_out = float(excel_c)
+            mvp_out = float(mvp_c)
+        except OverflowError:
+            pass
 
-    if excel is None and mvp is None:
-        return Comparison(
-            scenario_id, cell_address, cell_label, None, None, 0.0, 0.0, True
-        )
-    if excel is None or mvp is None:
-        return Comparison(
-            scenario_id, cell_address, cell_label, excel, mvp, None, None, False
-        )
-    try:
-        excel_f = float(excel)  # type: ignore[arg-type]
-        mvp_f = float(mvp)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        passed = excel == mvp
-        matched_error = matched_error_values(raw_excel, raw_mvp) and passed
-        return Comparison(
-            scenario_id,
-            cell_address,
-            cell_label,
-            excel,
-            mvp,
-            None,
-            None,
-            passed,
-            matched_error=matched_error,
-            flagged_matched_error=matched_error and not expects_error_values,
-        )
-    if not (math.isfinite(excel_f) and math.isfinite(mvp_f)):
-        passed = excel_f == mvp_f or (math.isnan(excel_f) and math.isnan(mvp_f))
-        return Comparison(
-            scenario_id, cell_address, cell_label, excel_f, mvp_f, None, None, passed
-        )
-    abs_diff = abs(excel_f - mvp_f)
-    rel_diff = abs_diff / abs(excel_f) if excel_f != 0 else math.inf
-    passed = abs_diff <= atol
     return Comparison(
         scenario_id,
         cell_address,
         cell_label,
-        excel_f,
-        mvp_f,
+        excel_out,
+        mvp_out,
         abs_diff,
         rel_diff,
         passed,
+        matched_error=matched_error,
+        flagged_matched_error=matched_error and not expects_error_values,
     )
 
 
@@ -294,6 +271,7 @@ def compare_scenario(
     cell_labels: tuple[tuple[str, str], ...],
     *,
     atol: float,
+    rtol: float,
 ) -> list[Comparison]:
     return [
         compare_cell(
@@ -303,6 +281,7 @@ def compare_scenario(
             excel_outputs.get(cell_address),
             mvp_outputs.get(cell_address),
             atol=atol,
+            rtol=rtol,
             expects_error_values=scenario.expects_error_values,
         )
         for cell_label, cell_address in cell_labels
@@ -381,7 +360,7 @@ def write_txt_summary(
         handle.write(
             f"Package:   {config.package_dir} (imported as {config.package_name})\n"
         )
-        handle.write(f"Tolerance: atol = {config.atol}\n\n")
+        handle.write(f"Tolerance: atol = {config.atol}, rtol = {config.rtol}\n\n")
         handle.write(f"Total comparisons: {total}\n")
         handle.write(f"Passed:            {passed}\n")
         handle.write(f"Failed:            {len(failures)}\n")
@@ -557,15 +536,23 @@ def run_differential_test(config: DifferentialConfig) -> int:
             logger.exception("Scenario %s crashed; recording as failure.", scenario.id)
             comparisons.extend(crash_comparisons(scenario, cell_labels, exc))
             continue
-        comparisons.extend(
-            compare_scenario(
-                scenario,
-                excel_outputs,
-                mvp_outputs,
-                cell_labels,
-                atol=config.atol,
+        try:
+            comparisons.extend(
+                compare_scenario(
+                    scenario,
+                    excel_outputs,
+                    mvp_outputs,
+                    cell_labels,
+                    atol=config.atol,
+                    rtol=config.rtol,
+                )
             )
-        )
+        except Exception as exc:
+            logger.exception(
+                "Comparison stage crashed on %s; recording as failure.", scenario.id
+            )
+            comparisons.extend(crash_comparisons(scenario, cell_labels, exc))
+            continue
 
     config.report_dir.mkdir(parents=True, exist_ok=True)
     write_csv_report(comparisons, config.report_dir / "parity_report.csv")
