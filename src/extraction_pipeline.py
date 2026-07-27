@@ -96,6 +96,7 @@ class PipelineGraphResult:
     input_series: SeriesResolutionList
     output_series: SeriesResolutionList
     internal_series: SeriesResolutionList
+    constant_series: SeriesResolutionList
     graph_cache_key: str
 
 
@@ -108,6 +109,7 @@ class DependencyGraphExtraction:
     input_series: SeriesResolutionList
     output_series: SeriesResolutionList
     internal_series: SeriesResolutionList
+    constant_series: SeriesResolutionList
     timer: StageTimer
     elapsed_seconds: float
 
@@ -167,6 +169,7 @@ def extract_dependency_graph_result(
         input_series = graph_result.input_series
         output_series = graph_result.output_series
         internal_series = graph_result.internal_series
+        constant_series = graph_result.constant_series
         _graph_cache_key = graph_result.graph_cache_key
     elapsed_seconds = time.perf_counter() - started
     return DependencyGraphExtraction(
@@ -175,6 +178,7 @@ def extract_dependency_graph_result(
         input_series=input_series,
         output_series=output_series,
         internal_series=internal_series,
+        constant_series=constant_series,
         timer=timer,
         elapsed_seconds=elapsed_seconds,
     )
@@ -366,6 +370,7 @@ def build_pipeline_graph(
         input_series = series_result.input_series
         output_series = series_result.output_series
         internal_series = series_result.internal_series
+        constant_series = series_result.constant_series
 
     with stage("classify_leaves"):
         leaf_classification = classify_leaves_from_constraints(
@@ -393,6 +398,7 @@ def build_pipeline_graph(
         input_series=input_series,
         output_series=output_series,
         internal_series=internal_series,
+        constant_series=constant_series,
         graph_cache_key=graph_cache_key,
     )
 
@@ -535,11 +541,13 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
         graph_result.input_series,
         graph_result.output_series,
         graph_result.internal_series,
+        constant_series=graph_result.constant_series,
     )
     address_to_series_id = build_address_to_series_id(
         graph_result.internal_series,
         output_series=graph_result.output_series,
         input_series=graph_result.input_series,
+        constant_series=graph_result.constant_series,
     )
     print("clustering: partitioning formulas…", flush=True)
     clustering_started = time.perf_counter()

@@ -76,11 +76,12 @@ from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_addres
 REFACTOR_BUCKETS_SCHEMA_VERSION = "1.4.0"
 
 SERIES_PARTITION_NOTE = (
-    "Refactor partitions use internal series ids first, then public output/input "
-    "binding series ids. Cells with no internal-series owner are not automatically "
-    "singleton refactor units: a multi-member public binding series (for example an "
-    "output time sweep) remains one cluster refactor unit so collapse can emit "
-    "_ADDRESS_DISPATCH entries keyed by binding parameters such as TIME_PERIOD."
+    "Refactor partitions use internal series ids first, then constant (reader-only) "
+    "leaf series ids, then public output/input binding series ids. Cells with no "
+    "internal-series owner are not automatically singleton refactor units: a "
+    "multi-member public binding series (for example an output time sweep) remains "
+    "one cluster refactor unit so collapse can emit _ADDRESS_DISPATCH entries keyed "
+    "by binding parameters such as TIME_PERIOD."
 )
 DEFAULT_JSON_OUTPUT = Path("artifacts/refactor-buckets.json")
 DEFAULT_MARKDOWN_OUTPUT = Path("artifacts/refactor-buckets.md")
@@ -742,11 +743,13 @@ def run_record_refactor_buckets(
         graph_result.input_series,
         graph_result.output_series,
         graph_result.internal_series,
+        constant_series=graph_result.constant_series,
     )
     address_to_series_id = build_address_to_series_id(
         graph_result.internal_series,
         output_series=graph_result.output_series,
         input_series=graph_result.input_series,
+        constant_series=graph_result.constant_series,
     )
     records = record_refactor_buckets(
         config,
