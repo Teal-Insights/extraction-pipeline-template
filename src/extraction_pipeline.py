@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -73,6 +74,8 @@ SeriesResolutionList = Sequence[Mapping[str, Any]]
 
 EXTRACTION_SUMMARY_SCHEMA_VERSION = "1.0.0"
 
+logger = logging.getLogger(__name__)
+
 PipelineStageName = Literal[
     "extract",
     "export",
@@ -87,6 +90,10 @@ PIPELINE_STAGES: tuple[PipelineStageName, ...] = (
     "validate",
     "document",
 )
+
+
+class DocumentStageError(RuntimeError):
+    """Raised when the document stage fails after earlier artifacts are written."""
 
 
 @dataclass(frozen=True)
@@ -593,10 +600,18 @@ def run_validate_stage(
     state: RefactorStageState,
     *,
     no_cache: bool = False,
-) -> None:
-    """Run post-refactor differential and ship reference reports into dist/."""
-    run_post_refactor_differential(config=state.config, no_cache=no_cache)
+) -> int | None:
+    """Run post-refactor differential and ship reference reports into dist/.
+
+    Returns the differential harness exit code when it ran, ``0`` on a cache
+    hit, or ``None`` when differential was skipped (for example under CI).
+    """
+    exit_code = run_post_refactor_differential(
+        config=state.config,
+        no_cache=no_cache,
+    )
     export_reference_reports(config=state.config)
+    return exit_code
 
 
 def run_pipeline(
@@ -605,6 +620,7 @@ def run_pipeline(
     stop_after_stage: PipelineStageName | str = "document",
     no_cache: bool = False,
     force_rebuild: bool = False,
+    force_document: bool = False,
 ) -> None:
     """Run pipeline stages in order, stopping after ``stop_after_stage`` inclusive."""
     if stop_after_stage not in PIPELINE_STAGES:
@@ -633,13 +649,39 @@ def run_pipeline(
     if stop_after_stage == "refactor":
         return
 
-    run_validate_stage(refactor_state, no_cache=no_cache)
+    differential_exit_code = run_validate_stage(refactor_state, no_cache=no_cache)
     if stop_after_stage == "validate":
+        return
+
+    if (
+        isinstance(differential_exit_code, int)
+        and differential_exit_code != 0
+        and not force_document
+    ):
+        print(
+            "Skipping document stage because exported-library differential "
+            f"exited with code {differential_exit_code}. Export and differential "
+            "artifacts are ready for diagnosis; pass --force-document to rewrite "
+            "guides anyway.",
+            flush=True,
+        )
         return
 
     from src.documentation_pipeline import run_documentation_pipeline
 
-    run_documentation_pipeline(config)
+    try:
+        run_documentation_pipeline(config)
+    except Exception as error:
+        logger.exception(
+            "Document stage failed after export/differential artifacts were written"
+        )
+        print(
+            "Document stage failed; export package and differential reports under "
+            f"{config.dist_root} and {config.differential_report_dir_rel} are "
+            "preserved for diagnosis.",
+            flush=True,
+        )
+        raise DocumentStageError(f"document stage failed: {error}") from error
 
 
 def export_generated_package(
@@ -683,6 +725,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             "and exported-library differential caches for this run."
         ),
     )
+    parser.add_argument(
+        "--force-document",
+        action="store_true",
+        help=(
+            "Run the document stage even when exported-library differential "
+            "finished with a non-zero exit code."
+        ),
+    )
     add_variation_mode_argument(parser)
     add_clustering_mode_argument(parser)
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -704,6 +754,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         config,
         stop_after_stage=stop_after_stage,
         no_cache=args.no_cache,
+        force_document=args.force_document,
     )
 
 
