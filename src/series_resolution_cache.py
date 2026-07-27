@@ -21,6 +21,8 @@ from excel_grapher.series_bindings import (
 )
 from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
+from src.graph_cache import prune_cache_entries_for_other_excel_grapher_versions
+
 SERIES_RESOLUTION_CACHE_SCHEMA_VERSION = "1.0.0"
 DEFAULT_SERIES_RESOLUTION_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / ".cache" / "series-resolution"
@@ -177,6 +179,9 @@ def get_or_build_series_resolution(
         loaded = load_series_resolution_payload(cache_key, cache_dir=resolved_cache_dir)
         if loaded is not None:
             input_series, output_series, internal_series = loaded
+            prune_cache_entries_for_other_excel_grapher_versions(
+                cache_dir=resolved_cache_dir,
+            )
             elapsed = time.perf_counter() - started
             print(f"derive_series: cache hit ({elapsed:.1f}s, key={cache_key[:12]})")
             return SeriesResolutionCacheResult(
@@ -214,6 +219,9 @@ def get_or_build_series_resolution(
             cache_dir=resolved_cache_dir,
         )
         save_elapsed = time.perf_counter() - save_started
+        prune_cache_entries_for_other_excel_grapher_versions(
+            cache_dir=resolved_cache_dir,
+        )
         print(
             "derive_series: cache miss "
             f"(build {build_elapsed:.1f}s, save {save_elapsed:.1f}s, key={cache_key[:12]})"
