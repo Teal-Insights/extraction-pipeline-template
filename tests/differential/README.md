@@ -9,7 +9,7 @@ library.
 |---|---|
 | **Golden master** | Trusted Excel workbook recalculated through COM automation |
 | **MVP oracle** | Python reimplementation (graph evaluator or exported package) |
-| **Absolute tolerance (`atol`)** | Maximum allowed numeric difference; use `1e-6` unless the model needs looser bounds |
+| **Hybrid tolerance (`atol` / `rtol`)** | Pass iff `abs_diff <= 1e-6` **or** `rel_diff <= 1e-12` (golden-anchored); see `technical_standard.md` §1.1 |
 
 ## Two harnesses
 
@@ -24,10 +24,11 @@ callers consume.
 
 Both harnesses import shared scenario types from
 [`differential_types.py`](differential_types.py) (`Scenario`, optional `Axis` /
-`AxisPoint`, and `ATOL`) and input-isolation helpers from
-[`differential_scenario_inputs.py`](differential_scenario_inputs.py). Golden-master cell reads go through
-[`differential_excel.py`](differential_excel.py), which sets xlwings
-`err_to_str=True` so Excel error cells (`#VALUE!`, `#N/A`, …) are returned as
+`AxisPoint`, `ATOL`, and `RTOL`) and input-isolation helpers from
+[`differential_scenario_inputs.py`](differential_scenario_inputs.py). Numeric
+comparison is shared via [`comparison_utils.py`](comparison_utils.py). Golden-master
+cell reads go through [`differential_excel.py`](differential_excel.py), which sets
+xlwings `err_to_str=True` so Excel error cells (`#VALUE!`, `#N/A`, …) are returned as
 strings rather than `None`. Workbook-specific hooks live at the bottom of each
 harness module.
 
