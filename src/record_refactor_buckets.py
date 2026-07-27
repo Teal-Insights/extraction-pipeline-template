@@ -263,7 +263,11 @@ def _cluster_contract_and_skip_reason(
             helper_name="key_dispatch_probe",
         )
         if plan is None:
-            return None, "operand_level_variation_unsupported"
+            # #132: the routing gate's rejection is no longer a hard skip. The
+            # context builder now routes these as member_sweep and lets verified
+            # mechanical synthesis decide, so report them as member_sweep rather
+            # than as an operand_level_variation_unsupported skip bucket.
+            return "member_sweep", None
         return "key_dispatch", None
     return contract, None
 
@@ -408,6 +412,7 @@ def record_refactor_buckets(
                     internals_path,
                     internal_binding_index=internal_binding_index,
                     address_to_series_id=resolved_address_to_series_id,
+                    bound_address_keys=resolved_bound_keys,
                     expected_helper_name=helper_name,
                     existing_helper_names=reserved_for_others,
                 )
