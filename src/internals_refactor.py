@@ -1111,6 +1111,7 @@ def _default_bound_address_keys() -> dict[str, dict[str, BindingKeyValue]]:
         graph_result.input_series,
         graph_result.output_series,
         graph_result.internal_series,
+        constant_series=graph_result.constant_series,
     )
 
 
