@@ -11,5 +11,6 @@ dist/
 docs/dependency-graph/
 artifacts/dependency-graph/
 artifacts/refactor-bucket-codegen/
+artifacts/stage-timings.json
 docs/human-hypothesis-graph/
 .env

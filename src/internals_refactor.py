@@ -40,6 +40,7 @@ from src.llm_providers import (
     provider_for_model,
 )
 from src.pipeline_context import projection_layout as active_projection_layout
+from src.pipeline_monitor import StageTimer
 from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
 from src.internal_bindings import InternalBindingIndex, internal_binding_for_address
 from src.refactor_bindings import (
@@ -5778,6 +5779,7 @@ def refactor_internals_all_clusters(
     bound_address_keys: dict[str, dict[str, BindingKeyValue]] | None = None,
     parity_gate: bool = True,
     layout: ProjectionColumnLayout | None = None,
+    timer: StageTimer | None = None,
 ) -> tuple[ClusterRefactorApplyResult, ...]:
     """Refactor every eligible unit in unified dependency order in two passes.
 
@@ -5817,6 +5819,10 @@ def refactor_internals_all_clusters(
     Pass ``bound_address_keys`` from the extract stage when available so cluster
     context construction does not call ``_default_bound_address_keys`` (which
     rebuilds the pipeline graph).
+
+    Pass ``timer`` to collect the Pass 1 / parity-gate / Pass 2 wall clock as
+    spans of the caller's refactor stage; every span is also logged, so callers
+    without a timer keep the same diagnostics.
     """
     pristine_source: str | None = None
     input_vectors: Sequence[Mapping[str, object]] | None = None
@@ -5886,7 +5892,21 @@ def refactor_internals_all_clusters(
     pass1_apply_seconds = 0.0
     pass1_validate_seconds = 0.0
     pass1_reindex_seconds = 0.0
+    pass1_context_seconds = 0.0
+    pass1_synthesize_seconds = 0.0
     timing_active = _pass1_unit_timing_active()
+
+    def _record_span(name: str, seconds: float, **metrics: int | float | str) -> None:
+        """Log one refactor span and attach it to the caller's stage timer."""
+        metric_text = ", ".join(f"{key}={value}" for key, value in metrics.items())
+        logger.info(
+            "refactor span %s: %.1fs%s",
+            name,
+            seconds,
+            f" ({metric_text})" if metric_text else "",
+        )
+        if timer is not None:
+            timer.record(name, seconds)
 
     def _unit_reads_addresses(members: Sequence[str], addresses: set[str]) -> bool:
         if not addresses:
@@ -6095,7 +6115,7 @@ def refactor_internals_all_clusters(
         ) - {helper_name}
         if len(cluster.members) == 1:
             _flush_mechanical_cluster_batch()
-            context_started = time.perf_counter() if timing_active else 0.0
+            context_started = time.perf_counter()
             singleton_ctx = build_singleton_refactor_context(
                 projection,
                 cluster,
@@ -6109,16 +6129,16 @@ def refactor_internals_all_clusters(
                 expected_helper_name=helper_name,
                 existing_helper_names=reserved_for_others,
             )
-            context_s = time.perf_counter() - context_started if timing_active else 0.0
+            context_s = time.perf_counter() - context_started
+            pass1_context_seconds += context_s
             if singleton_ctx is None:
                 continue
             if _SINGLETON_CONTEXT_OBSERVER is not None:
                 _SINGLETON_CONTEXT_OBSERVER(singleton_ctx)
-            synthesize_started = time.perf_counter() if timing_active else 0.0
+            synthesize_started = time.perf_counter()
             draft = _try_synthesize_singleton_body(singleton_ctx)
-            synthesize_s = (
-                time.perf_counter() - synthesize_started if timing_active else 0.0
-            )
+            synthesize_s = time.perf_counter() - synthesize_started
+            pass1_synthesize_seconds += synthesize_s
             if draft is not None:
                 internals_source = internals_index.source
                 existing_names = _function_names(
@@ -6213,7 +6233,7 @@ def refactor_internals_all_clusters(
                     mechanical=True,
                 )
                 continue
-            apply_started = time.perf_counter() if timing_active else 0.0
+            apply_started = time.perf_counter()
             singleton_result = refactor_internals_singleton(
                 singleton_ctx,
                 internals_path=internals_path,
@@ -6227,7 +6247,7 @@ def refactor_internals_all_clusters(
                 apply_source=current_source,
                 validate_module=False,
             )
-            apply_s = time.perf_counter() - apply_started if timing_active else 0.0
+            apply_s = time.perf_counter() - apply_started
             if not dry_run:
                 _record_singleton_name_delta(
                     live_function_names,
@@ -6253,7 +6273,7 @@ def refactor_internals_all_clusters(
             )
             continue
 
-        context_started = time.perf_counter() if timing_active else 0.0
+        context_started = time.perf_counter()
         cluster_ctx = build_cluster_refactor_context(
             projection,
             cluster,
@@ -6270,16 +6290,16 @@ def refactor_internals_all_clusters(
             expected_helper_name=helper_name,
             existing_helper_names=reserved_for_others,
         )
-        context_s = time.perf_counter() - context_started if timing_active else 0.0
+        context_s = time.perf_counter() - context_started
+        pass1_context_seconds += context_s
         if cluster_ctx is None:
             continue
         if _CLUSTER_CONTEXT_OBSERVER is not None:
             _CLUSTER_CONTEXT_OBSERVER(cluster_ctx)
-        synthesize_started = time.perf_counter() if timing_active else 0.0
+        synthesize_started = time.perf_counter()
         draft = _try_synthesize_cluster_body(cluster_ctx)
-        synthesize_s = (
-            time.perf_counter() - synthesize_started if timing_active else 0.0
-        )
+        synthesize_s = time.perf_counter() - synthesize_started
+        pass1_synthesize_seconds += synthesize_s
         if draft is not None:
             internals_source = internals_index.source
             existing_names = _function_names(internals_source, index=internals_index)
@@ -6344,7 +6364,7 @@ def refactor_internals_all_clusters(
         if dirty_addresses and _unit_reads_dirty(cluster.members):
             unit_reindex_s += _seal_index()
             unit_reindexed = True
-        apply_started = time.perf_counter() if timing_active else 0.0
+        apply_started = time.perf_counter()
         result = refactor_internals_cluster(
             cluster_ctx,
             internals_path=internals_path,
@@ -6358,7 +6378,7 @@ def refactor_internals_all_clusters(
             apply_source=current_source,
             validate_module=False,
         )
-        apply_s = time.perf_counter() - apply_started if timing_active else 0.0
+        apply_s = time.perf_counter() - apply_started
         if not dry_run:
             _record_cluster_name_delta(
                 live_function_names,
@@ -6398,17 +6418,17 @@ def refactor_internals_all_clusters(
         pass1_apply_count,
         len(ordered_units),
     )
-    logger.info(
-        "pass1 timings: apply=%.1fs validate=%.1fs reindex=%.1fs reindex_count=%d "
-        "apply_batches=%d applied_units=%d elapsed=%.1fs",
+    _record_span("pass1_context", pass1_context_seconds, units=len(ordered_units))
+    _record_span("pass1_synthesize", pass1_synthesize_seconds)
+    _record_span(
+        "pass1_apply",
         pass1_apply_seconds,
-        pass1_validate_seconds,
-        pass1_reindex_seconds,
-        pass1_reindex_count,
-        pass1_batch_count,
-        pass1_apply_count,
-        pass1_elapsed,
+        apply_batches=pass1_batch_count,
+        applied_units=pass1_apply_count,
     )
+    _record_span("pass1_validate", pass1_validate_seconds)
+    _record_span("pass1_reindex", pass1_reindex_seconds, count=pass1_reindex_count)
+    _record_span("pass1", pass1_elapsed)
 
     # Use the validated live source for checkpoint / parity / promote. After the
     # end-of-pass seal this matches ``internals_index.source``; binding all three
@@ -6424,6 +6444,7 @@ def refactor_internals_all_clusters(
             pass1_apply_count,
         )
 
+    parity_started = time.perf_counter()
     if parity_gate and pending_semantic and pristine_source is not None:
         from src.refactor_parity_gate import (
             MechanicalParityUnit,
@@ -6444,10 +6465,16 @@ def refactor_internals_all_clusters(
             ],
             input_vectors=input_vectors if input_vectors is not None else (),
         )
+    _record_span(
+        "mechanical_parity_gate",
+        time.perf_counter() - parity_started,
+        units=len(pending_semantic) if parity_gate else 0,
+    )
 
     if not dry_run and refactored_any:
         internals_path.write_text(mechanical_source, encoding="utf-8", newline="\n")
 
+    pass2_started = time.perf_counter()
     if pending_semantic:
         internals_index, prepared_by_unit = _run_semantic_naming_pass(
             pending_semantic,
@@ -6462,7 +6489,13 @@ def refactor_internals_all_clusters(
             prepared_by_unit_id=prepared_by_unit,
             named_source=internals_index.source,
         )
+    _record_span(
+        "pass2_semantic_naming",
+        time.perf_counter() - pass2_started,
+        units=len(pending_semantic),
+    )
 
+    phase_c_started = time.perf_counter()
     if not dry_run and refactored_any:
         source = internals_path.read_text(encoding="utf-8")
         updated, phase_c_pruned = apply_phase_c(source)
@@ -6486,6 +6519,7 @@ def refactor_internals_all_clusters(
                 response=last.response,
                 phase_c_pruned=phase_c_pruned,
             )
+    _record_span("phase_c", time.perf_counter() - phase_c_started)
 
     return tuple(results)
 
