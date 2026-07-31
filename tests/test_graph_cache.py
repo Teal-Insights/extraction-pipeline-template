@@ -6,7 +6,7 @@ from dataclasses import replace
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, cast
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from excel_grapher.core.cell_types import RealBetween
@@ -543,9 +543,15 @@ def test_clear_projection_cache_removes_entries(
 
 def test_extract_graph_cli_supports_no_cache(
     synthetic_config,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.extraction_pipeline import main
 
+    monkeypatch.setattr(
+        "src.extraction_pipeline.stage_timings_path",
+        lambda _repo_root: tmp_path / "stage-timings.json",
+    )
     with patch(
         "src.extraction_pipeline.load_pipeline_config", return_value=synthetic_config
     ):
@@ -557,5 +563,5 @@ def test_extract_graph_cli_supports_no_cache(
                     main(["--extract-graph", "--no-cache"])
 
     extract.assert_called_once_with(
-        synthetic_config, no_cache=True, force_rebuild=False
+        synthetic_config, no_cache=True, force_rebuild=False, timings=ANY
     )

@@ -68,6 +68,12 @@ from src.qmd_python_validation import (
 from src.bindings_validation_cache import get_or_build_bindings_validation
 from src.graph_cache import get_or_build_dependency_graph
 from src.series_resolution_cache import get_or_build_series_resolution
+from src.stage_timings import (
+    PipelineTimings,
+    record_cache_result,
+    stage_span,
+    stage_timings_path,
+)
 from src.subgraph_projection import build_refactor_projection
 
 SeriesResolutionList = Sequence[Mapping[str, Any]]
@@ -158,6 +164,7 @@ def extract_dependency_graph_result(
     *,
     no_cache: bool = False,
     force_rebuild: bool = False,
+    timings: PipelineTimings | None = None,
 ) -> DependencyGraphExtraction:
     """Build the pipeline dependency graph and collect stage timings."""
     timer = StageTimer()
@@ -170,6 +177,7 @@ def extract_dependency_graph_result(
             stall_log_path=stall_log_path,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
+            timings=timings,
         )
         graph = graph_result.graph
         series_bindings = graph_result.series_bindings
@@ -263,14 +271,24 @@ def extract_dependency_graph(
     *,
     no_cache: bool = False,
     force_rebuild: bool = False,
+    timings: PipelineTimings | None = None,
 ) -> dict[str, Any]:
     """Build the dependency graph, write review artifacts, and return the summary."""
     extraction = extract_dependency_graph_result(
         config,
         no_cache=no_cache,
         force_rebuild=force_rebuild,
+        timings=timings,
     )
     summary = write_dependency_graph_artifacts(extraction, config)
+    if timings is not None:
+        # ``elapsed_seconds`` already spans the graph build plus the artifact
+        # write, so the stage is recorded from the summary rather than reopened.
+        timings.record_stage(
+            "extract",
+            elapsed_seconds=summary["elapsed_seconds"],
+            spans=extraction.timer.as_dict(),
+        )
     extraction.timer.print_summary(header="Extract stage timings")
     stall_log_path = resolve_stall_log_path(config.graph_output_dir)
     if stall_log_path.is_file():
@@ -319,6 +337,7 @@ def build_pipeline_graph(
     stall_log_path: Path | None = None,
     no_cache: bool = False,
     force_rebuild: bool = False,
+    timings: PipelineTimings | None = None,
 ) -> PipelineGraphResult:
     def stage(name: str):
         if timer is None:
@@ -349,6 +368,7 @@ def build_pipeline_graph(
         )
         graph = graph_result.graph
         graph_cache_key = graph_result.cache_key
+        record_cache_result(timings, "dependency-graph", graph_result)
 
     with stage("validate_series_bindings"):
         validation_result = get_or_build_bindings_validation(
@@ -359,6 +379,7 @@ def build_pipeline_graph(
             no_cache=no_cache,
             force_rebuild=force_rebuild,
         )
+        record_cache_result(timings, "bindings-validation", validation_result)
         binding_validation_report = validation_result.report
         if not binding_validation_report["ok"]:
             raise ValueError(
@@ -374,6 +395,7 @@ def build_pipeline_graph(
             no_cache=no_cache,
             force_rebuild=force_rebuild,
         )
+        record_cache_result(timings, "series-resolution", series_result)
         input_series = series_result.input_series
         output_series = series_result.output_series
         internal_series = series_result.internal_series
@@ -415,18 +437,22 @@ def run_export_stage(
     *,
     no_cache: bool = False,
     force_rebuild: bool = False,
+    timings: PipelineTimings | None = None,
 ) -> ExportStageState:
     """Build the graph, generate the package under dist/, and seed the harness."""
     configure_logging()
-    timer = StageTimer()
     stall_log_path = resolve_stall_log_path(config.graph_output_dir)
-    with profile_if_enabled(config.graph_output_dir):
+    with (
+        profile_if_enabled(config.graph_output_dir, basename="export"),
+        stage_span(timings, "export") as timer,
+    ):
         graph_result = build_pipeline_graph(
             config,
             timer=timer,
             stall_log_path=stall_log_path,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
+            timings=timings,
         )
         graph = graph_result.graph
         series_bindings = graph_result.series_bindings
@@ -434,15 +460,42 @@ def run_export_stage(
         internal_binding_index = build_internal_binding_index(
             graph_result.internal_series
         )
-    timer.print_summary()
-    if stall_log_path.is_file():
-        print(f"Stall diagnostics: {stall_log_path}")
-    refactor_projection = build_refactor_projection(
-        graph,
-        graph_cache_key=graph_cache_key,
-        no_cache=no_cache,
-        force_rebuild=force_rebuild,
-    )
+        timer.print_summary()
+        if stall_log_path.is_file():
+            print(f"Stall diagnostics: {stall_log_path}")
+        refactor_projection = build_refactor_projection(
+            graph,
+            graph_cache_key=graph_cache_key,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+            timings=timings,
+        )
+        return _generate_export_package(
+            config,
+            graph_result=graph_result,
+            series_bindings=series_bindings,
+            graph_cache_key=graph_cache_key,
+            refactor_projection=refactor_projection,
+            internal_binding_index=internal_binding_index,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+            timings=timings,
+        )
+
+
+def _generate_export_package(
+    config: PipelineConfig,
+    *,
+    graph_result: PipelineGraphResult,
+    series_bindings: WorkbookSeriesBindings,
+    graph_cache_key: str,
+    refactor_projection: Any,
+    internal_binding_index: Any,
+    no_cache: bool,
+    force_rebuild: bool,
+    timings: PipelineTimings | None,
+) -> ExportStageState:
+    """Generate the package modules under dist/ and seed the validation harness."""
     proj_cache_key = projection_cache_key(graph_cache_key=graph_cache_key)
     targets = list(config.targets)
     unpack_return = True
@@ -473,6 +526,7 @@ def run_export_stage(
         no_cache=no_cache,
         force_rebuild=force_rebuild,
     )
+    record_cache_result(timings, "codegen", codegen_result)
     modules = dict(codegen_result.modules)
     api_source = modules.get("api.py")
     if api_source is not None:
@@ -533,7 +587,11 @@ tests/results/local/
     )
 
 
-def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
+def run_refactor_stage(
+    state: ExportStageState,
+    *,
+    timings: PipelineTimings | None = None,
+) -> RefactorStageState:
     """Cluster formulas and rewrite internals behind the parity gate."""
     from src.formula_clustering import cluster_graph_formulas
     from src.internals_refactor import refactor_internals_all_clusters
@@ -544,55 +602,66 @@ def run_refactor_stage(state: ExportStageState) -> RefactorStageState:
 
     config = state.config
     graph_result = state.graph_result
-    bound_address_keys = build_bound_address_keys(
-        graph_result.input_series,
-        graph_result.output_series,
-        graph_result.internal_series,
-        constant_series=graph_result.constant_series,
-    )
-    address_to_series_id = build_address_to_series_id(
-        graph_result.internal_series,
-        output_series=graph_result.output_series,
-        input_series=graph_result.input_series,
-        constant_series=graph_result.constant_series,
-    )
-    print("clustering: partitioning formulas…", flush=True)
-    clustering_started = time.perf_counter()
-    formula_clusters = cluster_graph_formulas(
-        state.refactor_projection,
-        bound_address_keys=bound_address_keys,
-        variation_mode=config.variation_mode,
-        clustering_mode=config.clustering_mode,
-        address_to_series_id=address_to_series_id,
-        workbook_path=config.workbook_path,
-        layout=config.projection_layout,
-    )
-    formula_count = sum(len(cluster.members) for cluster in formula_clusters)
-    print(
-        f"clustering: {formula_count} formulas → {len(formula_clusters)} clusters "
-        f"({time.perf_counter() - clustering_started:.1f}s)",
-        flush=True,
-    )
-    print(
-        f"internals_refactor: rewriting {len(formula_clusters)} clusters…",
-        flush=True,
-    )
-    refactor_started = time.perf_counter()
-    refactor_internals_all_clusters(
-        state.refactor_projection,
-        formula_clusters,
-        internals_path=state.package_root / "internals.py",
-        source_graph=graph_result.graph,
-        internal_binding_index=state.internal_binding_index,
-        bound_address_keys=bound_address_keys,
-        bindings_path=config.bindings_path,
-        workbook_path=config.workbook_path,
-        address_to_series_id=address_to_series_id,
-    )
-    print(
-        f"internals_refactor: done ({time.perf_counter() - refactor_started:.1f}s)",
-        flush=True,
-    )
+    with (
+        profile_if_enabled(config.graph_output_dir, basename="refactor"),
+        stage_span(timings, "refactor") as timer,
+    ):
+        bindings_started = time.perf_counter()
+        bound_address_keys = build_bound_address_keys(
+            graph_result.input_series,
+            graph_result.output_series,
+            graph_result.internal_series,
+            constant_series=graph_result.constant_series,
+        )
+        address_to_series_id = build_address_to_series_id(
+            graph_result.internal_series,
+            output_series=graph_result.output_series,
+            input_series=graph_result.input_series,
+            constant_series=graph_result.constant_series,
+        )
+        timer.record("build_refactor_bindings", time.perf_counter() - bindings_started)
+        print("clustering: partitioning formulas…", flush=True)
+        clustering_started = time.perf_counter()
+        formula_clusters = cluster_graph_formulas(
+            state.refactor_projection,
+            bound_address_keys=bound_address_keys,
+            variation_mode=config.variation_mode,
+            clustering_mode=config.clustering_mode,
+            address_to_series_id=address_to_series_id,
+            workbook_path=config.workbook_path,
+            layout=config.projection_layout,
+        )
+        clustering_seconds = time.perf_counter() - clustering_started
+        timer.record("cluster_graph_formulas", clustering_seconds)
+        formula_count = sum(len(cluster.members) for cluster in formula_clusters)
+        print(
+            f"clustering: {formula_count} formulas → {len(formula_clusters)} clusters "
+            f"({clustering_seconds:.1f}s)",
+            flush=True,
+        )
+        print(
+            f"internals_refactor: rewriting {len(formula_clusters)} clusters…",
+            flush=True,
+        )
+        refactor_started = time.perf_counter()
+        refactor_internals_all_clusters(
+            state.refactor_projection,
+            formula_clusters,
+            internals_path=state.package_root / "internals.py",
+            source_graph=graph_result.graph,
+            internal_binding_index=state.internal_binding_index,
+            bound_address_keys=bound_address_keys,
+            bindings_path=config.bindings_path,
+            workbook_path=config.workbook_path,
+            address_to_series_id=address_to_series_id,
+            timer=timer,
+        )
+        refactor_seconds = time.perf_counter() - refactor_started
+        timer.record("internals_refactor", refactor_seconds)
+        print(
+            f"internals_refactor: done ({refactor_seconds:.1f}s)",
+            flush=True,
+        )
     return RefactorStageState(config=config)
 
 
@@ -600,18 +669,62 @@ def run_validate_stage(
     state: RefactorStageState,
     *,
     no_cache: bool = False,
+    timings: PipelineTimings | None = None,
 ) -> int | None:
     """Run post-refactor differential and ship reference reports into dist/.
 
     Returns the differential harness exit code when it ran, ``0`` on a cache
     hit, or ``None`` when differential was skipped (for example under CI).
     """
-    exit_code = run_post_refactor_differential(
-        config=state.config,
-        no_cache=no_cache,
-    )
-    export_reference_reports(config=state.config)
+    config = state.config
+    with (
+        profile_if_enabled(config.graph_output_dir, basename="validate"),
+        stage_span(timings, "validate") as timer,
+    ):
+        differential_started = time.perf_counter()
+        exit_code = run_post_refactor_differential(
+            config=config,
+            no_cache=no_cache,
+        )
+        timer.record(
+            "post_refactor_differential",
+            time.perf_counter() - differential_started,
+        )
+        reports_started = time.perf_counter()
+        export_reference_reports(config=config)
+        timer.record("export_reference_reports", time.perf_counter() - reports_started)
     return exit_code
+
+
+def run_document_stage(
+    config: PipelineConfig,
+    *,
+    timings: PipelineTimings | None = None,
+) -> None:
+    """Rewrite the user guide against the exported package.
+
+    Raises :class:`DocumentStageError` on failure; the export and differential
+    artifacts written by earlier stages are left in place for diagnosis.
+    """
+    from src.documentation_pipeline import run_documentation_pipeline
+
+    with (
+        profile_if_enabled(config.graph_output_dir, basename="document"),
+        stage_span(timings, "document"),
+    ):
+        try:
+            run_documentation_pipeline(config)
+        except Exception as error:
+            logger.exception(
+                "Document stage failed after export/differential artifacts were written"
+            )
+            print(
+                "Document stage failed; export package and differential reports under "
+                f"{config.dist_root} and {config.differential_report_dir_rel} are "
+                "preserved for diagnosis.",
+                flush=True,
+            )
+            raise DocumentStageError(f"document stage failed: {error}") from error
 
 
 def run_pipeline(
@@ -629,11 +742,36 @@ def run_pipeline(
             f"expected one of {list(PIPELINE_STAGES)}"
         )
 
+    timings = PipelineTimings(output_path=stage_timings_path(config.repo_root))
+    try:
+        _run_pipeline_stages(
+            config,
+            timings=timings,
+            stop_after_stage=stop_after_stage,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+            force_document=force_document,
+        )
+    finally:
+        timings.flush()
+        print(f"Stage timings: {timings.output_path}", flush=True)
+
+
+def _run_pipeline_stages(
+    config: PipelineConfig,
+    *,
+    timings: PipelineTimings,
+    stop_after_stage: PipelineStageName | str,
+    no_cache: bool,
+    force_rebuild: bool,
+    force_document: bool,
+) -> None:
     if stop_after_stage == "extract":
         extract_dependency_graph(
             config,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
+            timings=timings,
         )
         return
 
@@ -641,15 +779,20 @@ def run_pipeline(
         config,
         no_cache=no_cache,
         force_rebuild=force_rebuild,
+        timings=timings,
     )
     if stop_after_stage == "export":
         return
 
-    refactor_state = run_refactor_stage(export_state)
+    refactor_state = run_refactor_stage(export_state, timings=timings)
     if stop_after_stage == "refactor":
         return
 
-    differential_exit_code = run_validate_stage(refactor_state, no_cache=no_cache)
+    differential_exit_code = run_validate_stage(
+        refactor_state,
+        no_cache=no_cache,
+        timings=timings,
+    )
     if stop_after_stage == "validate":
         return
 
@@ -667,21 +810,7 @@ def run_pipeline(
         )
         return
 
-    from src.documentation_pipeline import run_documentation_pipeline
-
-    try:
-        run_documentation_pipeline(config)
-    except Exception as error:
-        logger.exception(
-            "Document stage failed after export/differential artifacts were written"
-        )
-        print(
-            "Document stage failed; export package and differential reports under "
-            f"{config.dist_root} and {config.differential_report_dir_rel} are "
-            "preserved for diagnosis.",
-            flush=True,
-        )
-        raise DocumentStageError(f"document stage failed: {error}") from error
+    run_document_stage(config, timings=timings)
 
 
 def export_generated_package(

@@ -5552,6 +5552,75 @@ def test_refactor_internals_all_clusters_consumes_refactor_schedule(
     ]
 
 
+def test_refactor_internals_all_clusters_records_spans_on_the_stage_timer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pass 1 / parity-gate / Pass 2 wall clock lands on the caller's StageTimer."""
+    import src.internals_refactor as module
+    from types import SimpleNamespace
+
+    from src.formula_clustering import cluster_graph_formulas
+    from src.pipeline_monitor import StageTimer
+    from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
+
+    graph, bindings = inter_cluster_cycle_graph()
+    clusters = cluster_graph_formulas(
+        graph, bound_address_keys=bindings, clustering_mode="ast"
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_b2(ctx):\n    return 1.0\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        module,
+        "build_singleton_refactor_context",
+        lambda _projection, cluster, _internals_path, **_kwargs: SimpleNamespace(
+            address=cluster.members[0]
+        ),
+    )
+    monkeypatch.setattr(
+        module, "refactor_internals_singleton", lambda *_a, **_k: object()
+    )
+    monkeypatch.setattr(
+        module, "build_cluster_refactor_context", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(module, "_try_synthesize_singleton_body", lambda _ctx: None)
+    monkeypatch.setattr(module, "_try_synthesize_cluster_body", lambda _ctx: None)
+
+    timer = StageTimer()
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        dry_run=True,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!B2": "family_b",
+            "Engine!C2": "family_c",
+            "Engine!B3": "family_b",
+            "Engine!C3": "family_c",
+        },
+        timer=timer,
+    )
+
+    spans = timer.as_dict()
+    assert {
+        "pass1",
+        "pass1_context",
+        "pass1_synthesize",
+        "pass1_apply",
+        "pass1_validate",
+        "pass1_reindex",
+        "mechanical_parity_gate",
+        "pass2_semantic_naming",
+    } <= set(spans)
+    assert all(seconds >= 0.0 for seconds in spans.values())
+
+
 def test_refactor_internals_all_clusters_passes_unique_allocated_helper_names(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
