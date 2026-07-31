@@ -34,6 +34,7 @@ from src.projection_cache import (
 from src.bindings_validation_cache import DEFAULT_BINDINGS_VALIDATION_CACHE_DIR
 from src.cluster_cache import DEFAULT_CLUSTER_CACHE_DIR
 from src.codegen_cache import DEFAULT_CODEGEN_CACHE_DIR
+from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
 from src.series_resolution_cache import DEFAULT_SERIES_RESOLUTION_CACHE_DIR
 from src.subgraph_projection import build_refactor_projection
 from tests.fixtures.synthetic_pipeline import (
@@ -46,6 +47,7 @@ from tests.fixtures.test_state import (
     REPO_CLUSTER_CACHE_DIR,
     REPO_CODEGEN_CACHE_DIR,
     REPO_GRAPH_CACHE_DIR,
+    REPO_INTERNALS_CACHE_DIR,
     REPO_PROJECTION_CACHE_DIR,
     REPO_SERIES_RESOLUTION_CACHE_DIR,
 )
@@ -77,6 +79,7 @@ def test_pytest_uses_isolated_pipeline_disk_cache() -> None:
     assert DEFAULT_BINDINGS_VALIDATION_CACHE_DIR != REPO_BINDINGS_VALIDATION_CACHE_DIR
     assert DEFAULT_CODEGEN_CACHE_DIR != REPO_CODEGEN_CACHE_DIR
     assert DEFAULT_CLUSTER_CACHE_DIR != REPO_CLUSTER_CACHE_DIR
+    assert DEFAULT_INTERNALS_CACHE_DIR != REPO_INTERNALS_CACHE_DIR
 
 
 @pytest.fixture

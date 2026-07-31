@@ -4745,7 +4745,8 @@ def test_pass_one_writes_mechanical_checkpoint_before_parity_gate(
     ]
     assert gate_kwargs["mechanical_source"] == version_sources[4]
     assert internals_path.read_text(encoding="utf-8") == version_sources[4]
-    assert checkpoint_path.read_text(encoding="utf-8") == version_sources[4]
+    assert not checkpoint_path.exists()
+    assert checkpoint_path.parent != internals_path.parent
 
 
 def test_pass_one_parity_failure_keeps_package_internals_pristine(
@@ -4850,6 +4851,25 @@ def test_pass_one_parity_failure_keeps_package_internals_pristine(
     assert checkpoint_path.is_file()
     assert checkpoint_path.read_text(encoding="utf-8") == version_sources[4]
     assert internals_path.read_text(encoding="utf-8") == pristine
+    assert checkpoint_path.parent != internals_path.parent
+    assert not (internals_path.parent / module.MECHANICAL_INTERNALS_CHECKPOINT_NAME).exists()
+
+
+def test_mechanical_checkpoint_namespaces_distinct_package_roots(tmp_path: Path) -> None:
+    import src.internals_refactor as module
+
+    dist_internals = tmp_path / "dist" / "pkg" / "internals.py"
+    lab_internals = tmp_path / "artifacts" / "refactor-lab" / "pkg" / "internals.py"
+    dist_checkpoint = module.mechanical_internals_checkpoint_path(dist_internals)
+    lab_checkpoint = module.mechanical_internals_checkpoint_path(lab_internals)
+
+    assert dist_checkpoint != lab_checkpoint
+    assert dist_checkpoint.name == module.MECHANICAL_INTERNALS_CHECKPOINT_NAME
+    assert lab_checkpoint.name == module.MECHANICAL_INTERNALS_CHECKPOINT_NAME
+    assert dist_checkpoint.parent.parent == module.DEFAULT_INTERNALS_CACHE_DIR
+    assert lab_checkpoint.parent.parent == module.DEFAULT_INTERNALS_CACHE_DIR
+    assert dist_internals.parent not in dist_checkpoint.parents
+    assert lab_internals.parent not in lab_checkpoint.parents
 
 
 def test_pass_one_defers_full_module_validate_until_end(

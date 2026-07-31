@@ -104,7 +104,7 @@ def test_run_export_stage_prints_codegen_stage_boundary(
             return_value="series_docs",
         ),
         patch("src.extraction_pipeline.CodeGenerator") as generator_cls,
-        patch("src.extraction_pipeline.seed_validation_harness"),
+        patch("src.package_materialize.seed_validation_harness"),
     ):
         generator = generator_cls.return_value.__enter__.return_value
         generator.generate_modules.return_value = {"internals.py": "pass\n"}
@@ -152,6 +152,7 @@ def test_run_refactor_stage_prints_clustering_and_refactor_boundaries(
         bound_address_keys={},
         address_to_series_id={},
         package_root=package_root,
+        codegen_cache_key="codegen-key",
     )
     from src.cluster_cache import ClusterCacheResult
 
@@ -521,6 +522,7 @@ def test_run_refactor_stage_records_spans_and_profiles(tmp_path: Path) -> None:
         bound_address_keys={},
         address_to_series_id={},
         package_root=package_root,
+        codegen_cache_key="codegen-key",
     )
     timings = PipelineTimings()
     from src.cluster_cache import ClusterCacheResult
@@ -573,6 +575,7 @@ def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(
         bound_address_keys={},
         address_to_series_id={},
         package_root=package_root,
+        codegen_cache_key="codegen-key",
     )
     from src.cluster_cache import ClusterCacheResult
 
@@ -595,6 +598,7 @@ def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(
 
     assert refactor.call_args.kwargs["timer"] is not None
     assert refactor.call_args.kwargs["refactor_schedule"] == ()
+    assert refactor.call_args.kwargs["codegen_cache_key"] == "codegen-key"
 
 
 def test_run_validate_stage_records_spans_and_profiles(tmp_path: Path) -> None:

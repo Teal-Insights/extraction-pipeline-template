@@ -139,7 +139,7 @@ def _export_generated_package_with_mocked_codegen(
                 with patch("src.extraction_pipeline.CodeGenerator") as generator_cls:
                     generator = generator_cls.return_value.__enter__.return_value
                     generator.generate_modules.return_value = {"internals.py": "pass\n"}
-                    with patch("src.extraction_pipeline.seed_validation_harness"):
+                    with patch("src.package_materialize.seed_validation_harness"):
                         with patch(
                             "src.cluster_cache.get_or_build_clusters_and_schedule",
                             get_or_build_clusters_and_schedule,

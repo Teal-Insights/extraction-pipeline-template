@@ -30,20 +30,16 @@ from src.internal_bindings import (
 )
 from src.internal_binding_coverage import InternalBindingCoverageReport
 from src.refactor_bindings import BindingKeyValue
-from src.soft_error_compute_codegen import (
-    ensure_xl_error_exception_import,
-    rewrite_compute_measure_assignment,
-)
 from src.codegen_cache import (
     get_or_build_codegen_modules,
     guide_fingerprint,
-    write_generated_modules,
 )
 from src.docstring_callback import configure_docstring_callback
 from src.differential_validation import run_post_refactor_differential
-from src.export_validation_assets import (
-    export_reference_reports,
-    seed_validation_harness,
+from src.export_validation_assets import export_reference_reports
+from src.package_materialize import (
+    materialize_package,
+    try_materialize_refactored_package_from_cache,
 )
 from src.projection_cache import projection_cache_key
 from src.logging_config import configure_logging
@@ -62,12 +58,6 @@ from src.pipeline_monitor import (
     monitor_pipeline_stage,
     profile_if_enabled,
     resolve_stall_log_path,
-)
-from src.qmd_python_validation import (
-    DOCUMENTATION_BASELINE_DEV_DEPS,
-    VALIDATION_BASELINE_DEV_DEPS,
-    render_dist_pyproject_toml,
-    write_dist_readme,
 )
 from src.bindings_validation_cache import get_or_build_bindings_validation
 from src.graph_cache import get_or_build_dependency_graph
@@ -150,6 +140,7 @@ class ExportStageState:
     bound_address_keys: dict[str, dict[str, BindingKeyValue]]
     address_to_series_id: dict[str, str]
     package_root: Path
+    codegen_cache_key: str
 
 
 @dataclass(frozen=True)
@@ -564,56 +555,14 @@ def _generate_export_package(
     )
     timer.record("codegen", time.perf_counter() - codegen_started)
     record_cache_result(timings, "codegen", codegen_result)
-    modules = dict(codegen_result.modules)
-    api_source = modules.get("api.py")
-    if api_source is not None:
-        # Capture Excel error codes in OBS_VALUE instead of aborting the series.
-        # No-op on excel-grapher 3.17+ output, which emits soft-capture natively
-        # (Teal-Insights/excel-grapher#436); still repairs older cached api.py.
-        rewritten = "\n".join(
-            rewrite_compute_measure_assignment(api_source.splitlines())
-        )
-        if api_source.endswith("\n"):
-            rewritten += "\n"
-        modules["api.py"] = ensure_xl_error_exception_import(rewritten)
 
     package_started = time.perf_counter()
     package_root = config.package_root
-    write_generated_modules(package_root, modules)
-
-    generated_module_names = frozenset(
-        {"__init__.py", "api.py", "data.py", "runtime.py", "internals.py"}
-    )
-
-    for stale_module in generated_module_names:
-        stale_path = config.dist_root / stale_module
-        if stale_path.is_file():
-            stale_path.unlink()
-
-    gitignore_content = """
-*.egg-info/
-*.pyc
-__pycache__/
-.venv/
-_validate_user_guide_cells.py
-tests/results/local/
-"""
-
-    (config.dist_root / ".gitignore").write_text(gitignore_content, encoding="utf-8")
-    (config.dist_root / "pyproject.toml").write_text(
-        render_dist_pyproject_toml(
-            dev_dependencies=list(DOCUMENTATION_BASELINE_DEV_DEPS),
-            validation_dependencies=list(VALIDATION_BASELINE_DEV_DEPS),
-            metadata=config.dist_metadata,
-        ),
-        encoding="utf-8",
-    )
-    write_dist_readme(config.dist_root, metadata=config.dist_metadata)
-
-    seed_validation_harness(config=config)
+    materialize_package(config, codegen_key=codegen_result.cache_key)
     timer.record("write_export_package", time.perf_counter() - package_started)
     print(
-        f"codegen: {len(modules)} modules ({codegen_result.elapsed_seconds:.1f}s)",
+        f"codegen: {len(codegen_result.modules)} modules "
+        f"({codegen_result.elapsed_seconds:.1f}s)",
         flush=True,
     )
 
@@ -625,6 +574,7 @@ tests/results/local/
         bound_address_keys=bound_address_keys,
         address_to_series_id=address_to_series_id,
         package_root=package_root,
+        codegen_cache_key=codegen_result.cache_key,
     )
 
 
@@ -645,6 +595,16 @@ def run_refactor_stage(
         profile_if_enabled(config.graph_output_dir, basename="refactor"),
         stage_span(timings, "refactor") as timer,
     ):
+        if try_materialize_refactored_package_from_cache(
+            config, codegen_key=state.codegen_cache_key
+        ):
+            print(
+                "internals_refactor: skipped "
+                f"(adopted dist/ cache keys for codegen={state.codegen_cache_key[:12]})",
+                flush=True,
+            )
+            return RefactorStageState(config=config)
+
         bindings_started = time.perf_counter()
         bound_address_keys = state.bound_address_keys
         address_to_series_id = state.address_to_series_id
@@ -693,6 +653,7 @@ def run_refactor_stage(
             address_to_series_id=address_to_series_id,
             refactor_schedule=cluster_result.schedule,
             timer=timer,
+            codegen_cache_key=state.codegen_cache_key,
         )
         refactor_seconds = time.perf_counter() - refactor_started
         # Do not record an ``internals_refactor`` rollup span: Pass 1 leaf spans

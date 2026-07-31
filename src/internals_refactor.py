@@ -104,11 +104,25 @@ REFACTOR_PROMPT_VERSION = 32
 CLUSTER_REFACTOR_PROMPT_MEMBER_LIMIT = 30
 _FINGERPRINT_FALLBACK_COUNT = 0
 MECHANICAL_INTERNALS_CHECKPOINT_NAME = "internals.mechanical.py"
+DEFAULT_INTERNALS_CACHE_DIR = repo_root / ".cache" / "internals"
+
+
+def package_root_checkpoint_namespace(package_root: Path) -> str:
+    """Stable directory name for a package root under ``.cache/internals/``."""
+    return hashlib.sha256(str(package_root.resolve()).encode()).hexdigest()[:16]
 
 
 def mechanical_internals_checkpoint_path(internals_path: Path) -> Path:
-    """Sidecar path for the Pass 1 mechanical module prior to package promotion."""
-    return internals_path.with_name(MECHANICAL_INTERNALS_CHECKPOINT_NAME)
+    """Pass 1 mechanical checkpoint under ``.cache/internals/``, per package root.
+
+    Namespaced by the resolved package root so lab runs
+    (``artifacts/refactor-lab``, ``artifacts/refactor-bucket-codegen``) do not
+    collide with a real ``dist/<package>/`` run. The checkpoint is not a package
+    module and must not live under ``dist/``.
+    """
+    package_root = internals_path.parent
+    namespace = package_root_checkpoint_namespace(package_root)
+    return DEFAULT_INTERNALS_CACHE_DIR / namespace / MECHANICAL_INTERNALS_CHECKPOINT_NAME
 
 
 RefactorPromptObserver = Callable[[str, str, str], None]
@@ -5795,6 +5809,7 @@ def refactor_internals_all_clusters(
     layout: ProjectionColumnLayout | None = None,
     refactor_schedule: tuple[RefactorUnit, ...] | None = None,
     timer: StageTimer | None = None,
+    codegen_cache_key: str | None = None,
 ) -> tuple[ClusterRefactorApplyResult, ...]:
     """Refactor every eligible unit in unified dependency order in two passes.
 
@@ -5823,13 +5838,14 @@ def refactor_internals_all_clusters(
 
     Disk flush boundary: Pass 1 never writes ``internals_path`` per unit.
     Cumulative source is threaded through the in-memory ``current_source``. After
-    Pass 1 structural validate succeeds, the mechanical module is checkpointed to
-    a sidecar (``internals.mechanical.py`` next to ``internals_path``) before the
-    batched parity gate runs so a mid-gate kill does not lose the apply work.
+    Pass 1 structural validate succeeds, the mechanical module is checkpointed
+    under ``.cache/internals/<package-namespace>/internals.mechanical.py`` before
+    the batched parity gate runs so a mid-gate kill does not lose the apply work.
     The package ``internals_path`` is promoted only after the gate passes (or when
     the gate is skipped), still before Pass 2 — unless ``dry_run``. A parity
-    failure leaves the package path pristine and retains the sidecar. Pass 2 and
-    Phase C keep their own single writes.
+    failure leaves the package path pristine and retains the checkpoint. On
+    successful promotion the checkpoint is deleted. Pass 2 and Phase C keep their
+    own single writes.
 
     Pass ``bound_address_keys`` from the extract stage when available so cluster
     context construction does not fall back to the series-derived cache lookup.
@@ -5866,7 +5882,13 @@ def refactor_internals_all_clusters(
     if parity_gate:
         from src.refactor_parity_gate import build_default_input_vectors
 
-        pristine_source = internals_index.source
+        if codegen_cache_key is not None:
+            from src.package_materialize import load_pristine_internals_from_codegen
+
+            pristine_source = load_pristine_internals_from_codegen(codegen_cache_key)
+        else:
+            # Lab/unit-test path when no codegen key is threaded through.
+            pristine_source = internals_index.source
         input_vectors = build_default_input_vectors()
 
     runtime_source = _read_runtime_source(internals_path)
@@ -6464,6 +6486,7 @@ def refactor_internals_all_clusters(
     mechanical_source = current_source
     checkpoint_path = mechanical_internals_checkpoint_path(internals_path)
     if not dry_run and refactored_any:
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint_path.write_text(mechanical_source, encoding="utf-8", newline="\n")
         logger.info(
             "pass1 mechanical checkpoint: path=%s bytes=%d applied_units=%d",
@@ -6501,6 +6524,7 @@ def refactor_internals_all_clusters(
 
     if not dry_run and refactored_any:
         internals_path.write_text(mechanical_source, encoding="utf-8", newline="\n")
+        checkpoint_path.unlink(missing_ok=True)
 
     pass2_started = time.perf_counter()
     if pending_semantic:
