@@ -52,6 +52,7 @@ from src.record_refactor_buckets import export_generated_modules
 from src.refactor_bindings import (
     build_address_to_series_id,
     build_bound_address_keys,
+    key_concept_vocabulary_from_bindings,
 )
 from src.subgraph_projection import build_refactor_projection
 
@@ -213,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         input_series=graph_result.input_series,
         constant_series=graph_result.constant_series,
     )
+    key_vocabulary = key_concept_vocabulary_from_bindings(graph_result.series_bindings)
     formula_clusters = cluster_graph_formulas(
         refactor_projection,
         bound_address_keys=bound_address_keys,
@@ -240,6 +242,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             source_graph=graph_result.graph,
             internal_binding_index=internal_binding_index,
             bound_address_keys=bound_address_keys,
+            key_vocabulary=key_vocabulary,
             bindings_path=config.bindings_path,
             workbook_path=config.workbook_path,
             address_to_series_id=address_to_series_id,

@@ -1136,10 +1136,6 @@ def _binding_hints_for_address(
     )
 
 
-def _default_source_graph() -> DependencyGraph | None:
-    return None
-
-
 def _default_key_vocabulary(bindings_path: Path) -> tuple[KeyConceptSpec, ...]:
     return load_key_concept_vocabulary(bindings_path)
 
@@ -5777,6 +5773,7 @@ def refactor_internals_all_clusters(
     source_graph: DependencyGraph | None = None,
     internal_binding_index: InternalBindingIndex | None = None,
     bound_address_keys: dict[str, dict[str, BindingKeyValue]] | None = None,
+    key_vocabulary: tuple[KeyConceptSpec, ...] | None = None,
     parity_gate: bool = True,
     layout: ProjectionColumnLayout | None = None,
     timer: StageTimer | None = None,
@@ -5818,7 +5815,9 @@ def refactor_internals_all_clusters(
 
     Pass ``bound_address_keys`` from the extract stage when available so cluster
     context construction does not call ``_default_bound_address_keys`` (which
-    rebuilds the pipeline graph).
+    rebuilds the pipeline graph). Pass ``key_vocabulary`` when available so
+    context construction does not call ``_default_key_vocabulary`` (which
+    reloads and YAML-parses ``bindings/*.bindings.yaml`` once per unit).
 
     Pass ``timer`` to collect the Pass 1 / parity-gate / Pass 2 wall clock as
     spans of the caller's refactor stage; every span is also logged, so callers
@@ -6291,6 +6290,7 @@ def refactor_internals_all_clusters(
             source_graph=source_graph,
             internal_binding_index=internal_binding_index,
             bound_address_keys=bound_address_keys,
+            key_vocabulary=key_vocabulary,
             bindings_path=bindings_path,
             workbook_path=workbook_path,
             layout=layout,

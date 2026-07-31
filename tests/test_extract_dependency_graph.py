@@ -229,6 +229,38 @@ def test_export_generated_package_passes_bound_address_keys_to_refactor(
     assert refactor.call_args.kwargs["bound_address_keys"] is expected_keys
 
 
+def test_export_generated_package_passes_key_vocabulary_to_refactor(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Avoid per-cluster YAML reload via ``_default_key_vocabulary``."""
+    from src.refactor_bindings import KeyConceptSpec
+
+    config = replace(
+        synthetic_pipeline_config_fixture,
+        dist_root=tmp_path / "dist",
+    )
+    expected_vocabulary = (
+        KeyConceptSpec(
+            dimension_id="TIME_PERIOD",
+            concept="TIME_PERIOD",
+            dtype="int",
+            suggested_param_name="time_period",
+        ),
+    )
+    with patch(
+        "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+        return_value=expected_vocabulary,
+    ):
+        refactor = _export_generated_package_with_mocked_codegen(
+            config,
+            cluster_graph_formulas=MagicMock(return_value=()),
+        )
+
+    refactor.assert_called_once()
+    assert refactor.call_args.kwargs["key_vocabulary"] is expected_vocabulary
+
+
 def test_main_passes_cli_variation_mode_to_pipeline(
     synthetic_pipeline_config_fixture,
 ) -> None:

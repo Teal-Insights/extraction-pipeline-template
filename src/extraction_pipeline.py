@@ -616,6 +616,7 @@ def run_refactor_stage(
     from src.refactor_bindings import (
         build_address_to_series_id,
         build_bound_address_keys,
+        key_concept_vocabulary_from_bindings,
     )
 
     config = state.config
@@ -636,6 +637,9 @@ def run_refactor_stage(
             output_series=graph_result.output_series,
             input_series=graph_result.input_series,
             constant_series=graph_result.constant_series,
+        )
+        key_vocabulary = key_concept_vocabulary_from_bindings(
+            graph_result.series_bindings
         )
         timer.record("build_refactor_bindings", time.perf_counter() - bindings_started)
         print("clustering: partitioning formulas…", flush=True)
@@ -669,6 +673,7 @@ def run_refactor_stage(
             source_graph=graph_result.graph,
             internal_binding_index=state.internal_binding_index,
             bound_address_keys=bound_address_keys,
+            key_vocabulary=key_vocabulary,
             bindings_path=config.bindings_path,
             workbook_path=config.workbook_path,
             address_to_series_id=address_to_series_id,

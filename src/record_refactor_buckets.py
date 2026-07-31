@@ -439,6 +439,7 @@ def record_refactor_buckets(
                     workbook_path=config.workbook_path,
                     layout=layout,
                     bound_address_keys=resolved_bound_keys,
+                    key_vocabulary=key_vocabulary,
                     address_to_series_id=resolved_address_to_series_id,
                     expected_helper_name=helper_name,
                     existing_helper_names=reserved_for_others,
