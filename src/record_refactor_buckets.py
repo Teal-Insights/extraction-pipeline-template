@@ -287,8 +287,12 @@ def export_generated_modules(
     series_bindings: WorkbookSeriesBindings,
     no_cache: bool = False,
     force_rebuild: bool = False,
-) -> Path:
-    """Write generated package modules through codegen, stopping before refactor."""
+) -> tuple[Path, str]:
+    """Write generated package modules through codegen, stopping before refactor.
+
+    Returns ``(internals_path, codegen_cache_key)`` so callers can resolve the
+    pristine parity oracle from the codegen cache rather than from disk.
+    """
     refactor_projection = build_refactor_projection(
         graph,
         graph_cache_key=graph_cache_key,
@@ -328,7 +332,7 @@ def export_generated_modules(
     package_root = config.package_root
     write_generated_modules(package_root, codegen_result.modules)
 
-    return package_root / "internals.py"
+    return package_root / "internals.py", codegen_result.cache_key
 
 
 def record_refactor_buckets(
@@ -750,7 +754,7 @@ def run_record_refactor_buckets(
             else config.repo_root / DEFAULT_CODEGEN_DIST_ROOT
         )
         codegen_config = replace(config, dist_root=codegen_root)
-        internals_path = export_generated_modules(
+        internals_path, _codegen_cache_key = export_generated_modules(
             codegen_config,
             graph=graph_result.graph,
             graph_cache_key=graph_result.graph_cache_key,

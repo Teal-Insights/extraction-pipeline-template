@@ -187,7 +187,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     activate_pipeline_config(config)
 
     graph_result = build_pipeline_graph(config, no_cache=args.no_cache)
-    internals_path = export_generated_modules(
+    internals_path, codegen_cache_key = export_generated_modules(
         config,
         graph=graph_result.graph,
         graph_cache_key=graph_result.graph_cache_key,
@@ -241,6 +241,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             refactor_schedule=cluster_result.schedule,
             dry_run=args.dry_run,
             parity_gate=not args.no_parity_gate,
+            codegen_cache_key=codegen_cache_key,
         )
     finally:
         set_refactor_prompt_observer(None)
