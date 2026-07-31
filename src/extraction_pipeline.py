@@ -810,6 +810,8 @@ def run_refactor_stage(
     lab_options: RefactorLabOptions | None = None,
 ) -> RefactorStageState:
     """Cluster formulas and rewrite internals behind the parity gate."""
+    from excel_grapher.series_bindings import load_series_bindings
+
     from src.cluster_cache import get_or_build_clusters_and_schedule
     from src.internals_cache import (
         consumed_refactors_digest,
@@ -823,6 +825,7 @@ def run_refactor_stage(
         set_refactor_prompt_observer,
         set_singleton_context_observer,
     )
+    from src.refactor_bindings import key_concept_vocabulary_from_bindings
 
     config = state.config
     lab = lab_options or RefactorLabOptions()
@@ -864,6 +867,9 @@ def run_refactor_stage(
         artifacts = load_export_stage_artifacts(state)
         bound_address_keys = artifacts.bound_address_keys
         address_to_series_id = artifacts.address_to_series_id
+        key_vocabulary = key_concept_vocabulary_from_bindings(
+            load_series_bindings(config.bindings_path)
+        )
         timer.record("build_refactor_bindings", time.perf_counter() - bindings_started)
         print("clustering: partitioning formulas…", flush=True)
         clustering_started = time.perf_counter()
@@ -944,6 +950,7 @@ def run_refactor_stage(
                 source_graph=artifacts.graph,
                 internal_binding_index=artifacts.internal_binding_index,
                 bound_address_keys=bound_address_keys,
+                key_vocabulary=key_vocabulary,
                 bindings_path=config.bindings_path,
                 workbook_path=config.workbook_path,
                 address_to_series_id=address_to_series_id,

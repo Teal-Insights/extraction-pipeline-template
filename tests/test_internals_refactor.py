@@ -5857,6 +5857,85 @@ def test_refactor_internals_all_clusters_forwards_bound_address_keys(
     assert received["bound_address_keys"] is bindings
 
 
+def test_refactor_internals_all_clusters_forwards_key_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Multi-member units must receive caller vocabulary, not the YAML-reload fallback."""
+    import src.internals_refactor as module
+
+    from src.refactor_order import RefactorUnit
+    from tests.fixtures.inter_cluster_cycle import inter_cluster_cycle_graph
+
+    graph, bindings = inter_cluster_cycle_graph()
+    clusters = (
+        FormulaCluster(
+            cluster_id=0,
+            canonical_template="=X",
+            members=("Engine!B2", "Engine!C2"),
+            row=2,
+        ),
+    )
+    internals_path = tmp_path / "internals.py"
+    internals_path.write_text(
+        "def cell_engine_b2(ctx):\n    return 1.0\n"
+        "def cell_engine_c2(ctx):\n    return 1.0\n",
+        encoding="utf-8",
+    )
+    vocabulary = (
+        KeyConceptSpec(
+            dimension_id="TIME_PERIOD",
+            concept="TIME_PERIOD",
+            dtype="int",
+            suggested_param_name="time_period",
+        ),
+    )
+    received: dict[str, object] = {}
+
+    def fake_build_cluster(
+        *_args: object,
+        key_vocabulary: object = None,
+        **_kwargs: object,
+    ) -> None:
+        received["key_vocabulary"] = key_vocabulary
+        return None
+
+    def boom_default_key_vocabulary(_bindings_path: Path) -> tuple[KeyConceptSpec, ...]:
+        raise AssertionError("_default_key_vocabulary must not run")
+
+    unit = RefactorUnit(
+        parent_cluster_id=0,
+        refactor_group_id=0,
+        members=("Engine!B2", "Engine!C2"),
+        canonical_template="=X",
+        row=2,
+    )
+    monkeypatch.setattr(module, "compute_refactor_schedule", lambda *_a, **_k: (unit,))
+    monkeypatch.setattr(module, "build_cluster_refactor_context", fake_build_cluster)
+    monkeypatch.setattr(module, "_default_key_vocabulary", boom_default_key_vocabulary)
+    monkeypatch.setattr(
+        module, "build_singleton_refactor_context", lambda *_a, **_k: None
+    )
+
+    module.refactor_internals_all_clusters(
+        cast(ProjectionResult, graph),
+        clusters,
+        internals_path=internals_path,
+        bindings_path=tmp_path / "bindings",
+        workbook_path=tmp_path / "workbook.xlsx",
+        bound_address_keys=cast(dict[str, dict[str, BindingKeyValue]], bindings),
+        key_vocabulary=vocabulary,
+        dry_run=True,
+        parity_gate=False,
+        address_to_series_id={
+            "Engine!B2": "family_bc",
+            "Engine!C2": "family_bc",
+        },
+    )
+
+    assert received["key_vocabulary"] is vocabulary
+
+
 def test_sample_indices_for_prompt_keeps_small_sequences() -> None:
     assert sample_indices_for_prompt(12, limit=50) == tuple(range(12))
 
