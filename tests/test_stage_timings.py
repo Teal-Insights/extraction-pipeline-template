@@ -177,6 +177,9 @@ def test_export_run_records_every_cache_it_reached(
     spans = payload["stages"][0]["spans"]
     assert "create_dependency_graph" in spans
     assert "derive_series" in spans
+    assert "build_refactor_projection" in spans
+    assert "codegen" in spans
+    assert "write_export_package" in spans
     caches = payload["caches"]
     for name in (
         "dependency-graph",
@@ -187,6 +190,39 @@ def test_export_run_records_every_cache_it_reached(
     ):
         assert isinstance(caches[name]["cache_hit"], bool), name
         assert caches[name]["cache_key"]
+
+
+def test_extract_records_stage_even_when_artifact_write_fails(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Extract uses stage_span finally, so a mid-stage crash still leaves a row."""
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from src.extraction_pipeline import extract_dependency_graph
+    from src.stage_timings import PipelineTimings
+
+    config = replace(
+        synthetic_pipeline_config_fixture,
+        repo_root=tmp_path,
+        graph_output_dir=tmp_path / "artifacts" / "dependency-graph",
+    )
+    timings = PipelineTimings(output_path=stage_timings_path(tmp_path))
+
+    with (
+        patch(
+            "src.extraction_pipeline.write_dependency_graph_artifacts",
+            side_effect=RuntimeError("artifact write failed"),
+        ),
+        pytest.raises(RuntimeError, match="artifact write failed"),
+    ):
+        extract_dependency_graph(config, timings=timings)
+
+    assert [record.name for record in timings.stages] == ["extract"]
+    payload = json.loads(stage_timings_path(tmp_path).read_text(encoding="utf-8"))
+    assert payload["stages"][0]["name"] == "extract"
+    assert "create_dependency_graph" in payload["stages"][0]["spans"]
 
 
 def test_stage_span_without_timings_yields_a_detached_timer() -> None:

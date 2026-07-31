@@ -5608,8 +5608,8 @@ def test_refactor_internals_all_clusters_records_spans_on_the_stage_timer(
     )
 
     spans = timer.as_dict()
+    # Leaf spans only: a ``pass1`` rollup would double-count with pass1_*.
     assert {
-        "pass1",
         "pass1_context",
         "pass1_synthesize",
         "pass1_apply",
@@ -5617,7 +5617,9 @@ def test_refactor_internals_all_clusters_records_spans_on_the_stage_timer(
         "pass1_reindex",
         "mechanical_parity_gate",
         "pass2_semantic_naming",
+        "phase_c",
     } <= set(spans)
+    assert "pass1" not in spans
     assert all(seconds >= 0.0 for seconds in spans.values())
 
 

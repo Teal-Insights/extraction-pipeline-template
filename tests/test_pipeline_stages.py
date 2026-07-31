@@ -513,8 +513,10 @@ def test_run_refactor_stage_records_spans_and_profiles(tmp_path: Path) -> None:
     assert profile.call_args.kwargs["basename"] == "refactor"
     record = timings.stages[0]
     assert record.name == "refactor"
+    assert "build_refactor_bindings" in record.spans
     assert "cluster_graph_formulas" in record.spans
-    assert "internals_refactor" in record.spans
+    # Rollup would overlap nested pass1_* spans recorded inside the refactor.
+    assert "internals_refactor" not in record.spans
 
 
 def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(

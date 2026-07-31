@@ -5896,8 +5896,18 @@ def refactor_internals_all_clusters(
     pass1_synthesize_seconds = 0.0
     timing_active = _pass1_unit_timing_active()
 
-    def _record_span(name: str, seconds: float, **metrics: int | float | str) -> None:
-        """Log one refactor span and attach it to the caller's stage timer."""
+    def _record_span(
+        name: str,
+        seconds: float,
+        *,
+        attach: bool = True,
+        **metrics: int | float | str,
+    ) -> None:
+        """Log one refactor span; attach leaf spans to the caller's stage timer.
+
+        Rollups such as ``pass1`` stay log-only (``attach=False``) so flat
+        ``stages[].spans`` does not double-count with ``pass1_*`` components.
+        """
         metric_text = ", ".join(f"{key}={value}" for key, value in metrics.items())
         logger.info(
             "refactor span %s: %.1fs%s",
@@ -5905,7 +5915,7 @@ def refactor_internals_all_clusters(
             seconds,
             f" ({metric_text})" if metric_text else "",
         )
-        if timer is not None:
+        if attach and timer is not None:
             timer.record(name, seconds)
 
     def _unit_reads_addresses(members: Sequence[str], addresses: set[str]) -> bool:
@@ -6428,7 +6438,7 @@ def refactor_internals_all_clusters(
     )
     _record_span("pass1_validate", pass1_validate_seconds)
     _record_span("pass1_reindex", pass1_reindex_seconds, count=pass1_reindex_count)
-    _record_span("pass1", pass1_elapsed)
+    _record_span("pass1", pass1_elapsed, attach=False)
 
     # Use the validated live source for checkpoint / parity / promote. After the
     # end-of-pass seal this matches ``internals_index.source``; binding all three
