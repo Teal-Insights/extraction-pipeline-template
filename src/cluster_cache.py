@@ -140,9 +140,7 @@ def load_cluster_payload(
     *,
     cache_dir: Path | None = None,
 ) -> tuple[tuple[FormulaCluster, ...], tuple[RefactorUnit, ...]] | None:
-    payload_path, _meta_path = _cache_paths(
-        _cluster_cache_dir(cache_dir), cache_key
-    )
+    payload_path, _meta_path = _cache_paths(_cluster_cache_dir(cache_dir), cache_key)
     if not payload_path.is_file():
         return None
     try:
@@ -205,9 +203,7 @@ def get_or_build_clusters_and_schedule(
                 cache_dir=resolved_cache_dir,
             )
             elapsed = time.perf_counter() - started
-            print(
-                f"cluster_schedule: cache hit ({elapsed:.1f}s, key={cache_key[:12]})"
-            )
+            print(f"cluster_schedule: cache hit ({elapsed:.1f}s, key={cache_key[:12]})")
             return ClusterCacheResult(
                 clusters=clusters,
                 schedule=schedule,

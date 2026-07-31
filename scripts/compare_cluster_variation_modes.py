@@ -52,9 +52,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help=(
-            "Bypass on-disk graph, projection, and cluster caches for this run."
-        ),
+        help=("Bypass on-disk graph, projection, and cluster caches for this run."),
     )
     add_clustering_mode_argument(parser)
     parser.add_argument(
@@ -332,9 +330,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     address_to_series_id = graph_result.address_to_series_id
     layout = config.projection_layout
 
-    projection_key = projection_cache_key(
-        graph_cache_key=graph_result.graph_cache_key
-    )
+    projection_key = projection_cache_key(graph_cache_key=graph_result.graph_cache_key)
     independent = _cluster_by_mode(
         variation_mode="independent",
         bound_address_keys=bound_address_keys,

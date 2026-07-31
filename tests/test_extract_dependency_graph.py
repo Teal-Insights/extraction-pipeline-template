@@ -101,7 +101,9 @@ def _export_generated_package_with_mocked_codegen(
 
     refactor = refactor_internals_all_clusters or MagicMock()
     resolved_bound_keys = {} if bound_address_keys is None else bound_address_keys
-    if not isinstance(get_or_build_clusters_and_schedule.return_value, ClusterCacheResult):
+    if not isinstance(
+        get_or_build_clusters_and_schedule.return_value, ClusterCacheResult
+    ):
         get_or_build_clusters_and_schedule.return_value = ClusterCacheResult(
             clusters=(),
             schedule=(),
