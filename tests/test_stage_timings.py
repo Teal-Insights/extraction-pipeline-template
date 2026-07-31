@@ -166,7 +166,7 @@ def test_export_run_records_every_cache_it_reached(
             return_value="series_docs",
         ),
         patch("src.extraction_pipeline.CodeGenerator") as generator_cls,
-        patch("src.extraction_pipeline.seed_validation_harness"),
+        patch("src.package_materialize.seed_validation_harness"),
     ):
         generator = generator_cls.return_value.__enter__.return_value
         generator.generate_modules.return_value = {"internals.py": "pass\n"}

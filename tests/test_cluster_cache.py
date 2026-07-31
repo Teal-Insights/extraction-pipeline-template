@@ -544,6 +544,7 @@ def test_run_refactor_stage_uses_cluster_cache(
         bound_address_keys=graph_result.bound_address_keys,
         address_to_series_id=graph_result.address_to_series_id,
         package_root=package_root,
+        codegen_cache_key="codegen-key",
     )
 
     with (
@@ -588,6 +589,7 @@ def test_run_refactor_stage_no_cache_bypasses_cluster_cache(
         bound_address_keys=graph_result.bound_address_keys,
         address_to_series_id=graph_result.address_to_series_id,
         package_root=package_root,
+        codegen_cache_key="codegen-key",
     )
 
     with (
