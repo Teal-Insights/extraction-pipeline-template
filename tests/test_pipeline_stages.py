@@ -141,6 +141,7 @@ def test_run_refactor_stage_prints_clustering_and_refactor_boundaries(
         config=config,
         graph_result=MagicMock(
             graph=MagicMock(),
+            graph_cache_key="cache-key",
             input_series=(),
             output_series=(),
             internal_series=(),
@@ -152,11 +153,20 @@ def test_run_refactor_stage_prints_clustering_and_refactor_boundaries(
         address_to_series_id={},
         package_root=package_root,
     )
+    from src.cluster_cache import ClusterCacheResult
+
+    cluster_result = ClusterCacheResult(
+        clusters=clusters,
+        schedule=(),
+        cache_key="cluster-key",
+        cache_hit=False,
+        elapsed_seconds=0.01,
+    )
 
     with (
         patch(
-            "src.formula_clustering.cluster_graph_formulas",
-            return_value=clusters,
+            "src.cluster_cache.get_or_build_clusters_and_schedule",
+            return_value=cluster_result,
         ),
         patch("src.internals_refactor.refactor_internals_all_clusters"),
     ):
@@ -256,7 +266,12 @@ def test_run_pipeline_stop_after_refactor_skips_validate_and_document(
         )
 
     export.assert_called_once()
-    refactor.assert_called_once_with(export_state, timings=ANY)
+    refactor.assert_called_once_with(
+        export_state,
+        no_cache=False,
+        force_rebuild=False,
+        timings=ANY,
+    )
     validate.assert_not_called()
     document.assert_not_called()
 
@@ -283,7 +298,12 @@ def test_run_pipeline_stop_after_validate_skips_document(
             stop_after_stage="validate",
         )
 
-    refactor.assert_called_once_with(export_state, timings=ANY)
+    refactor.assert_called_once_with(
+        export_state,
+        no_cache=False,
+        force_rebuild=False,
+        timings=ANY,
+    )
     validate.assert_called_once_with(refactor_state, no_cache=False, timings=ANY)
     document.assert_not_called()
 
@@ -324,7 +344,7 @@ def test_run_pipeline_passes_no_cache_to_validate_stage(
         patch(
             "src.extraction_pipeline.run_refactor_stage",
             return_value=refactor_state,
-        ),
+        ) as refactor,
         patch("src.extraction_pipeline.run_validate_stage") as validate,
         patch("src.documentation_pipeline.run_documentation_pipeline"),
     ):
@@ -334,6 +354,12 @@ def test_run_pipeline_passes_no_cache_to_validate_stage(
             no_cache=True,
         )
 
+    refactor.assert_called_once_with(
+        export_state,
+        no_cache=True,
+        force_rebuild=False,
+        timings=ANY,
+    )
     validate.assert_called_once_with(refactor_state, no_cache=True, timings=ANY)
 
 
@@ -484,6 +510,7 @@ def test_run_refactor_stage_records_spans_and_profiles(tmp_path: Path) -> None:
         config=config,
         graph_result=MagicMock(
             graph=MagicMock(),
+            graph_cache_key="cache-key",
             input_series=(),
             output_series=(),
             internal_series=(),
@@ -496,9 +523,21 @@ def test_run_refactor_stage_records_spans_and_profiles(tmp_path: Path) -> None:
         package_root=package_root,
     )
     timings = PipelineTimings()
+    from src.cluster_cache import ClusterCacheResult
+
+    cluster_result = ClusterCacheResult(
+        clusters=(),
+        schedule=(),
+        cache_key="cluster-key",
+        cache_hit=False,
+        elapsed_seconds=0.01,
+    )
 
     with (
-        patch("src.formula_clustering.cluster_graph_formulas", return_value=()),
+        patch(
+            "src.cluster_cache.get_or_build_clusters_and_schedule",
+            return_value=cluster_result,
+        ),
         patch("src.internals_refactor.refactor_internals_all_clusters"),
         patch("src.extraction_pipeline.profile_if_enabled") as profile,
     ):
@@ -523,6 +562,7 @@ def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(
         config=config,
         graph_result=MagicMock(
             graph=MagicMock(),
+            graph_cache_key="cache-key",
             input_series=(),
             output_series=(),
             internal_series=(),
@@ -534,14 +574,27 @@ def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(
         address_to_series_id={},
         package_root=package_root,
     )
+    from src.cluster_cache import ClusterCacheResult
+
+    cluster_result = ClusterCacheResult(
+        clusters=(),
+        schedule=(),
+        cache_key="cluster-key",
+        cache_hit=False,
+        elapsed_seconds=0.01,
+    )
 
     with (
-        patch("src.formula_clustering.cluster_graph_formulas", return_value=()),
+        patch(
+            "src.cluster_cache.get_or_build_clusters_and_schedule",
+            return_value=cluster_result,
+        ),
         patch("src.internals_refactor.refactor_internals_all_clusters") as refactor,
     ):
         run_refactor_stage(state, timings=PipelineTimings())
 
     assert refactor.call_args.kwargs["timer"] is not None
+    assert refactor.call_args.kwargs["refactor_schedule"] == ()
 
 
 def test_run_validate_stage_records_spans_and_profiles(tmp_path: Path) -> None:
@@ -596,6 +649,7 @@ def test_run_pipeline_writes_stage_timings_artifact(
         "series-derived",
         "projection",
         "codegen",
+        "clusters",
     }
 
 

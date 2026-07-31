@@ -78,7 +78,11 @@ from src.refactor_fingerprints import (
     format_cluster_fingerprint_dump,
 )
 from src.peel_entrypoint_dispatch import inject_peel_entrypoint_dispatch
-from src.refactor_order import compute_refactor_schedule, refactor_failure_target
+from src.refactor_order import (
+    RefactorUnit,
+    compute_refactor_schedule,
+    refactor_failure_target,
+)
 from src.runtime_symbols import allowed_runtime_module_symbols, allowed_runtime_symbols
 from src.semantic_naming import (
     BindingRecordHints,
@@ -5789,6 +5793,7 @@ def refactor_internals_all_clusters(
     bound_address_keys: dict[str, dict[str, BindingKeyValue]] | None = None,
     parity_gate: bool = True,
     layout: ProjectionColumnLayout | None = None,
+    refactor_schedule: tuple[RefactorUnit, ...] | None = None,
     timer: StageTimer | None = None,
 ) -> tuple[ClusterRefactorApplyResult, ...]:
     """Refactor every eligible unit in unified dependency order in two passes.
@@ -5869,7 +5874,11 @@ def refactor_internals_all_clusters(
         runtime_source=runtime_source,
         internals_source=internals_index.source,
     )
-    ordered_units = compute_refactor_schedule(projection, clusters)
+    ordered_units = (
+        refactor_schedule
+        if refactor_schedule is not None
+        else compute_refactor_schedule(projection, clusters)
+    )
     existing_helper_names = internals_index.semantic_helper_names
     allocated_helper_names = allocate_schedule_helper_names(
         tuple(unit.members for unit in ordered_units),

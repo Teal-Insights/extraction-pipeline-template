@@ -93,12 +93,22 @@ def test_load_pipeline_config_default_graph_output_dir() -> None:
 def _export_generated_package_with_mocked_codegen(
     config,
     *,
-    cluster_graph_formulas: MagicMock,
+    get_or_build_clusters_and_schedule: MagicMock,
     refactor_internals_all_clusters: MagicMock | None = None,
     bound_address_keys: dict | None = None,
 ) -> MagicMock:
+    from src.cluster_cache import ClusterCacheResult
+
     refactor = refactor_internals_all_clusters or MagicMock()
     resolved_bound_keys = {} if bound_address_keys is None else bound_address_keys
+    if not isinstance(get_or_build_clusters_and_schedule.return_value, ClusterCacheResult):
+        get_or_build_clusters_and_schedule.return_value = ClusterCacheResult(
+            clusters=(),
+            schedule=(),
+            cache_key="cluster-key",
+            cache_hit=False,
+            elapsed_seconds=0.0,
+        )
     with patch(
         "src.extraction_pipeline.build_pipeline_graph",
         return_value=MagicMock(
@@ -129,8 +139,8 @@ def _export_generated_package_with_mocked_codegen(
                     generator.generate_modules.return_value = {"internals.py": "pass\n"}
                     with patch("src.extraction_pipeline.seed_validation_harness"):
                         with patch(
-                            "src.formula_clustering.cluster_graph_formulas",
-                            cluster_graph_formulas,
+                            "src.cluster_cache.get_or_build_clusters_and_schedule",
+                            get_or_build_clusters_and_schedule,
                         ):
                             with patch(
                                 "src.internals_refactor.refactor_internals_all_clusters",
@@ -159,7 +169,7 @@ def test_export_generated_package_writes_under_isolated_dist_root(
 
     _export_generated_package_with_mocked_codegen(
         config,
-        cluster_graph_formulas=MagicMock(return_value=()),
+        get_or_build_clusters_and_schedule=MagicMock(),
     )
 
     written = config.package_root / "internals.py"
@@ -172,7 +182,7 @@ def test_export_generated_package_writes_under_isolated_dist_root(
         assert repo_pollution.read_bytes() == before
 
 
-def test_export_generated_package_passes_variation_mode_to_cluster_graph_formulas(
+def test_export_generated_package_passes_variation_mode_to_cluster_cache(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
@@ -181,20 +191,18 @@ def test_export_generated_package_passes_variation_mode_to_cluster_graph_formula
         dist_root=tmp_path / "dist",
         variation_mode="dominant_key_only",
     )
-    cluster_graph_formulas = MagicMock(return_value=())
+    get_or_build = MagicMock()
     _export_generated_package_with_mocked_codegen(
         config,
-        cluster_graph_formulas=cluster_graph_formulas,
+        get_or_build_clusters_and_schedule=get_or_build,
     )
 
-    cluster_graph_formulas.assert_called_once()
-    assert (
-        cluster_graph_formulas.call_args.kwargs["variation_mode"] == "dominant_key_only"
-    )
-    assert cluster_graph_formulas.call_args.kwargs["clustering_mode"] == "series_ast"
+    get_or_build.assert_called_once()
+    assert get_or_build.call_args.kwargs["variation_mode"] == "dominant_key_only"
+    assert get_or_build.call_args.kwargs["clustering_mode"] == "series_ast"
 
 
-def test_export_generated_package_passes_clustering_mode_to_cluster_graph_formulas(
+def test_export_generated_package_passes_clustering_mode_to_cluster_cache(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
@@ -203,14 +211,14 @@ def test_export_generated_package_passes_clustering_mode_to_cluster_graph_formul
         dist_root=tmp_path / "dist",
         clustering_mode="ast",
     )
-    cluster_graph_formulas = MagicMock(return_value=())
+    get_or_build = MagicMock()
     _export_generated_package_with_mocked_codegen(
         config,
-        cluster_graph_formulas=cluster_graph_formulas,
+        get_or_build_clusters_and_schedule=get_or_build,
     )
 
-    cluster_graph_formulas.assert_called_once()
-    assert cluster_graph_formulas.call_args.kwargs["clustering_mode"] == "ast"
+    get_or_build.assert_called_once()
+    assert get_or_build.call_args.kwargs["clustering_mode"] == "ast"
 
 
 def test_export_generated_package_passes_bound_address_keys_to_refactor(
@@ -225,7 +233,7 @@ def test_export_generated_package_passes_bound_address_keys_to_refactor(
     expected_keys = {"Engine!B2": {"TIME_PERIOD": 1}}
     refactor = _export_generated_package_with_mocked_codegen(
         config,
-        cluster_graph_formulas=MagicMock(return_value=()),
+        get_or_build_clusters_and_schedule=MagicMock(),
         bound_address_keys=expected_keys,
     )
 

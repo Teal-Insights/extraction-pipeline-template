@@ -10,9 +10,10 @@ or upgrading excel-grapher:
     uv run python -m scripts.regenerate_graph_cache
 
 Use ``--force`` to rebuild even when current entries already exist. Force also
-clears ``.cache/series-resolution``, ``.cache/series-derived``, and
-``.cache/bindings-validation`` before rebuilding and pruning them to keys
-derived from the current graph cache keys.
+clears ``.cache/series-resolution``, ``.cache/series-derived``,
+``.cache/bindings-validation``, and ``.cache/clusters`` before rebuilding and
+pruning series/validation caches to keys derived from the current graph cache
+keys.
 Commit the updated ``.cache/dependency-graph`` artifacts when your downstream
 pipeline chooses to vendor the cache (override ``.gitignore`` for that
 directory).
@@ -38,6 +39,10 @@ from src.bindings_validation_cache import (  # noqa: E402
     clear_bindings_validation_cache,
     get_or_build_bindings_validation,
     prune_stale_bindings_validation_cache_entries,
+)
+from src.cluster_cache import (  # noqa: E402
+    COMMITTED_CLUSTER_CACHE_DIR,
+    clear_cluster_cache,
 )
 from src.graph_cache import (  # noqa: E402
     COMMITTED_GRAPH_CACHE_DIR,
@@ -88,6 +93,9 @@ def regenerate_graph_cache(
         )
         clear_bindings_validation_cache(
             cache_dir=COMMITTED_BINDINGS_VALIDATION_CACHE_DIR,
+        )
+        clear_cluster_cache(
+            cache_dir=COMMITTED_CLUSTER_CACHE_DIR,
         )
 
     current_keys: set[str] = set()
@@ -185,7 +193,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         help=(
             "Rebuild even when current entries already exist; also clear and "
             "prune series-resolution, series-derived, and bindings-validation "
-            "caches."
+            "caches, and clear the clusters cache."
         ),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)

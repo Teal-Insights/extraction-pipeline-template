@@ -21,8 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.cluster_cache import get_or_build_clusters_and_schedule  # noqa: E402
 from src.extraction_pipeline import build_pipeline_graph  # noqa: E402
-from src.formula_clustering import FormulaCluster, cluster_graph_formulas  # noqa: E402
+from src.formula_clustering import FormulaCluster  # noqa: E402
 from src.internals_refactor import (  # noqa: E402
     InternalsSourceIndex,
     address_to_function_name,
@@ -36,9 +37,9 @@ from src.pipeline_config import (  # noqa: E402
     validate_pipeline_config,
 )
 from src.pipeline_context import activate_pipeline_config  # noqa: E402
+from src.projection_cache import projection_cache_key  # noqa: E402
 from src.refactor_order import (  # noqa: E402
     RefactorUnit,
-    compute_refactor_schedule,
     refactor_failure_target,
 )
 from src.subgraph_projection import build_refactor_projection  # noqa: E402
@@ -177,7 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Bypass on-disk graph/projection caches for this run.",
+        help="Bypass on-disk graph/projection/cluster caches for this run.",
     )
     add_variation_mode_argument(parser)
     add_clustering_mode_argument(parser)
@@ -198,15 +199,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     bound_address_keys = graph_result.bound_address_keys
     address_to_series_id = graph_result.address_to_series_id
-    clusters = cluster_graph_formulas(
+    cluster_result = get_or_build_clusters_and_schedule(
         projection,
         bound_address_keys=bound_address_keys,
-        variation_mode=config.variation_mode,
-        clustering_mode=config.clustering_mode,
         address_to_series_id=address_to_series_id,
         workbook_path=config.workbook_path,
         layout=config.projection_layout,
+        bindings_path=config.bindings_path,
+        projection_cache_key=projection_cache_key(
+            graph_cache_key=graph_result.graph_cache_key
+        ),
+        variation_mode=config.variation_mode,
+        clustering_mode=config.clustering_mode,
+        no_cache=args.no_cache,
     )
+    clusters = cluster_result.clusters
 
     cluster = find_cluster(clusters, args.cluster_id)
     if cluster is None:
@@ -221,8 +228,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     schedule_units: tuple[RefactorUnit, ...] = ()
     if args.schedule:
-        units = compute_refactor_schedule(projection, clusters)
-        schedule_units = schedule_units_for_family(units, args.cluster_id)
+        schedule_units = schedule_units_for_family(
+            cluster_result.schedule, args.cluster_id
+        )
 
     sources: dict[str, str] = {}
     if args.sources:
