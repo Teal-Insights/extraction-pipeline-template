@@ -35,6 +35,7 @@ CACHE_NAMES: tuple[str, ...] = (
     "series-derived",
     "projection",
     "codegen",
+    "clusters",
 )
 
 _UNOBSERVED_CACHE: dict[str, Any] = {

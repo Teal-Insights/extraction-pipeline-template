@@ -631,10 +631,12 @@ tests/results/local/
 def run_refactor_stage(
     state: ExportStageState,
     *,
+    no_cache: bool = False,
+    force_rebuild: bool = False,
     timings: PipelineTimings | None = None,
 ) -> RefactorStageState:
     """Cluster formulas and rewrite internals behind the parity gate."""
-    from src.formula_clustering import cluster_graph_formulas
+    from src.cluster_cache import get_or_build_clusters_and_schedule
     from src.internals_refactor import refactor_internals_all_clusters
 
     config = state.config
@@ -649,17 +651,25 @@ def run_refactor_stage(
         timer.record("build_refactor_bindings", time.perf_counter() - bindings_started)
         print("clustering: partitioning formulas…", flush=True)
         clustering_started = time.perf_counter()
-        formula_clusters = cluster_graph_formulas(
+        cluster_result = get_or_build_clusters_and_schedule(
             state.refactor_projection,
             bound_address_keys=bound_address_keys,
-            variation_mode=config.variation_mode,
-            clustering_mode=config.clustering_mode,
             address_to_series_id=address_to_series_id,
             workbook_path=config.workbook_path,
             layout=config.projection_layout,
+            bindings_path=config.bindings_path,
+            projection_cache_key=projection_cache_key(
+                graph_cache_key=graph_result.graph_cache_key
+            ),
+            variation_mode=config.variation_mode,
+            clustering_mode=config.clustering_mode,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
         )
+        formula_clusters = cluster_result.clusters
         clustering_seconds = time.perf_counter() - clustering_started
         timer.record("cluster_graph_formulas", clustering_seconds)
+        record_cache_result(timings, "clusters", cluster_result)
         formula_count = sum(len(cluster.members) for cluster in formula_clusters)
         print(
             f"clustering: {formula_count} formulas → {len(formula_clusters)} clusters "
@@ -681,6 +691,7 @@ def run_refactor_stage(
             bindings_path=config.bindings_path,
             workbook_path=config.workbook_path,
             address_to_series_id=address_to_series_id,
+            refactor_schedule=cluster_result.schedule,
             timer=timer,
         )
         refactor_seconds = time.perf_counter() - refactor_started
@@ -812,7 +823,12 @@ def _run_pipeline_stages(
     if stop_after_stage == "export":
         return
 
-    refactor_state = run_refactor_stage(export_state, timings=timings)
+    refactor_state = run_refactor_stage(
+        export_state,
+        no_cache=no_cache,
+        force_rebuild=force_rebuild,
+        timings=timings,
+    )
     if stop_after_stage == "refactor":
         return
 
@@ -879,7 +895,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help=(
             "Bypass on-disk graph, projection, series-resolution, series-derived, "
-            "codegen, and exported-library differential caches for this run."
+            "bindings-validation, codegen, cluster, and exported-library "
+            "differential caches for this run."
         ),
     )
     parser.add_argument(

@@ -22,8 +22,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
+from src.cluster_cache import get_or_build_clusters_and_schedule
 from src.extraction_pipeline import build_pipeline_graph
-from src.formula_clustering import cluster_graph_formulas
 from src.internals_refactor import (
     ClusterRefactorContext,
     SingletonRefactorContext,
@@ -32,6 +32,7 @@ from src.internals_refactor import (
     set_refactor_prompt_observer,
     set_singleton_context_observer,
 )
+from src.projection_cache import projection_cache_key
 from src.mechanical_body import (
     MechanicalSynthesisError,
     synthesize_cluster_body,
@@ -157,8 +158,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--no-cache",
         action="store_true",
         help=(
-            "Bypass graph/projection/series-resolution/series-derived/codegen "
-            "caches for this run."
+            "Bypass graph/projection/series-resolution/series-derived/codegen/"
+            "cluster caches for this run."
         ),
     )
     parser.add_argument(
@@ -201,15 +202,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     internal_binding_index = graph_result.internal_binding_index
     bound_address_keys = graph_result.bound_address_keys
     address_to_series_id = graph_result.address_to_series_id
-    formula_clusters = cluster_graph_formulas(
+    cluster_result = get_or_build_clusters_and_schedule(
         refactor_projection,
         bound_address_keys=bound_address_keys,
-        variation_mode=config.variation_mode,
-        clustering_mode=config.clustering_mode,
         address_to_series_id=address_to_series_id,
         workbook_path=config.workbook_path,
         layout=config.projection_layout,
+        bindings_path=config.bindings_path,
+        projection_cache_key=projection_cache_key(
+            graph_cache_key=graph_result.graph_cache_key
+        ),
+        variation_mode=config.variation_mode,
+        clustering_mode=config.clustering_mode,
+        no_cache=args.no_cache,
     )
+    formula_clusters = cluster_result.clusters
 
     if args.dump_prompts is not None:
         set_refactor_prompt_observer(_prompt_dump_observer(args.dump_prompts))
@@ -231,6 +238,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             bindings_path=config.bindings_path,
             workbook_path=config.workbook_path,
             address_to_series_id=address_to_series_id,
+            refactor_schedule=cluster_result.schedule,
             dry_run=args.dry_run,
             parity_gate=not args.no_parity_gate,
         )

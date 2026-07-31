@@ -25,6 +25,7 @@ from src.codegen_cache import (
     write_generated_modules,
 )
 from src.docstring_callback import configure_docstring_callback
+from src.cluster_cache import get_or_build_clusters_and_schedule
 from src.extraction_pipeline import build_pipeline_graph
 from src.projection_cache import projection_cache_key
 from src.pipeline_config import (
@@ -45,6 +46,7 @@ from src.formula_clustering import (
     cluster_graph_formulas,
     formula_nodes_for_clustering,
 )
+from src.refactor_order import compute_refactor_schedule
 from src.refactor_bindings import (
     KeyConceptSpec,
     load_key_concept_vocabulary,
@@ -63,7 +65,6 @@ from src.internals_refactor import (
     build_singleton_refactor_context,
 )
 from src.logging_config import configure_logging
-from src.refactor_order import compute_refactor_schedule
 from src.semantic_naming import (
     allocate_schedule_helper_names,
     collect_semantic_helper_names,
@@ -341,6 +342,9 @@ def record_refactor_buckets(
     refactor_graph: ProjectionResult | None = None,
     bound_address_keys: BoundAddressKeys | None,
     address_to_series_id: Mapping[str, str] | None = None,
+    graph_cache_key: str | None = None,
+    no_cache: bool = False,
+    force_rebuild: bool = False,
 ) -> tuple[RefactorBucketRecord, ...]:
     """Classify formula clusters into singleton and cluster refactor target buckets."""
     resolved_bound_keys = _require_bound_address_keys(bound_address_keys)
@@ -348,16 +352,34 @@ def record_refactor_buckets(
     resolved_address_to_series_id = (
         address_to_series_id if address_to_series_id is not None else {}
     )
-    clusters = cluster_graph_formulas(
-        graph,
-        bound_address_keys=resolved_bound_keys,
-        variation_mode=config.variation_mode,
-        clustering_mode=config.clustering_mode,
-        address_to_series_id=address_to_series_id,
-        workbook_path=config.workbook_path,
-        layout=layout,
-    )
-    ordered_units = compute_refactor_schedule(graph, clusters)
+    if compression == "optimal" and graph_cache_key is not None:
+        cluster_result = get_or_build_clusters_and_schedule(
+            graph,
+            bound_address_keys=resolved_bound_keys,
+            address_to_series_id=address_to_series_id,
+            workbook_path=config.workbook_path,
+            layout=layout,
+            bindings_path=config.bindings_path,
+            projection_cache_key=projection_cache_key(graph_cache_key=graph_cache_key),
+            variation_mode=config.variation_mode,
+            clustering_mode=config.clustering_mode,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+        )
+        clusters = cluster_result.clusters
+        ordered_units = cluster_result.schedule
+    else:
+        # Source-graph clustering (compression="none") is not projection-keyed.
+        clusters = cluster_graph_formulas(
+            graph,
+            bound_address_keys=resolved_bound_keys,
+            variation_mode=config.variation_mode,
+            clustering_mode=config.clustering_mode,
+            address_to_series_id=address_to_series_id,
+            workbook_path=config.workbook_path,
+            layout=layout,
+        )
+        ordered_units = compute_refactor_schedule(graph, clusters)
 
     internals_source = (
         internals_path.read_text(encoding="utf-8") if internals_path is not None else ""
@@ -752,6 +774,8 @@ def run_record_refactor_buckets(
         refactor_graph=projection if compression == "optimal" else None,
         bound_address_keys=bound_address_keys,
         address_to_series_id=address_to_series_id,
+        graph_cache_key=graph_result.graph_cache_key,
+        no_cache=no_cache,
     )
     report = build_refactor_buckets_report(
         config,

@@ -47,6 +47,7 @@ from src.internal_binding_coverage import (
     suggested_layout_for_row,
 )
 from src.bindings_validation_cache import COMMITTED_BINDINGS_VALIDATION_CACHE_DIR
+from src.cluster_cache import COMMITTED_CLUSTER_CACHE_DIR
 from src.pipeline_config import PipelineConfig
 from src.series_derived_cache import COMMITTED_SERIES_DERIVED_CACHE_DIR
 from src.series_resolution_cache import COMMITTED_SERIES_RESOLUTION_CACHE_DIR
@@ -56,6 +57,7 @@ from tests.fixtures.synthetic_pipeline import (
 )
 from tests.fixtures.test_state import (
     REPO_BINDINGS_VALIDATION_CACHE_DIR,
+    REPO_CLUSTER_CACHE_DIR,
     REPO_SERIES_DERIVED_CACHE_DIR,
     REPO_SERIES_RESOLUTION_CACHE_DIR,
 )
@@ -114,11 +116,13 @@ def _monkeypatch_temp_graph_cache(
 
     ``regenerate_graph_cache(force=True)`` clears and rewrites
     ``COMMITTED_SERIES_RESOLUTION_CACHE_DIR``,
-    ``COMMITTED_SERIES_DERIVED_CACHE_DIR``, and
-    ``COMMITTED_BINDINGS_VALIDATION_CACHE_DIR``; tests that only redirect the
+    ``COMMITTED_SERIES_DERIVED_CACHE_DIR``,
+    ``COMMITTED_BINDINGS_VALIDATION_CACHE_DIR``, and
+    ``COMMITTED_CLUSTER_CACHE_DIR``; tests that only redirect the
     graph cache would wipe the committed artifacts used by session fixtures.
     """
     import src.bindings_validation_cache as bindings_validation_cache
+    import src.cluster_cache as cluster_cache
     import src.graph_cache as graph_cache
     import src.series_derived_cache as series_derived_cache
     import src.series_resolution_cache as series_resolution_cache
@@ -138,6 +142,7 @@ def _monkeypatch_temp_graph_cache(
         if validation_cache_dir is not None
         else cache_dir.parent / "bindings-validation"
     )
+    resolved_cluster_cache_dir = cache_dir.parent / "clusters"
     monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
     monkeypatch.setattr(graph_cache, "COMMITTED_GRAPH_CACHE_DIR", cache_dir)
     monkeypatch.setattr(
@@ -171,6 +176,16 @@ def _monkeypatch_temp_graph_cache(
         resolved_validation_cache_dir,
     )
     monkeypatch.setattr(
+        cluster_cache,
+        "DEFAULT_CLUSTER_CACHE_DIR",
+        resolved_cluster_cache_dir,
+    )
+    monkeypatch.setattr(
+        cluster_cache,
+        "COMMITTED_CLUSTER_CACHE_DIR",
+        resolved_cluster_cache_dir,
+    )
+    monkeypatch.setattr(
         "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
         cache_dir,
     )
@@ -189,6 +204,10 @@ def _monkeypatch_temp_graph_cache(
     monkeypatch.setattr(
         "scripts.regenerate_graph_cache.COMMITTED_BINDINGS_VALIDATION_CACHE_DIR",
         resolved_validation_cache_dir,
+    )
+    monkeypatch.setattr(
+        "scripts.regenerate_graph_cache.COMMITTED_CLUSTER_CACHE_DIR",
+        resolved_cluster_cache_dir,
     )
     monkeypatch.setattr(
         "scripts.regenerate_graph_cache.load_pipeline_config",
@@ -417,6 +436,60 @@ def test_synthetic_regenerate_leaves_committed_series_derived_unchanged(
     finally:
         if sentinel_created:
             sentinel.unlink(missing_ok=True)
+
+
+def test_synthetic_regenerate_leaves_committed_cluster_cache_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Synthetic force-regenerate must not wipe the repo clusters cache."""
+    assert COMMITTED_CLUSTER_CACHE_DIR == REPO_CLUSTER_CACHE_DIR
+
+    committed_cluster_dir = COMMITTED_CLUSTER_CACHE_DIR
+    committed_cluster_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = committed_cluster_dir / "committed-sentinel.meta.json"
+    sentinel_created = False
+    if not sentinel.is_file():
+        sentinel.write_text("{}\n", encoding="utf-8")
+        sentinel_created = True
+    before = sorted(path.name for path in committed_cluster_dir.iterdir())
+
+    try:
+        workbook_path = tmp_path / "workbook.xlsx"
+        write_synthetic_workbook(workbook_path)
+        config = synthetic_pipeline_config(workbook_path=workbook_path)
+        cache_dir = tmp_path / "dependency-graph"
+        _monkeypatch_temp_graph_cache(
+            monkeypatch,
+            cache_dir=cache_dir,
+            config=config,
+        )
+        regenerate_graph_cache(force=True)
+
+        after = sorted(path.name for path in committed_cluster_dir.iterdir())
+        assert after == before
+    finally:
+        if sentinel_created:
+            sentinel.unlink(missing_ok=True)
+
+
+def test_regenerate_force_clears_redirected_cluster_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    config = synthetic_pipeline_config(workbook_path=workbook_path)
+    cache_dir = tmp_path / "dependency-graph"
+    cluster_dir = tmp_path / "clusters"
+    cluster_dir.mkdir()
+    sentinel = cluster_dir / "stale.pkl.gz"
+    sentinel.write_bytes(b"stale")
+    _monkeypatch_temp_graph_cache(monkeypatch, cache_dir=cache_dir, config=config)
+
+    regenerate_graph_cache(force=True)
+
+    assert not sentinel.is_file()
 
 
 def test_committed_graph_cache_is_fresh_when_present(
