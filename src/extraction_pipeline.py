@@ -165,36 +165,43 @@ def extract_dependency_graph_result(
     no_cache: bool = False,
     force_rebuild: bool = False,
     timings: PipelineTimings | None = None,
+    timer: StageTimer | None = None,
+    profile: bool = True,
 ) -> DependencyGraphExtraction:
-    """Build the pipeline dependency graph and collect stage timings."""
-    timer = StageTimer()
+    """Build the pipeline dependency graph and collect stage timings.
+
+    When ``timer`` is supplied (e.g. from ``stage_span``), spans accumulate on
+    that timer. ``profile=False`` skips the local ``profile_if_enabled`` wrap so
+    a caller that already profiles the surrounding stage is not double-wrapped.
+    """
+    stage_timer = timer if timer is not None else StageTimer()
     stall_log_path = resolve_stall_log_path(config.graph_output_dir)
     started = time.perf_counter()
-    with profile_if_enabled(config.graph_output_dir, basename="extract"):
-        graph_result = build_pipeline_graph(
+
+    def _build() -> PipelineGraphResult:
+        return build_pipeline_graph(
             config,
-            timer=timer,
+            timer=stage_timer,
             stall_log_path=stall_log_path,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
             timings=timings,
         )
-        graph = graph_result.graph
-        series_bindings = graph_result.series_bindings
-        input_series = graph_result.input_series
-        output_series = graph_result.output_series
-        internal_series = graph_result.internal_series
-        constant_series = graph_result.constant_series
-        _graph_cache_key = graph_result.graph_cache_key
+
+    if profile:
+        with profile_if_enabled(config.graph_output_dir, basename="extract"):
+            graph_result = _build()
+    else:
+        graph_result = _build()
     elapsed_seconds = time.perf_counter() - started
     return DependencyGraphExtraction(
-        graph=graph,
-        series_bindings=series_bindings,
-        input_series=input_series,
-        output_series=output_series,
-        internal_series=internal_series,
-        constant_series=constant_series,
-        timer=timer,
+        graph=graph_result.graph,
+        series_bindings=graph_result.series_bindings,
+        input_series=graph_result.input_series,
+        output_series=graph_result.output_series,
+        internal_series=graph_result.internal_series,
+        constant_series=graph_result.constant_series,
+        timer=stage_timer,
         elapsed_seconds=elapsed_seconds,
     )
 
@@ -274,27 +281,27 @@ def extract_dependency_graph(
     timings: PipelineTimings | None = None,
 ) -> dict[str, Any]:
     """Build the dependency graph, write review artifacts, and return the summary."""
-    extraction = extract_dependency_graph_result(
-        config,
-        no_cache=no_cache,
-        force_rebuild=force_rebuild,
-        timings=timings,
-    )
-    summary = write_dependency_graph_artifacts(extraction, config)
-    if timings is not None:
-        # ``elapsed_seconds`` already spans the graph build plus the artifact
-        # write, so the stage is recorded from the summary rather than reopened.
-        timings.record_stage(
-            "extract",
-            elapsed_seconds=summary["elapsed_seconds"],
-            spans=extraction.timer.as_dict(),
+    with (
+        profile_if_enabled(config.graph_output_dir, basename="extract"),
+        stage_span(timings, "extract") as timer,
+    ):
+        extraction = extract_dependency_graph_result(
+            config,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+            timings=timings,
+            timer=timer,
+            profile=False,
         )
-    extraction.timer.print_summary(header="Extract stage timings")
-    stall_log_path = resolve_stall_log_path(config.graph_output_dir)
-    if stall_log_path.is_file():
-        print(f"Stall diagnostics: {stall_log_path}")
-    print(f"Wrote dependency graph artifacts to {config.graph_output_dir.resolve()}/")
-    return summary
+        summary = write_dependency_graph_artifacts(extraction, config)
+        timer.print_summary(header="Extract stage timings")
+        stall_log_path = resolve_stall_log_path(config.graph_output_dir)
+        if stall_log_path.is_file():
+            print(f"Stall diagnostics: {stall_log_path}")
+        print(
+            f"Wrote dependency graph artifacts to {config.graph_output_dir.resolve()}/"
+        )
+        return summary
 
 
 def is_constant_constraint(constraint: object) -> bool:
@@ -460,9 +467,9 @@ def run_export_stage(
         internal_binding_index = build_internal_binding_index(
             graph_result.internal_series
         )
-        timer.print_summary()
         if stall_log_path.is_file():
             print(f"Stall diagnostics: {stall_log_path}")
+        projection_started = time.perf_counter()
         refactor_projection = build_refactor_projection(
             graph,
             graph_cache_key=graph_cache_key,
@@ -470,7 +477,10 @@ def run_export_stage(
             force_rebuild=force_rebuild,
             timings=timings,
         )
-        return _generate_export_package(
+        timer.record(
+            "build_refactor_projection", time.perf_counter() - projection_started
+        )
+        state = _generate_export_package(
             config,
             graph_result=graph_result,
             series_bindings=series_bindings,
@@ -480,7 +490,10 @@ def run_export_stage(
             no_cache=no_cache,
             force_rebuild=force_rebuild,
             timings=timings,
+            timer=timer,
         )
+        timer.print_summary(header="Export stage timings")
+        return state
 
 
 def _generate_export_package(
@@ -494,6 +507,7 @@ def _generate_export_package(
     no_cache: bool,
     force_rebuild: bool,
     timings: PipelineTimings | None,
+    timer: StageTimer,
 ) -> ExportStageState:
     """Generate the package modules under dist/ and seed the validation harness."""
     proj_cache_key = projection_cache_key(graph_cache_key=graph_cache_key)
@@ -515,6 +529,7 @@ def _generate_export_package(
                 docstring_renderer=docstring_renderer,
             )
 
+    codegen_started = time.perf_counter()
     codegen_result = get_or_build_codegen_modules(
         projection_cache_key=proj_cache_key,
         targets=targets,
@@ -526,6 +541,7 @@ def _generate_export_package(
         no_cache=no_cache,
         force_rebuild=force_rebuild,
     )
+    timer.record("codegen", time.perf_counter() - codegen_started)
     record_cache_result(timings, "codegen", codegen_result)
     modules = dict(codegen_result.modules)
     api_source = modules.get("api.py")
@@ -540,6 +556,7 @@ def _generate_export_package(
             rewritten += "\n"
         modules["api.py"] = ensure_xl_error_exception_import(rewritten)
 
+    package_started = time.perf_counter()
     package_root = config.package_root
     write_generated_modules(package_root, modules)
 
@@ -573,6 +590,7 @@ tests/results/local/
     write_dist_readme(config.dist_root, metadata=config.dist_metadata)
 
     seed_validation_harness(config=config)
+    timer.record("write_export_package", time.perf_counter() - package_started)
     print(
         f"codegen: {len(modules)} modules ({codegen_result.elapsed_seconds:.1f}s)",
         flush=True,
@@ -657,7 +675,8 @@ def run_refactor_stage(
             timer=timer,
         )
         refactor_seconds = time.perf_counter() - refactor_started
-        timer.record("internals_refactor", refactor_seconds)
+        # Do not record an ``internals_refactor`` rollup span: Pass 1 leaf spans
+        # and parity/pass2/phase_c already partition that work on the same timer.
         print(
             f"internals_refactor: done ({refactor_seconds:.1f}s)",
             flush=True,

@@ -8,7 +8,8 @@ with the wall clock of every stage, the spans inside it, and the outcome of each
 on-disk cache.
 
 The file is rewritten after every stage record, so a run that dies mid-pipeline
-still leaves the timings of the stages that completed.
+still leaves the timings of the stages that completed — including the stage that
+raised, when recorded via :meth:`PipelineTimings.stage`.
 """
 
 from __future__ import annotations

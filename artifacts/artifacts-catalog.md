@@ -60,7 +60,7 @@ Open `http://localhost:8000/`.
 
 ## `stage-timings.json`
 
-Written by every `run_pipeline` invocation (`uv run python -m src.extraction_pipeline`), rewritten after each stage completes so a run that dies mid-pipeline still records the stages that finished.
+Written by every `run_pipeline` invocation (`uv run python -m src.extraction_pipeline`), rewritten after each stage completes so a run that dies mid-pipeline still records the stages that finished (including the stage that raised).
 
 ### Schema (version `1.0.0`)
 
@@ -71,15 +71,17 @@ Written by every `run_pipeline` invocation (`uv run python -m src.extraction_pip
 | `stages` | array | One entry per stage reached, in run order |
 | `stages[].name` | string | `extract`, `export`, `refactor`, `validate`, or `document` |
 | `stages[].elapsed_seconds` | number | Stage wall clock |
-| `stages[].spans` | object | Seconds keyed by span name inside that stage |
+| `stages[].spans` | object | Seconds keyed by leaf span name inside that stage |
 | `caches` | object | One entry per on-disk cache; `null` fields mean the run never reached it |
-| `caches[].cache_hit` | boolean \| null | Whether the payload was loaded from `.cache/` |
-| `caches[].elapsed_seconds` | number \| null | Seconds spent in the `get_or_build_*` call |
-| `caches[].cache_key` | string \| null | Content key the lookup resolved to |
+| `caches.<name>.cache_hit` | boolean \| null | Whether the payload was loaded from `.cache/` |
+| `caches.<name>.elapsed_seconds` | number \| null | Seconds spent in the `get_or_build_*` call |
+| `caches.<name>.cache_key` | string \| null | Content key the lookup resolved to |
 
 `caches` keys: `dependency-graph`, `bindings-validation`, `series-resolution`, `projection`, `codegen`.
 
-Notable spans: `create_dependency_graph`, `derive_series`, `validate_series_bindings` (extract/export); `cluster_graph_formulas`, `pass1_context`, `pass1_synthesize`, `pass1_apply`, `pass1_validate`, `pass1_reindex`, `mechanical_parity_gate`, `pass2_semantic_naming`, `phase_c` (refactor); `post_refactor_differential`, `export_reference_reports` (validate).
+Spans are non-overlapping leaf measurements: do not invent a total by summing them with a parent rollup. A full `run_pipeline` records `export` (not `extract`); `extract` appears only when `stop_after_stage=extract`.
+
+Notable spans: `create_dependency_graph`, `derive_series`, `validate_series_bindings`, `build_refactor_projection`, `codegen`, `write_export_package` (extract/export); `build_refactor_bindings`, `cluster_graph_formulas`, `pass1_context`, `pass1_synthesize`, `pass1_apply`, `pass1_validate`, `pass1_reindex`, `mechanical_parity_gate`, `pass2_semantic_naming`, `phase_c` (refactor); `post_refactor_differential`, `export_reference_reports` (validate).
 
 ### cProfile output
 
