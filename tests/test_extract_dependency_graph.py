@@ -95,8 +95,10 @@ def _export_generated_package_with_mocked_codegen(
     *,
     cluster_graph_formulas: MagicMock,
     refactor_internals_all_clusters: MagicMock | None = None,
+    bound_address_keys: dict | None = None,
 ) -> MagicMock:
     refactor = refactor_internals_all_clusters or MagicMock()
+    resolved_bound_keys = {} if bound_address_keys is None else bound_address_keys
     with patch(
         "src.extraction_pipeline.build_pipeline_graph",
         return_value=MagicMock(
@@ -107,6 +109,11 @@ def _export_generated_package_with_mocked_codegen(
             internal_series=(),
             constant_series=(),
             graph_cache_key="cache-key",
+            leaf_classification={},
+            internal_binding_index={},
+            bound_address_keys=resolved_bound_keys,
+            address_to_series_id={},
+            coverage_report=None,
         ),
     ):
         with patch(
@@ -210,31 +217,17 @@ def test_export_generated_package_passes_bound_address_keys_to_refactor(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
-    """Bound keys come from the series-derived cache on PipelineGraphResult."""
+    """Bound keys from PipelineGraphResult are threaded into the refactor stage."""
     config = replace(
         synthetic_pipeline_config_fixture,
         dist_root=tmp_path / "dist",
     )
     expected_keys = {"Engine!B2": {"TIME_PERIOD": 1}}
-    with patch(
-        "src.extraction_pipeline.get_or_build_series_derived",
-    ) as derived:
-        from src.series_derived_cache import SeriesDerivedCacheResult
-
-        derived.return_value = SeriesDerivedCacheResult(
-            leaf_classification={},
-            internal_binding_index={},
-            bound_address_keys=expected_keys,
-            address_to_series_id={},
-            coverage_report=None,
-            cache_key="derived",
-            cache_hit=False,
-            elapsed_seconds=0.0,
-        )
-        refactor = _export_generated_package_with_mocked_codegen(
-            config,
-            cluster_graph_formulas=MagicMock(return_value=()),
-        )
+    refactor = _export_generated_package_with_mocked_codegen(
+        config,
+        cluster_graph_formulas=MagicMock(return_value=()),
+        bound_address_keys=expected_keys,
+    )
 
     refactor.assert_called_once()
     assert refactor.call_args.kwargs["bound_address_keys"] is expected_keys
