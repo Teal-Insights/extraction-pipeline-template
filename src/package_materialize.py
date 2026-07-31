@@ -135,7 +135,9 @@ def internals_cache_path(internals_key: str, *, cache_dir: Path | None = None) -
     return resolved / f"{internals_key}.py"
 
 
-def load_refactored_internals(internals_key: str, *, cache_dir: Path | None = None) -> str:
+def load_refactored_internals(
+    internals_key: str, *, cache_dir: Path | None = None
+) -> str:
     path = internals_cache_path(internals_key, cache_dir=cache_dir)
     if not path.is_file():
         raise FileNotFoundError(

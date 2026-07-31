@@ -122,7 +122,9 @@ def mechanical_internals_checkpoint_path(internals_path: Path) -> Path:
     """
     package_root = internals_path.parent
     namespace = package_root_checkpoint_namespace(package_root)
-    return DEFAULT_INTERNALS_CACHE_DIR / namespace / MECHANICAL_INTERNALS_CHECKPOINT_NAME
+    return (
+        DEFAULT_INTERNALS_CACHE_DIR / namespace / MECHANICAL_INTERNALS_CHECKPOINT_NAME
+    )
 
 
 RefactorPromptObserver = Callable[[str, str, str], None]

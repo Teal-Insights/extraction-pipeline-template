@@ -4852,10 +4852,14 @@ def test_pass_one_parity_failure_keeps_package_internals_pristine(
     assert checkpoint_path.read_text(encoding="utf-8") == version_sources[4]
     assert internals_path.read_text(encoding="utf-8") == pristine
     assert checkpoint_path.parent != internals_path.parent
-    assert not (internals_path.parent / module.MECHANICAL_INTERNALS_CHECKPOINT_NAME).exists()
+    assert not (
+        internals_path.parent / module.MECHANICAL_INTERNALS_CHECKPOINT_NAME
+    ).exists()
 
 
-def test_mechanical_checkpoint_namespaces_distinct_package_roots(tmp_path: Path) -> None:
+def test_mechanical_checkpoint_namespaces_distinct_package_roots(
+    tmp_path: Path,
+) -> None:
     import src.internals_refactor as module
 
     dist_internals = tmp_path / "dist" / "pkg" / "internals.py"
