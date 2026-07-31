@@ -147,19 +147,13 @@ def test_run_refactor_stage_prints_clustering_and_refactor_boundaries(
             constant_series=(),
         ),
         refactor_projection=MagicMock(),
-        internal_binding_index=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
         package_root=package_root,
     )
 
     with (
-        patch(
-            "src.refactor_bindings.build_bound_address_keys",
-            return_value={},
-        ),
-        patch(
-            "src.refactor_bindings.build_address_to_series_id",
-            return_value={},
-        ),
         patch(
             "src.formula_clustering.cluster_graph_formulas",
             return_value=clusters,
@@ -496,14 +490,14 @@ def test_run_refactor_stage_records_spans_and_profiles(tmp_path: Path) -> None:
             constant_series=(),
         ),
         refactor_projection=MagicMock(),
-        internal_binding_index=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
         package_root=package_root,
     )
     timings = PipelineTimings()
 
     with (
-        patch("src.refactor_bindings.build_bound_address_keys", return_value={}),
-        patch("src.refactor_bindings.build_address_to_series_id", return_value={}),
         patch("src.formula_clustering.cluster_graph_formulas", return_value=()),
         patch("src.internals_refactor.refactor_internals_all_clusters"),
         patch("src.extraction_pipeline.profile_if_enabled") as profile,
@@ -535,13 +529,13 @@ def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(
             constant_series=(),
         ),
         refactor_projection=MagicMock(),
-        internal_binding_index=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
         package_root=package_root,
     )
 
     with (
-        patch("src.refactor_bindings.build_bound_address_keys", return_value={}),
-        patch("src.refactor_bindings.build_address_to_series_id", return_value={}),
         patch("src.formula_clustering.cluster_graph_formulas", return_value=()),
         patch("src.internals_refactor.refactor_internals_all_clusters") as refactor,
     ):
@@ -599,6 +593,7 @@ def test_run_pipeline_writes_stage_timings_artifact(
         "dependency-graph",
         "bindings-validation",
         "series-resolution",
+        "series-derived",
         "projection",
         "codegen",
     }

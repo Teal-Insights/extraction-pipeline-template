@@ -10,8 +10,9 @@ or upgrading excel-grapher:
     uv run python -m scripts.regenerate_graph_cache
 
 Use ``--force`` to rebuild even when current entries already exist. Force also
-clears ``.cache/series-resolution`` and ``.cache/bindings-validation`` before
-rebuilding and pruning them to keys derived from the current graph cache keys.
+clears ``.cache/series-resolution``, ``.cache/series-derived``, and
+``.cache/bindings-validation`` before rebuilding and pruning them to keys
+derived from the current graph cache keys.
 Commit the updated ``.cache/dependency-graph`` artifacts when your downstream
 pipeline chooses to vendor the cache (override ``.gitignore`` for that
 directory).
@@ -47,6 +48,12 @@ from src.pipeline_config import (  # noqa: E402
     load_pipeline_config,
     validate_pipeline_config,
 )
+from src.series_derived_cache import (  # noqa: E402
+    COMMITTED_SERIES_DERIVED_CACHE_DIR,
+    clear_series_derived_cache,
+    prune_stale_series_derived_cache_entries,
+    series_derived_cache_key,
+)
 from src.series_resolution_cache import (  # noqa: E402
     COMMITTED_SERIES_RESOLUTION_CACHE_DIR,
     clear_series_resolution_cache,
@@ -75,6 +82,9 @@ def regenerate_graph_cache(
     if force:
         clear_series_resolution_cache(
             cache_dir=COMMITTED_SERIES_RESOLUTION_CACHE_DIR,
+        )
+        clear_series_derived_cache(
+            cache_dir=COMMITTED_SERIES_DERIVED_CACHE_DIR,
         )
         clear_bindings_validation_cache(
             cache_dir=COMMITTED_BINDINGS_VALIDATION_CACHE_DIR,
@@ -145,6 +155,20 @@ def regenerate_graph_cache(
         cache_dir=COMMITTED_SERIES_RESOLUTION_CACHE_DIR,
     ):
         print(f"pruned stale series-resolution cache entry: {filename}")
+
+    derived_keys = {
+        series_derived_cache_key(
+            graph_cache_key=cache_key,
+            validation_mode=config.internal_binding_validation_mode,
+            exempt_cells=config.internal_binding_exempt_cells,
+        )
+        for cache_key in current_keys
+    }
+    for filename in prune_stale_series_derived_cache_entries(
+        derived_keys,
+        cache_dir=COMMITTED_SERIES_DERIVED_CACHE_DIR,
+    ):
+        print(f"pruned stale series-derived cache entry: {filename}")
     return current_keys
 
 
@@ -152,17 +176,19 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Regenerate the committed dependency-graph, series-resolution, "
-            "and bindings-validation caches."
+            "series-derived, and bindings-validation caches."
         )
     )
     parser.add_argument(
         "--force",
         action="store_true",
         help=(
-            "Rebuild graphs/validation even when the cache already has current entries."
+            "Rebuild even when current entries already exist; also clear and "
+            "prune series-resolution, series-derived, and bindings-validation "
+            "caches."
         ),
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(list(argv) if argv is not None else None)
     regenerate_graph_cache(force=args.force)
 
 

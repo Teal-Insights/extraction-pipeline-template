@@ -24,8 +24,12 @@ from src.dependency_graph_viz import (
     series_cell_keys,
     write_dependency_graph_site,
 )
-from src.internal_bindings import binding_node_labels, build_internal_binding_index
-from src.internal_binding_coverage import enforce_internal_binding_coverage
+from src.internal_bindings import (
+    InternalBindingIndex,
+    binding_node_labels,
+)
+from src.internal_binding_coverage import InternalBindingCoverageReport
+from src.refactor_bindings import BindingKeyValue
 from src.soft_error_compute_codegen import (
     ensure_xl_error_exception_import,
     rewrite_compute_measure_assignment,
@@ -67,6 +71,7 @@ from src.qmd_python_validation import (
 )
 from src.bindings_validation_cache import get_or_build_bindings_validation
 from src.graph_cache import get_or_build_dependency_graph
+from src.series_derived_cache import get_or_build_series_derived
 from src.series_resolution_cache import get_or_build_series_resolution
 from src.stage_timings import (
     PipelineTimings,
@@ -111,6 +116,11 @@ class PipelineGraphResult:
     internal_series: SeriesResolutionList
     constant_series: SeriesResolutionList
     graph_cache_key: str
+    leaf_classification: dict[str, str]
+    internal_binding_index: InternalBindingIndex
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]]
+    address_to_series_id: dict[str, str]
+    coverage_report: InternalBindingCoverageReport | None
 
 
 @dataclass(frozen=True)
@@ -123,6 +133,8 @@ class DependencyGraphExtraction:
     output_series: SeriesResolutionList
     internal_series: SeriesResolutionList
     constant_series: SeriesResolutionList
+    leaf_classification: dict[str, str]
+    internal_binding_index: InternalBindingIndex
     timer: StageTimer
     elapsed_seconds: float
 
@@ -134,7 +146,9 @@ class ExportStageState:
     config: PipelineConfig
     graph_result: PipelineGraphResult
     refactor_projection: Any
-    internal_binding_index: Any
+    internal_binding_index: InternalBindingIndex
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]]
+    address_to_series_id: dict[str, str]
     package_root: Path
 
 
@@ -201,6 +215,8 @@ def extract_dependency_graph_result(
         output_series=graph_result.output_series,
         internal_series=graph_result.internal_series,
         constant_series=graph_result.constant_series,
+        leaf_classification=graph_result.leaf_classification,
+        internal_binding_index=graph_result.internal_binding_index,
         timer=stage_timer,
         elapsed_seconds=elapsed_seconds,
     )
@@ -220,10 +236,10 @@ def write_dependency_graph_artifacts(
 ) -> dict[str, Any]:
     """Write the interactive graph site and extraction summary JSON."""
     graph = extraction.graph
-    leaf_classification = graph.leaf_classification or {}
+    leaf_classification = extraction.leaf_classification
     output_dir = config.graph_output_dir
     artifact_started = time.perf_counter()
-    internal_binding_index = build_internal_binding_index(extraction.internal_series)
+    internal_binding_index = extraction.internal_binding_index
     write_dependency_graph_site(
         graph,
         output_dir,
@@ -408,25 +424,24 @@ def build_pipeline_graph(
         internal_series = series_result.internal_series
         constant_series = series_result.constant_series
 
-    with stage("classify_leaves"):
-        leaf_classification = classify_leaves_from_constraints(
-            config.constraints, graph.leaf_keys()
-        )
-        graph.leaf_classification = leaf_classification
-
-    input_cell_keys = series_cell_keys(input_series)
-    output_cell_keys = series_cell_keys(output_series)
-
-    with stage("validate_internal_binding_coverage"):
-        enforce_internal_binding_coverage(
-            graph=graph,
+    with stage("series_derived"):
+        derived_result = get_or_build_series_derived(
+            graph,
+            constraints=config.constraints,
+            input_series=input_series,
+            output_series=output_series,
             internal_series=internal_series,
-            input_cells=input_cell_keys,
-            output_cells=output_cell_keys,
+            constant_series=constant_series,
+            input_cells=series_cell_keys(input_series),
+            output_cells=series_cell_keys(output_series),
             exempt_cells=config.internal_binding_exempt_cells,
-            mode=config.internal_binding_validation_mode,
+            validation_mode=config.internal_binding_validation_mode,
             context="pipeline",
+            graph_cache_key=graph_cache_key,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
         )
+        record_cache_result(timings, "series-derived", derived_result)
 
     return PipelineGraphResult(
         graph=graph,
@@ -436,6 +451,11 @@ def build_pipeline_graph(
         internal_series=internal_series,
         constant_series=constant_series,
         graph_cache_key=graph_cache_key,
+        leaf_classification=derived_result.leaf_classification,
+        internal_binding_index=derived_result.internal_binding_index,
+        bound_address_keys=derived_result.bound_address_keys,
+        address_to_series_id=derived_result.address_to_series_id,
+        coverage_report=derived_result.coverage_report,
     )
 
 
@@ -464,9 +484,6 @@ def run_export_stage(
         graph = graph_result.graph
         series_bindings = graph_result.series_bindings
         graph_cache_key = graph_result.graph_cache_key
-        internal_binding_index = build_internal_binding_index(
-            graph_result.internal_series
-        )
         if stall_log_path.is_file():
             print(f"Stall diagnostics: {stall_log_path}")
         projection_started = time.perf_counter()
@@ -486,7 +503,9 @@ def run_export_stage(
             series_bindings=series_bindings,
             graph_cache_key=graph_cache_key,
             refactor_projection=refactor_projection,
-            internal_binding_index=internal_binding_index,
+            internal_binding_index=graph_result.internal_binding_index,
+            bound_address_keys=graph_result.bound_address_keys,
+            address_to_series_id=graph_result.address_to_series_id,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
             timings=timings,
@@ -503,7 +522,9 @@ def _generate_export_package(
     series_bindings: WorkbookSeriesBindings,
     graph_cache_key: str,
     refactor_projection: Any,
-    internal_binding_index: Any,
+    internal_binding_index: InternalBindingIndex,
+    bound_address_keys: dict[str, dict[str, BindingKeyValue]],
+    address_to_series_id: dict[str, str],
     no_cache: bool,
     force_rebuild: bool,
     timings: PipelineTimings | None,
@@ -601,6 +622,8 @@ tests/results/local/
         graph_result=graph_result,
         refactor_projection=refactor_projection,
         internal_binding_index=internal_binding_index,
+        bound_address_keys=bound_address_keys,
+        address_to_series_id=address_to_series_id,
         package_root=package_root,
     )
 
@@ -613,10 +636,6 @@ def run_refactor_stage(
     """Cluster formulas and rewrite internals behind the parity gate."""
     from src.formula_clustering import cluster_graph_formulas
     from src.internals_refactor import refactor_internals_all_clusters
-    from src.refactor_bindings import (
-        build_address_to_series_id,
-        build_bound_address_keys,
-    )
 
     config = state.config
     graph_result = state.graph_result
@@ -625,18 +644,8 @@ def run_refactor_stage(
         stage_span(timings, "refactor") as timer,
     ):
         bindings_started = time.perf_counter()
-        bound_address_keys = build_bound_address_keys(
-            graph_result.input_series,
-            graph_result.output_series,
-            graph_result.internal_series,
-            constant_series=graph_result.constant_series,
-        )
-        address_to_series_id = build_address_to_series_id(
-            graph_result.internal_series,
-            output_series=graph_result.output_series,
-            input_series=graph_result.input_series,
-            constant_series=graph_result.constant_series,
-        )
+        bound_address_keys = state.bound_address_keys
+        address_to_series_id = state.address_to_series_id
         timer.record("build_refactor_bindings", time.perf_counter() - bindings_started)
         print("clustering: partitioning formulas…", flush=True)
         clustering_started = time.perf_counter()
@@ -869,8 +878,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--no-cache",
         action="store_true",
         help=(
-            "Bypass on-disk graph, projection, series-resolution, codegen, "
-            "and exported-library differential caches for this run."
+            "Bypass on-disk graph, projection, series-resolution, series-derived, "
+            "codegen, and exported-library differential caches for this run."
         ),
     )
     parser.add_argument(

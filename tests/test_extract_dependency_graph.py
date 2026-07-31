@@ -210,16 +210,27 @@ def test_export_generated_package_passes_bound_address_keys_to_refactor(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
-    """Avoid the second graph rebuild via ``_default_bound_address_keys``."""
+    """Bound keys come from the series-derived cache on PipelineGraphResult."""
     config = replace(
         synthetic_pipeline_config_fixture,
         dist_root=tmp_path / "dist",
     )
     expected_keys = {"Engine!B2": {"TIME_PERIOD": 1}}
     with patch(
-        "src.refactor_bindings.build_bound_address_keys",
-        return_value=expected_keys,
-    ):
+        "src.extraction_pipeline.get_or_build_series_derived",
+    ) as derived:
+        from src.series_derived_cache import SeriesDerivedCacheResult
+
+        derived.return_value = SeriesDerivedCacheResult(
+            leaf_classification={},
+            internal_binding_index={},
+            bound_address_keys=expected_keys,
+            address_to_series_id={},
+            coverage_report=None,
+            cache_key="derived",
+            cache_hit=False,
+            elapsed_seconds=0.0,
+        )
         refactor = _export_generated_package_with_mocked_codegen(
             config,
             cluster_graph_formulas=MagicMock(return_value=()),

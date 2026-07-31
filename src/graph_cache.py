@@ -25,10 +25,10 @@ DEFAULT_GRAPH_CACHE_DIR = (
 COMMITTED_GRAPH_CACHE_DIR = DEFAULT_GRAPH_CACHE_DIR
 
 # Same-process reuse of loaded graphs keyed by (cache_dir, cache_key). Callers
-# that mutate the returned DependencyGraph (e.g. leaf_classification assignment
-# or projection) share those mutations with later process-cache hits for the
-# same key; treat the object as owned by the pipeline run, not as an immutable
-# snapshot.
+# that mutate the returned DependencyGraph (e.g. projection) share those
+# mutations with later process-cache hits for the same key; treat the object as
+# owned by the pipeline run, not as an immutable snapshot. Leaf classification
+# lives on PipelineGraphResult / the series-derived cache, not on this object.
 _PROCESS_GRAPH_CACHE: dict[tuple[str, str], DependencyGraph] = {}
 
 

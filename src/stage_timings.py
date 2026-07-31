@@ -27,11 +27,12 @@ from src.pipeline_monitor import StageTimer
 STAGE_TIMINGS_SCHEMA_VERSION = "1.0.0"
 STAGE_TIMINGS_FILENAME = "stage-timings.json"
 
-# The five on-disk caches described in AGENTS.md, in the order a run reaches them.
+# The on-disk caches described in AGENTS.md, in the order a run reaches them.
 CACHE_NAMES: tuple[str, ...] = (
     "dependency-graph",
     "bindings-validation",
     "series-resolution",
+    "series-derived",
     "projection",
     "codegen",
 )
