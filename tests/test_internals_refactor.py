@@ -5797,7 +5797,9 @@ def test_refactor_internals_all_clusters_forwards_bound_address_keys(
         return None
 
     def boom_default_bound_keys() -> dict[str, dict[str, object]]:
-        raise AssertionError("_default_bound_address_keys must not run")
+        raise AssertionError(
+            "_bound_address_keys_from_series_derived_cache must not run"
+        )
 
     unit = RefactorUnit(
         parent_cluster_id=0,
@@ -5808,7 +5810,9 @@ def test_refactor_internals_all_clusters_forwards_bound_address_keys(
     )
     monkeypatch.setattr(module, "compute_refactor_schedule", lambda *_a, **_k: (unit,))
     monkeypatch.setattr(module, "build_cluster_refactor_context", fake_build_cluster)
-    monkeypatch.setattr(module, "_default_bound_address_keys", boom_default_bound_keys)
+    monkeypatch.setattr(
+        module, "_bound_address_keys_from_series_derived_cache", boom_default_bound_keys
+    )
     monkeypatch.setattr(
         module, "build_singleton_refactor_context", lambda *_a, **_k: None
     )

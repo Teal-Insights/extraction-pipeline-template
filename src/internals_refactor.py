@@ -46,7 +46,6 @@ from src.internal_bindings import InternalBindingIndex, internal_binding_for_add
 from src.refactor_bindings import (
     BindingKeyValue,
     KeyConceptSpec,
-    build_bound_address_keys,
     dimension_id_to_param_name,
     engine_column_from_member_keys,
     expected_member_keys_for_cluster,
@@ -1100,22 +1099,33 @@ def _time_period_for_engine_column(
     return layout.time_period_for_engine_column(column)
 
 
-def _default_bound_address_keys() -> dict[str, dict[str, BindingKeyValue]]:
-    """Fallback that rebuilds the pipeline graph solely to derive bound keys.
+def _bound_address_keys_from_series_derived_cache() -> dict[
+    str, dict[str, BindingKeyValue]
+]:
+    """Load bound keys from the series-derived cache or fail loudly if absent.
 
     Prefer passing ``bound_address_keys`` (and ``source_graph``) from the caller
-    that already ran ``build_pipeline_graph``; otherwise a warm pipeline pays a
-    second dependency-graph load plus ``derive_*_series`` work.
+    that already ran ``build_pipeline_graph``.
     """
-    from src.extraction_pipeline import build_pipeline_graph
+    from src.graph_cache import dependency_graph_cache_key
     from src.pipeline_context import require_pipeline_config
+    from src.series_derived_cache import (
+        require_bound_address_keys_from_series_derived_cache,
+    )
 
-    graph_result = build_pipeline_graph(require_pipeline_config())
-    return build_bound_address_keys(
-        graph_result.input_series,
-        graph_result.output_series,
-        graph_result.internal_series,
-        constant_series=graph_result.constant_series,
+    config = require_pipeline_config()
+    graph_cache_key = dependency_graph_cache_key(
+        workbook_path=config.workbook_path,
+        targets=config.targets,
+        constraints=config.constraints,
+        bindings_path=config.bindings_path,
+        load_values=True,
+        capture_dependency_provenance=True,
+    )
+    return require_bound_address_keys_from_series_derived_cache(
+        graph_cache_key=graph_cache_key,
+        validation_mode=config.internal_binding_validation_mode,
+        exempt_cells=config.internal_binding_exempt_cells,
     )
 
 
@@ -1222,7 +1232,7 @@ def build_cluster_refactor_context(
     resolved_bound_keys = (
         bound_address_keys
         if bound_address_keys is not None
-        else _default_bound_address_keys()
+        else _bound_address_keys_from_series_derived_cache()
     )
     resolved_vocabulary = (
         key_vocabulary
@@ -5817,8 +5827,7 @@ def refactor_internals_all_clusters(
     Phase C keep their own single writes.
 
     Pass ``bound_address_keys`` from the extract stage when available so cluster
-    context construction does not call ``_default_bound_address_keys`` (which
-    rebuilds the pipeline graph).
+    context construction does not fall back to the series-derived cache lookup.
 
     Pass ``timer`` to collect the Pass 1 / parity-gate / Pass 2 wall clock as
     spans of the caller's refactor stage; every span is also logged, so callers

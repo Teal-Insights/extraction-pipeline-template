@@ -34,10 +34,6 @@ from src.pipeline_config import (  # noqa: E402
     validate_pipeline_config,
 )
 from src.pipeline_context import activate_pipeline_config  # noqa: E402
-from src.refactor_bindings import (  # noqa: E402
-    build_address_to_series_id,
-    build_bound_address_keys,
-)
 from src.refactor_order import compute_refactor_schedule_with_diagnostics  # noqa: E402
 from src.subgraph_projection import build_refactor_projection  # noqa: E402
 
@@ -323,18 +319,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         graph_cache_key=graph_result.graph_cache_key,
         no_cache=args.no_cache,
     )
-    bound_address_keys = build_bound_address_keys(
-        graph_result.input_series,
-        graph_result.output_series,
-        graph_result.internal_series,
-        constant_series=graph_result.constant_series,
-    )
-    address_to_series_id = build_address_to_series_id(
-        graph_result.internal_series,
-        output_series=graph_result.output_series,
-        input_series=graph_result.input_series,
-        constant_series=graph_result.constant_series,
-    )
+    bound_address_keys = graph_result.bound_address_keys
+    address_to_series_id = graph_result.address_to_series_id
     layout = config.projection_layout
 
     independent = _cluster_by_mode(

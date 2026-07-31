@@ -24,7 +24,6 @@ from typing import Sequence
 
 from src.extraction_pipeline import build_pipeline_graph
 from src.formula_clustering import cluster_graph_formulas
-from src.internal_bindings import build_internal_binding_index
 from src.internals_refactor import (
     ClusterRefactorContext,
     SingletonRefactorContext,
@@ -49,10 +48,6 @@ from src.pipeline_config import (
 )
 from src.pipeline_context import activate_pipeline_config
 from src.record_refactor_buckets import export_generated_modules
-from src.refactor_bindings import (
-    build_address_to_series_id,
-    build_bound_address_keys,
-)
 from src.subgraph_projection import build_refactor_projection
 
 DEFAULT_OUTPUT_ROOT = Path("artifacts/refactor-lab")
@@ -161,7 +156,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Bypass graph/projection/series-resolution/codegen caches for this run.",
+        help=(
+            "Bypass graph/projection/series-resolution/series-derived/codegen "
+            "caches for this run."
+        ),
     )
     parser.add_argument(
         "--report-synthesis",
@@ -200,19 +198,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         graph_cache_key=graph_result.graph_cache_key,
         no_cache=args.no_cache,
     )
-    internal_binding_index = build_internal_binding_index(graph_result.internal_series)
-    bound_address_keys = build_bound_address_keys(
-        graph_result.input_series,
-        graph_result.output_series,
-        graph_result.internal_series,
-        constant_series=graph_result.constant_series,
-    )
-    address_to_series_id = build_address_to_series_id(
-        graph_result.internal_series,
-        output_series=graph_result.output_series,
-        input_series=graph_result.input_series,
-        constant_series=graph_result.constant_series,
-    )
+    internal_binding_index = graph_result.internal_binding_index
+    bound_address_keys = graph_result.bound_address_keys
+    address_to_series_id = graph_result.address_to_series_id
     formula_clusters = cluster_graph_formulas(
         refactor_projection,
         bound_address_keys=bound_address_keys,

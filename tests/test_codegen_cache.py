@@ -243,6 +243,9 @@ def test_run_export_stage_skips_generate_modules_on_cache_hit(
     graph_result.series_bindings = MagicMock()
     graph_result.graph_cache_key = "graph-key"
     graph_result.internal_series = []
+    graph_result.internal_binding_index = {}
+    graph_result.bound_address_keys = {}
+    graph_result.address_to_series_id = {}
 
     codegen_dir = tmp_path / "codegen"
     sample = dict(_SAMPLE_MODULES)
@@ -255,10 +258,6 @@ def test_run_export_stage_skips_generate_modules_on_cache_hit(
         patch(
             "src.extraction_pipeline.build_refactor_projection",
             return_value=MagicMock(),
-        ),
-        patch(
-            "src.extraction_pipeline.build_internal_binding_index",
-            return_value={},
         ),
         patch("src.extraction_pipeline.profile_if_enabled") as profile_mock,
         patch("src.extraction_pipeline.configure_logging"),

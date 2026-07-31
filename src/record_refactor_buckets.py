@@ -47,8 +47,6 @@ from src.formula_clustering import (
 )
 from src.refactor_bindings import (
     KeyConceptSpec,
-    build_address_to_series_id,
-    build_bound_address_keys,
     load_key_concept_vocabulary,
     varying_key_concepts,
 )
@@ -56,7 +54,7 @@ from src.refactor_contracts import (
     ClusterRefactorContract,
     select_cluster_refactor_contract,
 )
-from src.internal_bindings import InternalBindingIndex, build_internal_binding_index
+from src.internal_bindings import InternalBindingIndex
 from src.internals_refactor import (
     ClusterRefactorContext,
     SingletonRefactorContext,
@@ -737,25 +735,13 @@ def run_record_refactor_buckets(
             series_bindings=graph_result.series_bindings,
             no_cache=no_cache,
         )
-        internal_binding_index = build_internal_binding_index(
-            graph_result.internal_series
-        )
+        internal_binding_index = graph_result.internal_binding_index
         cluster_graph = projection
     else:
         cluster_graph = graph_result.graph
 
-    bound_address_keys = build_bound_address_keys(
-        graph_result.input_series,
-        graph_result.output_series,
-        graph_result.internal_series,
-        constant_series=graph_result.constant_series,
-    )
-    address_to_series_id = build_address_to_series_id(
-        graph_result.internal_series,
-        output_series=graph_result.output_series,
-        input_series=graph_result.input_series,
-        constant_series=graph_result.constant_series,
-    )
+    bound_address_keys = graph_result.bound_address_keys
+    address_to_series_id = graph_result.address_to_series_id
     records = record_refactor_buckets(
         config,
         graph=cluster_graph,

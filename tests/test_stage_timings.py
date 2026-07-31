@@ -142,7 +142,7 @@ def test_export_run_records_every_cache_it_reached(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
-    """An export run over the synthetic workbook observes all five caches.
+    """An export run over the synthetic workbook observes all on-disk caches.
 
     Only the codegen LLM docstring callback is stubbed; the graph, bindings,
     series, and projection caches are exercised for real.
@@ -185,6 +185,7 @@ def test_export_run_records_every_cache_it_reached(
         "dependency-graph",
         "bindings-validation",
         "series-resolution",
+        "series-derived",
         "projection",
         "codegen",
     ):
