@@ -98,6 +98,7 @@ def _export_generated_package_with_mocked_codegen(
     bound_address_keys: dict | None = None,
 ) -> MagicMock:
     from src.cluster_cache import ClusterCacheResult
+    from src.extraction_pipeline import ExportStageArtifacts
 
     refactor = refactor_internals_all_clusters or MagicMock()
     resolved_bound_keys = {} if bound_address_keys is None else bound_address_keys
@@ -111,50 +112,61 @@ def _export_generated_package_with_mocked_codegen(
             cache_hit=False,
             elapsed_seconds=0.0,
         )
-    with patch(
-        "src.extraction_pipeline.build_pipeline_graph",
-        return_value=MagicMock(
-            graph=MagicMock(),
-            series_bindings=MagicMock(),
-            input_series=(),
-            output_series=(),
-            internal_series=(),
-            constant_series=(),
-            graph_cache_key="cache-key",
-            leaf_classification={},
-            internal_binding_index={},
-            bound_address_keys=resolved_bound_keys,
-            address_to_series_id={},
-            coverage_report=None,
+    graph = MagicMock()
+    projection = MagicMock()
+    export_artifacts = ExportStageArtifacts(
+        graph=graph,
+        refactor_projection=projection,
+        internal_binding_index={},
+        bound_address_keys=resolved_bound_keys,
+        address_to_series_id={},
+    )
+    with (
+        patch(
+            "src.extraction_pipeline.build_pipeline_graph",
+            return_value=MagicMock(
+                graph=graph,
+                series_bindings=MagicMock(),
+                input_series=(),
+                output_series=(),
+                internal_series=(),
+                constant_series=(),
+                graph_cache_key="cache-key",
+                leaf_classification={},
+                internal_binding_index={},
+                bound_address_keys=resolved_bound_keys,
+                address_to_series_id={},
+                coverage_report=None,
+            ),
         ),
-    ):
-        with patch(
+        patch(
             "src.extraction_pipeline.build_refactor_projection",
-            return_value=MagicMock(),
-        ):
-            with patch(
-                "src.extraction_pipeline.configure_docstring_callback",
-                return_value="series_docs",
-            ):
-                with patch("src.extraction_pipeline.CodeGenerator") as generator_cls:
-                    generator = generator_cls.return_value.__enter__.return_value
-                    generator.generate_modules.return_value = {"internals.py": "pass\n"}
-                    with patch("src.package_materialize.seed_validation_harness"):
-                        with patch(
-                            "src.cluster_cache.get_or_build_clusters_and_schedule",
-                            get_or_build_clusters_and_schedule,
-                        ):
-                            with patch(
-                                "src.internals_refactor.refactor_internals_all_clusters",
-                                refactor,
-                            ):
-                                with patch(
-                                    "src.extraction_pipeline.run_post_refactor_differential"
-                                ):
-                                    with patch(
-                                        "src.extraction_pipeline.export_reference_reports"
-                                    ):
-                                        export_generated_package(config)
+            return_value=projection,
+        ),
+        patch(
+            "src.extraction_pipeline.load_export_stage_artifacts",
+            return_value=export_artifacts,
+        ),
+        patch(
+            "src.extraction_pipeline.configure_docstring_callback",
+            return_value="series_docs",
+        ),
+        patch("src.extraction_pipeline.CodeGenerator") as generator_cls,
+        patch("src.package_materialize.seed_validation_harness"),
+        patch(
+            "src.cluster_cache.get_or_build_clusters_and_schedule",
+            get_or_build_clusters_and_schedule,
+        ),
+        patch(
+            "src.internals_refactor.refactor_internals_all_clusters",
+            refactor,
+        ),
+        patch("src.extraction_pipeline.run_post_refactor_differential"),
+        patch("src.extraction_pipeline.export_reference_reports"),
+    ):
+        generator = generator_cls.return_value.__enter__.return_value
+        generator.generate_modules.return_value = {"internals.py": "pass\n"}
+        export_generated_package(config)
     return refactor
 
 

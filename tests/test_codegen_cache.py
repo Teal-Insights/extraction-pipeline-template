@@ -225,15 +225,27 @@ def test_run_export_stage_skips_generate_modules_on_cache_hit(
     import src.codegen_cache as codegen_cache
 
     config = MagicMock()
+    config.repo_root = tmp_path
     config.package_root = tmp_path / "dist" / "pkg"
     config.dist_root = tmp_path / "dist"
     config.dist_root.mkdir(parents=True)
     config.package_root.mkdir(parents=True)
     config.targets = ("Sheet!A1",)
+    config.constraints = {}
+    config.variation_mode = "independent"
+    config.clustering_mode = "series_ast"
+    config.internal_binding_validation_mode = "warn"
+    config.internal_binding_exempt_cells = frozenset()
     config.docstring_callback_name = "openai_series_docstring"
     config.guide_path = tmp_path / "guide.md"
     config.guide_path.write_text("guide", encoding="utf-8")
     config.workbook_path = tmp_path / "workbook.xlsx"
+    config.workbook_path.write_bytes(b"workbook")
+    config.bindings_path = tmp_path / "bindings"
+    config.bindings_path.mkdir()
+    (config.bindings_path / "inputs.bindings.yaml").write_text(
+        "series: []\n", encoding="utf-8"
+    )
     config.graph_output_dir = tmp_path / "artifacts"
     config.dist_metadata = MagicMock()
     config.graph_output_dir.mkdir()
