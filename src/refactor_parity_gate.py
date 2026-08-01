@@ -57,6 +57,8 @@ if TYPE_CHECKING:
         SingletonRefactorResponse,
     )
 
+# Bump when batched / per-unit parity-gate semantics change.
+PARITY_GATE_SCHEMA_VERSION = "1.0.0"
 PARITY_ATOL = 1e-6
 DEFAULT_SAMPLE_COUNT = 8
 DEFAULT_SAMPLE_SEED = 0

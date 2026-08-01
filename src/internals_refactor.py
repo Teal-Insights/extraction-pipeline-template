@@ -1049,6 +1049,21 @@ class ClusterRefactorApplyResult:
 
 
 @dataclass(frozen=True)
+class InternalsRefactorRunResult:
+    """Outcome of :func:`refactor_internals_all_clusters` for cache decisions."""
+
+    apply_results: tuple[ClusterRefactorApplyResult, ...]
+    final_source: str
+    cacheable: bool
+
+    def __iter__(self):
+        return iter(self.apply_results)
+
+    def __len__(self) -> int:
+        return len(self.apply_results)
+
+
+@dataclass(frozen=True)
 class SingletonRefactorApplyResult:
     source: str
     symbol_name: str
@@ -5812,7 +5827,7 @@ def refactor_internals_all_clusters(
     refactor_schedule: tuple[RefactorUnit, ...] | None = None,
     timer: StageTimer | None = None,
     codegen_cache_key: str | None = None,
-) -> tuple[ClusterRefactorApplyResult, ...]:
+) -> InternalsRefactorRunResult:
     """Refactor every eligible unit in unified dependency order in two passes.
 
     Pass 1 (sequential, no LLM): each unit whose body can be mechanically
@@ -5924,6 +5939,7 @@ def refactor_internals_all_clusters(
     pending_cluster_applies: list[_PendingMechanicalClusterApply] = []
     pending_batch_members: set[str] = set()
     refactored_any = False
+    ungated_full_body = False
     current_source = internals_index.source
     dirty_addresses: set[str] = set()
     live_function_names = set(internals_index.functions)
@@ -6285,6 +6301,8 @@ def refactor_internals_all_clusters(
                     mechanical=True,
                 )
                 continue
+            if not parity_gate:
+                ungated_full_body = True
             apply_started = time.perf_counter()
             singleton_result = refactor_internals_singleton(
                 singleton_ctx,
@@ -6416,6 +6434,8 @@ def refactor_internals_all_clusters(
         if dirty_addresses and _unit_reads_dirty(cluster.members):
             unit_reindex_s += _seal_index()
             unit_reindexed = True
+        if not parity_gate:
+            ungated_full_body = True
         apply_started = time.perf_counter()
         result = refactor_internals_cluster(
             cluster_ctx,
@@ -6563,6 +6583,7 @@ def refactor_internals_all_clusters(
         )
         validate_refactored_internals(updated)
         internals_path.write_text(updated, encoding="utf-8", newline="\n")
+        current_source = updated
         if results:
             last = results[-1]
             results[-1] = ClusterRefactorApplyResult(
@@ -6575,7 +6596,16 @@ def refactor_internals_all_clusters(
             )
     _record_span("phase_c", time.perf_counter() - phase_c_started)
 
-    return tuple(results)
+    if not dry_run and internals_path.is_file():
+        final_source = internals_path.read_text(encoding="utf-8")
+    else:
+        final_source = current_source
+    cacheable = (not dry_run) and parity_gate and (not ungated_full_body)
+    return InternalsRefactorRunResult(
+        apply_results=tuple(results),
+        final_source=final_source,
+        cacheable=cacheable,
+    )
 
 
 load_dotenv(repo_root / ".env")
