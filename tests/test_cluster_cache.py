@@ -527,7 +527,7 @@ def test_run_refactor_stage_uses_cluster_cache(
     from src.extraction_pipeline import ExportStageState, run_refactor_stage
     import src.cluster_cache as cluster_cache
 
-    graph_result, projection = _projection_and_bindings(
+    graph_result, _projection = _projection_and_bindings(
         synthetic_config, graph_cache_dir=Path()
     )
     package_root = tmp_path / "pkg"
@@ -536,15 +536,21 @@ def test_run_refactor_stage_uses_cluster_cache(
         "def placeholder():\n    return None\n",
         encoding="utf-8",
     )
+    from src.series_derived_cache import series_derived_cache_key
+
+    proj_key = projection_cache_key(graph_cache_key=graph_result.graph_cache_key)
+    derived_key = series_derived_cache_key(
+        graph_cache_key=graph_result.graph_cache_key,
+        validation_mode=synthetic_config.internal_binding_validation_mode,
+        exempt_cells=synthetic_config.internal_binding_exempt_cells,
+    )
     state = ExportStageState(
         config=synthetic_config,
-        graph_result=graph_result,
-        refactor_projection=projection,
-        internal_binding_index=graph_result.internal_binding_index,
-        bound_address_keys=graph_result.bound_address_keys,
-        address_to_series_id=graph_result.address_to_series_id,
-        package_root=package_root,
+        graph_cache_key=graph_result.graph_cache_key,
+        projection_cache_key=proj_key,
+        series_derived_cache_key=derived_key,
         codegen_cache_key="codegen-key",
+        package_root=package_root,
     )
 
     with (
@@ -570,26 +576,32 @@ def test_run_refactor_stage_no_cache_bypasses_cluster_cache(
     tmp_path: Path,
 ) -> None:
     from src.extraction_pipeline import ExportStageState, run_refactor_stage
+    from src.series_derived_cache import series_derived_cache_key
     import src.cluster_cache as cluster_cache
 
     graph_result, projection = _projection_and_bindings(
         synthetic_config, graph_cache_dir=Path()
     )
+    del projection
     package_root = tmp_path / "pkg"
     package_root.mkdir()
     (package_root / "internals.py").write_text(
         "def placeholder():\n    return None\n",
         encoding="utf-8",
     )
+    proj_key = projection_cache_key(graph_cache_key=graph_result.graph_cache_key)
+    derived_key = series_derived_cache_key(
+        graph_cache_key=graph_result.graph_cache_key,
+        validation_mode=synthetic_config.internal_binding_validation_mode,
+        exempt_cells=synthetic_config.internal_binding_exempt_cells,
+    )
     state = ExportStageState(
         config=synthetic_config,
-        graph_result=graph_result,
-        refactor_projection=projection,
-        internal_binding_index=graph_result.internal_binding_index,
-        bound_address_keys=graph_result.bound_address_keys,
-        address_to_series_id=graph_result.address_to_series_id,
-        package_root=package_root,
+        graph_cache_key=graph_result.graph_cache_key,
+        projection_cache_key=proj_key,
+        series_derived_cache_key=derived_key,
         codegen_cache_key="codegen-key",
+        package_root=package_root,
     )
 
     with (

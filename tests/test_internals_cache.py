@@ -117,8 +117,13 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
 
 def _prepare_repo(tmp_path: Path) -> PipelineConfig:
     config = _sample_config(tmp_path)
-    config.workbook_path.parent.mkdir(parents=True)
+    config.workbook_path.parent.mkdir(parents=True, exist_ok=True)
     config.workbook_path.write_bytes(b"fake-xlsx")
+    config.guide_path.write_text("guide\n", encoding="utf-8")
+    config.bindings_path.mkdir(parents=True, exist_ok=True)
+    (config.bindings_path / "inputs.bindings.yaml").write_text(
+        "series: []\n", encoding="utf-8"
+    )
     (tmp_path / "tests" / "differential").mkdir(parents=True)
     (tmp_path / "tests" / "__init__.py").write_text("", encoding="utf-8")
     (tmp_path / "tests" / "differential" / "__init__.py").write_text(
@@ -287,7 +292,11 @@ def test_run_refactor_stage_warm_hit_skips_pass1_parity_and_pass2(
     tmp_path: Path,
 ) -> None:
     from src.cluster_cache import ClusterCacheResult
-    from src.extraction_pipeline import ExportStageState, run_refactor_stage
+    from src.extraction_pipeline import (
+        ExportStageArtifacts,
+        ExportStageState,
+        run_refactor_stage,
+    )
     from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
 
     config = _prepare_repo(tmp_path)
@@ -319,13 +328,11 @@ def test_run_refactor_stage_warm_hit_skips_pass1_parity_and_pass2(
 
     state = ExportStageState(
         config=config,
-        graph_result=MagicMock(graph_cache_key="graph-key"),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-        package_root=config.package_root,
+        graph_cache_key="graph-key",
+        projection_cache_key="proj-key",
+        series_derived_cache_key="derived-key",
         codegen_cache_key=codegen_key,
+        package_root=config.package_root,
     )
     cluster_result = ClusterCacheResult(
         clusters=(),
@@ -334,7 +341,18 @@ def test_run_refactor_stage_warm_hit_skips_pass1_parity_and_pass2(
         cache_hit=True,
         elapsed_seconds=0.01,
     )
+    artifacts = ExportStageArtifacts(
+        graph=MagicMock(),
+        refactor_projection=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
+    )
     with (
+        patch(
+            "src.extraction_pipeline.load_export_stage_artifacts",
+            return_value=artifacts,
+        ),
         patch(
             "src.cluster_cache.get_or_build_clusters_and_schedule",
             return_value=cluster_result,
@@ -361,7 +379,11 @@ def test_run_refactor_stage_saves_cacheable_result_and_materializes(
     tmp_path: Path,
 ) -> None:
     from src.cluster_cache import ClusterCacheResult
-    from src.extraction_pipeline import ExportStageState, run_refactor_stage
+    from src.extraction_pipeline import (
+        ExportStageArtifacts,
+        ExportStageState,
+        run_refactor_stage,
+    )
     from src.internals_refactor import (
         DEFAULT_INTERNALS_CACHE_DIR,
         InternalsRefactorRunResult,
@@ -380,13 +402,11 @@ def test_run_refactor_stage_saves_cacheable_result_and_materializes(
 
     state = ExportStageState(
         config=config,
-        graph_result=MagicMock(graph_cache_key="graph-key"),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-        package_root=config.package_root,
+        graph_cache_key="graph-key",
+        projection_cache_key="proj-key",
+        series_derived_cache_key="derived-key",
         codegen_cache_key=codegen_key,
+        package_root=config.package_root,
     )
     cluster_result = ClusterCacheResult(
         clusters=(),
@@ -412,7 +432,18 @@ def test_run_refactor_stage_saves_cacheable_result_and_materializes(
             cacheable=True,
         )
 
+    artifacts = ExportStageArtifacts(
+        graph=MagicMock(),
+        refactor_projection=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
+    )
     with (
+        patch(
+            "src.extraction_pipeline.load_export_stage_artifacts",
+            return_value=artifacts,
+        ),
         patch(
             "src.cluster_cache.get_or_build_clusters_and_schedule",
             return_value=cluster_result,
@@ -441,7 +472,11 @@ def test_run_refactor_stage_does_not_cache_when_not_cacheable(
     tmp_path: Path,
 ) -> None:
     from src.cluster_cache import ClusterCacheResult
-    from src.extraction_pipeline import ExportStageState, run_refactor_stage
+    from src.extraction_pipeline import (
+        ExportStageArtifacts,
+        ExportStageState,
+        run_refactor_stage,
+    )
     from src.internals_refactor import (
         DEFAULT_INTERNALS_CACHE_DIR,
         InternalsRefactorRunResult,
@@ -459,13 +494,11 @@ def test_run_refactor_stage_does_not_cache_when_not_cacheable(
     materialize_package(config, codegen_key=codegen_key)
     state = ExportStageState(
         config=config,
-        graph_result=MagicMock(graph_cache_key="graph-key"),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-        package_root=config.package_root,
+        graph_cache_key="graph-key",
+        projection_cache_key="proj-key",
+        series_derived_cache_key="derived-key",
         codegen_cache_key=codegen_key,
+        package_root=config.package_root,
     )
     cluster_result = ClusterCacheResult(
         clusters=(),
@@ -491,7 +524,18 @@ def test_run_refactor_stage_does_not_cache_when_not_cacheable(
             cacheable=False,
         )
 
+    artifacts = ExportStageArtifacts(
+        graph=MagicMock(),
+        refactor_projection=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
+    )
     with (
+        patch(
+            "src.extraction_pipeline.load_export_stage_artifacts",
+            return_value=artifacts,
+        ),
         patch(
             "src.cluster_cache.get_or_build_clusters_and_schedule",
             return_value=cluster_result,
@@ -543,13 +587,11 @@ def test_cold_adopt_still_skips_refactor_when_sidecar_present(
     )
     state = ExportStageState(
         config=config,
-        graph_result=MagicMock(graph_cache_key="graph-key"),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-        package_root=config.package_root,
+        graph_cache_key="graph-key",
+        projection_cache_key="proj-key",
+        series_derived_cache_key="derived-key",
         codegen_cache_key=codegen_key,
+        package_root=config.package_root,
     )
     with (
         patch("src.cluster_cache.get_or_build_clusters_and_schedule") as cluster_build,
