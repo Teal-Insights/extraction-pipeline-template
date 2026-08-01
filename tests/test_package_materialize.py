@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -72,8 +72,13 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
 
 def _prepare_repo(tmp_path: Path) -> PipelineConfig:
     config = _sample_config(tmp_path)
-    config.workbook_path.parent.mkdir(parents=True)
+    config.workbook_path.parent.mkdir(parents=True, exist_ok=True)
     config.workbook_path.write_bytes(b"fake-xlsx")
+    config.guide_path.write_text("guide\n", encoding="utf-8")
+    config.bindings_path.mkdir(parents=True, exist_ok=True)
+    (config.bindings_path / "inputs.bindings.yaml").write_text(
+        "series: []\n", encoding="utf-8"
+    )
     (tmp_path / "tests" / "differential").mkdir(parents=True)
     (tmp_path / "tests" / "__init__.py").write_text("", encoding="utf-8")
     (tmp_path / "tests" / "differential" / "__init__.py").write_text(
@@ -185,13 +190,11 @@ def test_cold_cache_adoption_from_committed_dist_skips_refactor(
 
     state = ExportStageState(
         config=config,
-        graph_result=MagicMock(graph_cache_key="graph-key"),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-        package_root=config.package_root,
+        graph_cache_key="graph-key",
+        projection_cache_key="proj-key",
+        series_derived_cache_key="derived-key",
         codegen_cache_key=codegen_key,
+        package_root=config.package_root,
     )
     with (
         patch("src.cluster_cache.get_or_build_clusters_and_schedule") as cluster_build,

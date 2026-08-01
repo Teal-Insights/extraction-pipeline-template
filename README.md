@@ -269,9 +269,10 @@ synthesizer cannot prove correct fall back to the legacy full-body contract,
 and the per-helper parity gate guards both paths. Set
 `MECHANICAL_REFACTOR_BODIES=0` to disable synthesis for a run.
 
-Iterate on the refactor stage in isolation (scratch output root, warm caches):
+Iterate on the refactor stage in isolation after a warm export (scratch output root by default; thin wrapper over `--only-stage refactor`):
 
 ```bash
+uv run python -m src.extraction_pipeline --stop-after-stage export
 uv run python -m scripts.run_refactor_stage --dump-prompts artifacts/refactor-lab-prompts
 uv run python -m scripts.run_refactor_stage --report-synthesis artifacts/refactor-lab-synthesis
 ```
@@ -285,17 +286,21 @@ uv sync
 uv run python -m src.extraction_pipeline
 ```
 
-### Stop after a stage
+### Stage entry and exit
 
-The pipeline is ordered as `extract → export → refactor → validate → document`. Use `--stop-after-stage` to run through a named stage and exit — useful while iterating without paying for later LLM or docs work:
+The pipeline is ordered as `extract → export → refactor → validate → document`. Each completed stage writes `artifacts/stages/<stage>.json` (cache keys, upstream keys, and input fingerprints). Use the flags below to enter or exit at a named stage without re-paying upstream work:
 
-| Flag | Stops after | Typical use |
+| Flag | Behavior | Typical use |
 |---|---|---|
-| `--stop-after-stage extract` (or `--extract-graph`) | Graph build + review artifacts | Bindings / constraint iteration |
-| `--stop-after-stage export` | Codegen package + seeded validation harness | Inspect generated API before LLM refactor |
-| `--stop-after-stage refactor` | Internals rewrite | Skip differential + docs |
-| `--stop-after-stage validate` | Post-refactor differential + shipped reports | Skip documentation website |
-| `--stop-after-stage document` (default) | Full pipeline | Release / complete run |
+| `--stop-after-stage extract` (or `--extract-graph`) | Run extract only (graph review artifacts) | Bindings / constraint iteration |
+| `--stop-after-stage export` | Run through export | Inspect generated API before LLM refactor |
+| `--start-from-stage refactor` | Resume at refactor from warm `export.json` | Re-run internals after export is stable |
+| `--only-stage validate` | Run validate only (rehydrates `dist/` from manifest keys) | Differential without export/refactor |
+| `--only-stage document` | Run document only | Guide rewrite against an existing package |
+| `--stop-after-stage document` (default) | Full pipeline from the start | Release / complete run |
+| `--force-rebuild` | Rebuild warm on-disk caches even when keys match | Invalidate stale cache payloads |
+
+`--start-from-stage` and `--only-stage` are mutually exclusive. `--only-stage` cannot be combined with `--stop-after-stage`. Loading a stage manifest recomputes workbook / bindings / constraints / mode fingerprints and **fails loudly** (naming the drifted input) when they disagree — it never silently falls back to a full run. Entering at `validate` or `document` rebuilds `dist/` via `materialize_package` from the manifest's codegen and internals keys.
 
 When the default full run reaches `document` after a non-zero exported-library differential exit, the document stage is skipped so parity diagnosis is not gated on guide rewrite. Pass `--force-document` to rewrite guides anyway. Document-stage failures (timeouts, validation exhaustion, LLM errors) raise loudly after logging that export/differential artifacts under `dist/` are preserved.
 
@@ -303,11 +308,13 @@ Guide-rewrite LLM calls use `SECTION_REWRITE_REQUEST_TIMEOUT` (default 300s per 
 
 ```bash
 uv run python -m src.extraction_pipeline --stop-after-stage export
+uv run python -m src.extraction_pipeline --start-from-stage refactor --stop-after-stage validate
+uv run python -m src.extraction_pipeline --only-stage validate
 ```
 
 ### Prerequisites
 
-LLM steps (docstrings, internals refactor, guide rewrites) cache results under `.cache/`. Dependency graph extraction, `OptimalCompression` projection, `derive_*_series` resolution, `validate_series_bindings`, derived leaf/binding objects, formula clusters / refactor schedule, and codegen module texts also cache gzipped pickle payloads under `.cache/dependency-graph/`, `.cache/projection/`, `.cache/series-resolution/`, `.cache/series-derived/`, `.cache/bindings-validation/`, `.cache/clusters/`, and `.cache/codegen/` (keyed by workbook bytes, targets, constraints, bindings, clustering modes, codegen options, and `excel-grapher` version). A successful gated refactor also content-keys the final `internals.py` under `.cache/internals/<key>.py` (codegen key, clusters key, digest of `.cache/internals-refactors.json`, mechanical/parity schema versions, `MECHANICAL_REFACTOR_BODIES`, refactor model, and `excel-grapher` version) so a warm refactor is a file copy that skips Pass 1, the batched parity gate, and Pass 2. The Pass 1 mechanical checkpoint is stored under `.cache/internals/<package-namespace>/` (not under `dist/`). `dist/` is a disposable projection of those caches: `materialize_package` rebuilds it from the codegen (and optional internals) cache keys recorded in `dist/.pipeline-cache-keys.json`. Pass `--no-cache` to bypass graph, projection, series-resolution, series-derived, bindings-validation, cluster, codegen, and refactored-internals caches for a single run. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
+LLM steps (docstrings, internals refactor, guide rewrites) cache results under `.cache/`. Dependency graph extraction, `OptimalCompression` projection, `derive_*_series` resolution, `validate_series_bindings`, derived leaf/binding objects, formula clusters / refactor schedule, and codegen module texts also cache gzipped pickle payloads under `.cache/dependency-graph/`, `.cache/projection/`, `.cache/series-resolution/`, `.cache/series-derived/`, `.cache/bindings-validation/`, `.cache/clusters/`, and `.cache/codegen/` (keyed by workbook bytes, targets, constraints, bindings, clustering modes, codegen options, and `excel-grapher` version). A successful gated refactor also content-keys the final `internals.py` under `.cache/internals/<key>.py` (codegen key, clusters key, digest of `.cache/internals-refactors.json`, mechanical/parity schema versions, `MECHANICAL_REFACTOR_BODIES`, refactor model, and `excel-grapher` version) so a warm refactor is a file copy that skips Pass 1, the batched parity gate, and Pass 2. The Pass 1 mechanical checkpoint is stored under `.cache/internals/<package-namespace>/` (not under `dist/`). `dist/` is a disposable projection of those caches: `materialize_package` rebuilds it from the codegen (and optional internals) cache keys recorded in `dist/.pipeline-cache-keys.json`. Stage entry/exit also records those keys (plus fingerprints) under `artifacts/stages/*.json`. Pass `--no-cache` to bypass graph, projection, series-resolution, series-derived, bindings-validation, cluster, codegen, and refactored-internals caches for a single run; pass `--force-rebuild` to rewrite warm cache entries. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
 
 ```bash
 # .env — logging verbosity for pipeline entry points (default: INFO)

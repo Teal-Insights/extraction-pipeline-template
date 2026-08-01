@@ -12,5 +12,6 @@ docs/dependency-graph/
 artifacts/dependency-graph/
 artifacts/refactor-bucket-codegen/
 artifacts/stage-timings.json
+artifacts/stages/
 docs/human-hypothesis-graph/
 .env

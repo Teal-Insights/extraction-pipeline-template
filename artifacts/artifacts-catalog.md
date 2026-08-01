@@ -58,6 +58,20 @@ uv run python -m http.server 8000 --directory artifacts/dependency-graph
 
 Open `http://localhost:8000/`.
 
+## `stages/`
+
+Written by each completed pipeline stage. Used by `--start-from-stage` / `--only-stage` to resume without re-running upstream work. Local/untracked (see `.gitignore`).
+
+| File | Description |
+|---|---|
+| `extract.json` | Graph cache key and input fingerprints after extract |
+| `export.json` | Graph / projection / series-derived / codegen keys after export |
+| `refactor.json` | Codegen / clusters / internals keys after refactor |
+| `validate.json` | Keys carried forward after validate |
+| `document.json` | Keys carried forward after document |
+
+Each manifest records `cache_keys`, `upstream_keys`, and labeled `fingerprints` (workbook, bindings, constraints, modes, `excel-grapher` version). Loading a manifest recomputes fingerprints and aborts on drift.
+
 ## `stage-timings.json`
 
 Written by every `run_pipeline` invocation (`uv run python -m src.extraction_pipeline`), rewritten after each stage completes so a run that dies mid-pipeline still records the stages that finished (including the stage that raised).
