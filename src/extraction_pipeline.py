@@ -587,6 +587,12 @@ def run_refactor_stage(
 ) -> RefactorStageState:
     """Cluster formulas and rewrite internals behind the parity gate."""
     from src.cluster_cache import get_or_build_clusters_and_schedule
+    from src.internals_cache import (
+        consumed_refactors_digest,
+        internals_cache_key,
+        load_refactored_internals_payload,
+        save_refactored_internals_payload,
+    )
     from src.internals_refactor import refactor_internals_all_clusters
 
     config = state.config
@@ -595,8 +601,13 @@ def run_refactor_stage(
         profile_if_enabled(config.graph_output_dir, basename="refactor"),
         stage_span(timings, "refactor") as timer,
     ):
-        if try_materialize_refactored_package_from_cache(
-            config, codegen_key=state.codegen_cache_key
+        # Fresh-clone / committed-dist path: trust sidecar keys (#238).
+        if (
+            not no_cache
+            and not force_rebuild
+            and try_materialize_refactored_package_from_cache(
+                config, codegen_key=state.codegen_cache_key
+            )
         ):
             print(
                 "internals_refactor: skipped "
@@ -636,12 +647,35 @@ def run_refactor_stage(
             f"({clustering_seconds:.1f}s)",
             flush=True,
         )
+
+        # Content-keyed warm hit (#239): materialize and skip Pass 1 / gate / Pass 2.
+        refactor_digest = consumed_refactors_digest()
+        internals_key = internals_cache_key(
+            codegen_cache_key=state.codegen_cache_key,
+            clusters_cache_key=cluster_result.cache_key,
+            consumed_refactors_digest=refactor_digest,
+        )
+        if not no_cache and not force_rebuild:
+            cached_source = load_refactored_internals_payload(internals_key)
+            if cached_source is not None:
+                materialize_package(
+                    config,
+                    codegen_key=state.codegen_cache_key,
+                    internals_key=internals_key,
+                )
+                print(
+                    "internals: cache hit "
+                    f"(key={internals_key[:12]}); skipped Pass 1 / parity / Pass 2",
+                    flush=True,
+                )
+                return RefactorStageState(config=config)
+
         print(
             f"internals_refactor: rewriting {len(formula_clusters)} clusters…",
             flush=True,
         )
         refactor_started = time.perf_counter()
-        refactor_internals_all_clusters(
+        run_result = refactor_internals_all_clusters(
             state.refactor_projection,
             formula_clusters,
             internals_path=state.package_root / "internals.py",
@@ -662,6 +696,34 @@ def run_refactor_stage(
             f"internals_refactor: done ({refactor_seconds:.1f}s)",
             flush=True,
         )
+
+        # Recompute the key after the run so newly written LLM cache entries
+        # participate in the digest (first-run → second-run warm hit).
+        cacheable = getattr(run_result, "cacheable", False)
+        final_source = getattr(run_result, "final_source", None)
+        if not no_cache and cacheable and isinstance(final_source, str):
+            post_digest = consumed_refactors_digest()
+            post_key = internals_cache_key(
+                codegen_cache_key=state.codegen_cache_key,
+                clusters_cache_key=cluster_result.cache_key,
+                consumed_refactors_digest=post_digest,
+            )
+            save_refactored_internals_payload(
+                final_source,
+                cache_key=post_key,
+                codegen_cache_key=state.codegen_cache_key,
+                clusters_cache_key=cluster_result.cache_key,
+                consumed_refactors_digest=post_digest,
+            )
+            materialize_package(
+                config,
+                codegen_key=state.codegen_cache_key,
+                internals_key=post_key,
+            )
+            print(
+                f"internals: cache store (key={post_key[:12]})",
+                flush=True,
+            )
     return RefactorStageState(config=config)
 
 
@@ -856,8 +918,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help=(
             "Bypass on-disk graph, projection, series-resolution, series-derived, "
-            "bindings-validation, codegen, cluster, and exported-library "
-            "differential caches for this run."
+            "bindings-validation, codegen, cluster, refactored-internals, and "
+            "exported-library differential caches for this run."
         ),
     )
     parser.add_argument(
