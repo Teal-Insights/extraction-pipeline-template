@@ -235,6 +235,10 @@ def test_try_materialize_refactored_package_adopts_when_internals_cache_cold(
 
     from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
 
+    cache_path = DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.py"
+    cache_path.unlink(missing_ok=True)
+    (DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.meta.json").unlink(missing_ok=True)
+
     assert try_materialize_refactored_package_from_cache(
         config, codegen_key=codegen_key
     )
@@ -242,9 +246,7 @@ def test_try_materialize_refactored_package_adopts_when_internals_cache_cold(
     assert (config.package_root / "internals.py").read_text(
         encoding="utf-8"
     ) == refactored
-    assert (DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.py").read_text(
-        encoding="utf-8"
-    ) == refactored
+    assert cache_path.read_text(encoding="utf-8") == refactored
 
 
 def test_adopt_codegen_cache_from_dist_rejects_refactored_package(
@@ -268,6 +270,83 @@ def test_adopt_codegen_cache_from_dist_rejects_refactored_package(
         expected_codegen_key=codegen_key,
         projection_cache_key="proj-key",
     )
+
+
+def test_try_materialize_refuses_when_expected_internals_key_mismatches_sidecar(
+    tmp_path: Path,
+) -> None:
+    """Dist-sidecar adopt must verify the content-keyed internals key (#234 review).
+
+    Matching ``codegen_key`` alone is not enough: a stale ``internals_key`` in
+    ``.pipeline-cache-keys.json`` must not be adopted when it disagrees with the
+    recomputed ``internals_cache_key`` for the current clusters / digest / schemas.
+    """
+    config = _prepare_repo(tmp_path)
+    codegen_key = "i" * 64
+    sidecar_internals_key = "s" * 64
+    expected_internals_key = "e" * 64
+    save_codegen_payload(
+        _SAMPLE_MODULES,
+        cache_key=codegen_key,
+        projection_cache_key="proj-key",
+    )
+    materialize_package(config, codegen_key=codegen_key)
+    (config.package_root / "internals.py").write_text(
+        "def cell_a1(ctx):\n    return 99.0\n",
+        encoding="utf-8",
+    )
+    write_package_cache_keys(
+        config.dist_root,
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=sidecar_internals_key,
+        ),
+    )
+
+    from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
+
+    assert (
+        try_materialize_refactored_package_from_cache(
+            config,
+            codegen_key=codegen_key,
+            expected_internals_key=expected_internals_key,
+        )
+        is False
+    )
+    assert not (DEFAULT_INTERNALS_CACHE_DIR / f"{sidecar_internals_key}.py").is_file()
+    assert not (DEFAULT_INTERNALS_CACHE_DIR / f"{expected_internals_key}.py").is_file()
+
+
+def test_try_materialize_adopts_when_expected_internals_key_matches_sidecar(
+    tmp_path: Path,
+) -> None:
+    """Matching content key still allows the committed-dist cold-clone path."""
+    config = _prepare_repo(tmp_path)
+    codegen_key = "j" * 64
+    internals_key = "k" * 64
+    save_codegen_payload(
+        _SAMPLE_MODULES,
+        cache_key=codegen_key,
+        projection_cache_key="proj-key",
+    )
+    materialize_package(config, codegen_key=codegen_key)
+    refactored = "def cell_a1(ctx):\n    return 3.0\n"
+    (config.package_root / "internals.py").write_text(refactored, encoding="utf-8")
+    write_package_cache_keys(
+        config.dist_root,
+        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+    )
+
+    from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
+
+    assert try_materialize_refactored_package_from_cache(
+        config,
+        codegen_key=codegen_key,
+        expected_internals_key=internals_key,
+    )
+    assert (DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.py").read_text(
+        encoding="utf-8"
+    ) == refactored
 
 
 def test_apply_export_api_rewrite_is_idempotent() -> None:

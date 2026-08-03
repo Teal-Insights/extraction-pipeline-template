@@ -7,6 +7,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from src.codegen_cache import DEFAULT_CODEGEN_CACHE_DIR, save_codegen_payload
 from src.extraction_pipeline import (
     PIPELINE_STAGES,
     ExportStageState,
@@ -18,8 +19,23 @@ from src.extraction_pipeline import (
     run_validate_stage,
 )
 from src.formula_clustering import FormulaCluster
+from src.package_materialize import (
+    PackageCacheKeys,
+    materialize_package,
+    read_package_cache_keys,
+    write_package_cache_keys,
+)
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
 from src.stage_timings import PipelineTimings, stage_timings_path
+
+_COLD_CLONE_MODULES = {
+    "__init__.py": "# init\n",
+    "api.py": "from .runtime import EvalContext\n\ndef api():\n    return 1\n",
+    "data.py": "DATA = {}\n",
+    "runtime.py": "def run():\n    pass\n",
+    "internals.py": "def cell_a1(ctx):\n    return 1.0\n",
+}
+_COLD_CLONE_REFACTORED = "def cell_a1(ctx):\n    return 42.0\n"
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +196,14 @@ def test_run_refactor_stage_prints_clustering_and_refactor_boundaries(
     )
 
     with (
+        patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
         patch(
             "src.extraction_pipeline.load_export_stage_artifacts",
             return_value=artifacts,
@@ -647,6 +671,14 @@ def test_run_refactor_stage_records_spans_and_profiles(tmp_path: Path) -> None:
 
     with (
         patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
+        patch(
             "src.extraction_pipeline.load_export_stage_artifacts",
             return_value=artifacts,
         ),
@@ -701,6 +733,14 @@ def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(
     )
 
     with (
+        patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
         patch(
             "src.extraction_pipeline.load_export_stage_artifacts",
             return_value=artifacts,
@@ -916,13 +956,96 @@ def _isolated_config_for_manifests(
     guide.write_text("guide\n", encoding="utf-8")
     bindings.mkdir(parents=True, exist_ok=True)
     (bindings / "inputs.bindings.yaml").write_text("series: []\n", encoding="utf-8")
+    (bindings / "outputs.bindings.yaml").write_text("series: []\n", encoding="utf-8")
+    (bindings / "internals.bindings.yaml").write_text("series: []\n", encoding="utf-8")
     return replace(
         base,
         repo_root=tmp_path,
         workbook_path=workbook,
         guide_path=guide,
         bindings_path=bindings,
+        dist_root=tmp_path / "dist",
         graph_output_dir=tmp_path / "artifacts" / "dependency-graph",
+    )
+
+
+def _seed_differential_harness(config: PipelineConfig) -> None:
+    """Create the minimal repo-side harness files ``materialize_package`` copies."""
+    (config.repo_root / "tests" / "differential").mkdir(parents=True, exist_ok=True)
+    (config.repo_root / "tests" / "__init__.py").write_text("", encoding="utf-8")
+    (config.repo_root / "tests" / "differential" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    for name in (
+        "differential_types.py",
+        "differential_excel.py",
+        "comparison_utils.py",
+        "differential_test_exported_library.py",
+    ):
+        (config.repo_root / "tests" / "differential" / name).write_text(
+            f"# {name}\n", encoding="utf-8"
+        )
+
+
+def _write_export_manifest_for_codegen(
+    config: PipelineConfig,
+    *,
+    codegen_key: str,
+) -> None:
+    from src.stage_manifest import (
+        compute_input_fingerprints,
+        write_stage_manifest,
+    )
+
+    write_stage_manifest(
+        config,
+        stage="export",
+        cache_keys={
+            "graph_cache_key": "g" * 64,
+            "projection_cache_key": "p" * 64,
+            "series_derived_cache_key": "s" * 64,
+            "codegen_cache_key": codegen_key,
+        },
+        upstream_keys={},
+        fingerprints=compute_input_fingerprints(config),
+    )
+
+
+def _commit_refactored_dist(
+    config: PipelineConfig,
+    *,
+    codegen_key: str,
+    internals_key: str,
+    keep_codegen_cache: bool,
+) -> None:
+    """Simulate a fresh clone: committed ``dist/`` with sidecar keys, cold caches."""
+    from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
+
+    _seed_differential_harness(config)
+    save_codegen_payload(
+        _COLD_CLONE_MODULES,
+        cache_key=codegen_key,
+        projection_cache_key="p" * 64,
+    )
+    materialize_package(config, codegen_key=codegen_key)
+    (config.package_root / "internals.py").write_text(
+        _COLD_CLONE_REFACTORED, encoding="utf-8"
+    )
+    write_package_cache_keys(
+        config.dist_root,
+        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+    )
+    if not keep_codegen_cache:
+        for suffix in (".pkl.gz", ".meta.json"):
+            path = DEFAULT_CODEGEN_CACHE_DIR / f"{codegen_key}{suffix}"
+            path.unlink(missing_ok=True)
+    internals_cache_path = DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.py"
+    internals_cache_path.unlink(missing_ok=True)
+    (DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.meta.json").unlink(missing_ok=True)
+    assert not internals_cache_path.is_file()
+    assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
+        codegen_key=codegen_key,
+        internals_key=internals_key,
     )
 
 
@@ -1063,3 +1186,249 @@ def test_run_pipeline_start_from_refactor_aborts_on_workbook_drift(
             start_from_stage="refactor",
             stop_after_stage="refactor",
         )
+
+
+def test_run_pipeline_start_from_refactor_adopts_committed_dist_when_internals_cold(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Production entry must adopt committed dist without wiping the sidecar first.
+
+    The Phase 3a cold-clone path trusts ``dist/.pipeline-cache-keys.json`` when
+    ``.cache/internals/`` is empty. ``run_pipeline(start_from_stage=refactor)``
+    must not rematerialize pristine codegen (clearing ``internals_key``) before
+    ``try_materialize_refactored_package_from_cache`` runs — that wipe defeats
+    adoption and forces a full clustering / Pass-1 rebuild.
+    """
+    from src.cluster_cache import ClusterCacheResult
+    from src.extraction_pipeline import ExportStageArtifacts
+    from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
+
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "c" * 64
+    internals_key = "d" * 64
+    _commit_refactored_dist(
+        config,
+        codegen_key=codegen_key,
+        internals_key=internals_key,
+        keep_codegen_cache=True,
+    )
+    _write_export_manifest_for_codegen(config, codegen_key=codegen_key)
+
+    cluster_result = ClusterCacheResult(
+        clusters=(),
+        schedule=(),
+        cache_key="k" * 64,
+        cache_hit=False,
+        elapsed_seconds=0.0,
+    )
+    export_artifacts = ExportStageArtifacts(
+        graph=MagicMock(),
+        refactor_projection=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
+    )
+
+    with (
+        patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
+        patch(
+            "src.cluster_cache.get_or_build_clusters_and_schedule",
+            return_value=cluster_result,
+        ) as cluster_build,
+        patch(
+            "src.internals_refactor.refactor_internals_all_clusters",
+            return_value=MagicMock(cacheable=False, final_source=None),
+        ) as refactor,
+        patch(
+            "src.extraction_pipeline.load_export_stage_artifacts",
+            return_value=export_artifacts,
+        ) as load_artifacts,
+    ):
+        run_pipeline(
+            config,
+            start_from_stage="refactor",
+            stop_after_stage="refactor",
+        )
+
+    load_artifacts.assert_not_called()
+    cluster_build.assert_not_called()
+    refactor.assert_not_called()
+    assert (config.package_root / "internals.py").read_text(
+        encoding="utf-8"
+    ) == _COLD_CLONE_REFACTORED
+    assert (DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.py").is_file()
+    assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
+        codegen_key=codegen_key,
+        internals_key=internals_key,
+    )
+
+
+def test_run_pipeline_start_from_refactor_adopts_when_codegen_and_internals_cold(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Fresh clone: empty ``.cache/``, committed ``dist/`` with matching sidecar keys.
+
+    Entry must not call ``materialize_package`` against a cold codegen cache
+    (``FileNotFoundError``) before adoption. ``try_materialize_refactored_package_from_cache``
+    already rebuilds from package modules when codegen is missing; production
+    entry must reach that path.
+    """
+    from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
+
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "e" * 64
+    internals_key = "f" * 64
+    _commit_refactored_dist(
+        config,
+        codegen_key=codegen_key,
+        internals_key=internals_key,
+        keep_codegen_cache=False,
+    )
+    _write_export_manifest_for_codegen(config, codegen_key=codegen_key)
+
+    with (
+        patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
+        patch("src.cluster_cache.get_or_build_clusters_and_schedule") as cluster_build,
+        patch("src.internals_refactor.refactor_internals_all_clusters") as refactor,
+        patch("src.extraction_pipeline.load_export_stage_artifacts") as load_artifacts,
+    ):
+        run_pipeline(
+            config,
+            start_from_stage="refactor",
+            stop_after_stage="refactor",
+        )
+
+    load_artifacts.assert_not_called()
+    cluster_build.assert_not_called()
+    refactor.assert_not_called()
+    assert (config.package_root / "internals.py").read_text(
+        encoding="utf-8"
+    ) == _COLD_CLONE_REFACTORED
+    assert (DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.py").is_file()
+    assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
+        codegen_key=codegen_key,
+        internals_key=internals_key,
+    )
+
+
+def test_run_pipeline_only_stage_validate_preserves_lab_internals_without_cache_key(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Non-cacheable refactor leaves no ``internals_cache_key`` in the manifest.
+
+    Lab / ``--no-parity-gate`` / ungated full-body runs still write a refactored
+    ``dist/.../internals.py``. ``--only-stage validate`` must not rematerialize
+    pristine codegen over that output when the refactor manifest omits
+    ``internals_cache_key`` (``materialize_package(..., internals_key=None)``).
+    """
+    from src.stage_manifest import (
+        compute_input_fingerprints,
+        write_stage_manifest,
+    )
+
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "a" * 64
+    _seed_differential_harness(config)
+    save_codegen_payload(
+        _COLD_CLONE_MODULES,
+        cache_key=codegen_key,
+        projection_cache_key="p" * 64,
+    )
+    materialize_package(config, codegen_key=codegen_key)
+    # Simulate a completed non-cacheable lab/refactor write into dist/.
+    (config.package_root / "internals.py").write_text(
+        _COLD_CLONE_REFACTORED, encoding="utf-8"
+    )
+    write_package_cache_keys(
+        config.dist_root,
+        PackageCacheKeys(codegen_key=codegen_key, internals_key=None),
+    )
+    write_stage_manifest(
+        config,
+        stage="refactor",
+        cache_keys={
+            "codegen_cache_key": codegen_key,
+            # Intentionally omit internals_cache_key (non-cacheable run).
+        },
+        upstream_keys={"codegen_cache_key": codegen_key},
+        fingerprints=compute_input_fingerprints(config),
+    )
+
+    with patch(
+        "src.extraction_pipeline.run_validate_stage",
+        return_value=0,
+    ) as validate:
+        run_pipeline(config, only_stage="validate")
+
+    validate.assert_called_once()
+    assert (config.package_root / "internals.py").read_text(
+        encoding="utf-8"
+    ) == _COLD_CLONE_REFACTORED
+    assert (config.package_root / "internals.py").read_text(
+        encoding="utf-8"
+    ) != _COLD_CLONE_MODULES["internals.py"]
+
+
+def test_run_pipeline_start_from_document_preserves_lab_internals_without_cache_key(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Same overwrite hazard on document entry, which rematerializes from validate."""
+    from src.stage_manifest import (
+        compute_input_fingerprints,
+        write_stage_manifest,
+    )
+
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "b" * 64
+    _seed_differential_harness(config)
+    save_codegen_payload(
+        _COLD_CLONE_MODULES,
+        cache_key=codegen_key,
+        projection_cache_key="p" * 64,
+    )
+    materialize_package(config, codegen_key=codegen_key)
+    (config.package_root / "internals.py").write_text(
+        _COLD_CLONE_REFACTORED, encoding="utf-8"
+    )
+    write_package_cache_keys(
+        config.dist_root,
+        PackageCacheKeys(codegen_key=codegen_key, internals_key=None),
+    )
+    write_stage_manifest(
+        config,
+        stage="validate",
+        cache_keys={
+            "codegen_cache_key": codegen_key,
+        },
+        upstream_keys={"codegen_cache_key": codegen_key},
+        fingerprints=compute_input_fingerprints(config),
+    )
+
+    with patch("src.extraction_pipeline.run_document_stage") as document:
+        run_pipeline(config, only_stage="document")
+
+    document.assert_called_once()
+    assert (config.package_root / "internals.py").read_text(
+        encoding="utf-8"
+    ) == _COLD_CLONE_REFACTORED
+    assert (config.package_root / "internals.py").read_text(
+        encoding="utf-8"
+    ) != _COLD_CLONE_MODULES["internals.py"]
