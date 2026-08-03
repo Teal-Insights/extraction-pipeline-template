@@ -37,7 +37,6 @@ from src.pipeline_config import (
     load_pipeline_config,
     validate_pipeline_config,
 )
-from src.pipeline_context import activate_pipeline_config
 from src.formula_clustering import (
     BoundAddressKeys,
     ClusterableGraph,
@@ -439,6 +438,7 @@ def record_refactor_buckets(
                     bound_address_keys=resolved_bound_keys,
                     expected_helper_name=helper_name,
                     existing_helper_names=reserved_for_others,
+                    layout=layout,
                 )
             )
         else:
@@ -851,7 +851,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.clustering_mode,
     )
     validate_pipeline_config(config)
-    activate_pipeline_config(config)
 
     report = run_record_refactor_buckets(
         config,

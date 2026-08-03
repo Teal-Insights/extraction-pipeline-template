@@ -18,7 +18,6 @@ if str(REPO_ROOT) not in sys.path:
 from src.extraction_pipeline import build_pipeline_graph  # noqa: E402
 from src.formula_clustering import FormulaCluster, cluster_graph_formulas  # noqa: E402
 from src.pipeline_config import load_pipeline_config, validate_pipeline_config  # noqa: E402
-from src.pipeline_context import activate_pipeline_config  # noqa: E402
 from src.refactor_order import (  # noqa: E402
     ScheduleDiagnostics,
     compute_refactor_schedule_with_diagnostics,
@@ -234,7 +233,6 @@ def main() -> None:
 
     config = load_pipeline_config()
     validate_pipeline_config(config)
-    activate_pipeline_config(config)
 
     graph_result = build_pipeline_graph(config, no_cache=args.no_cache)
     projection = build_refactor_projection(

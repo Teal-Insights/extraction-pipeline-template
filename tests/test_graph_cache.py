@@ -562,11 +562,8 @@ def test_extract_graph_cli_supports_no_cache(
         "src.extraction_pipeline.load_pipeline_config", return_value=synthetic_config
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch(
-                    "src.extraction_pipeline.extract_dependency_graph"
-                ) as extract:
-                    main(["--extract-graph", "--no-cache"])
+            with patch("src.extraction_pipeline.extract_dependency_graph") as extract:
+                main(["--extract-graph", "--no-cache"])
 
     extract.assert_called_once_with(
         synthetic_config, no_cache=True, force_rebuild=False, timings=ANY

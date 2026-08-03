@@ -415,9 +415,8 @@ def test_main_stop_after_stage_extract_uses_extract_path(
         return_value=synthetic_pipeline_config_fixture,
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                    main(["--stop-after-stage", "extract"])
+            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                main(["--stop-after-stage", "extract"])
 
     pipeline.assert_called_once()
     assert pipeline.call_args.kwargs["stop_after_stage"] == "extract"
@@ -431,9 +430,8 @@ def test_main_extract_graph_alias_stops_after_extract(
         return_value=synthetic_pipeline_config_fixture,
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                    main(["--extract-graph"])
+            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                main(["--extract-graph"])
 
     pipeline.assert_called_once()
     assert pipeline.call_args.kwargs["stop_after_stage"] == "extract"
@@ -742,9 +740,8 @@ def test_main_force_document_flag_is_passed(
         return_value=synthetic_pipeline_config_fixture,
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                    main(["--force-document"])
+            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                main(["--force-document"])
 
     assert pipeline.call_args.kwargs["force_document"] is True
 
@@ -757,9 +754,8 @@ def test_main_force_rebuild_flag_is_passed(
         return_value=synthetic_pipeline_config_fixture,
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                    main(["--force-rebuild"])
+            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                main(["--force-rebuild"])
 
     assert pipeline.call_args.kwargs["force_rebuild"] is True
 
@@ -772,9 +768,8 @@ def test_main_start_from_stage_is_passed(
         return_value=synthetic_pipeline_config_fixture,
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                    main(["--start-from-stage", "refactor"])
+            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                main(["--start-from-stage", "refactor"])
 
     assert pipeline.call_args.kwargs["start_from_stage"] == "refactor"
     assert pipeline.call_args.kwargs["stop_after_stage"] == "document"
@@ -789,9 +784,8 @@ def test_main_only_stage_is_passed(
         return_value=synthetic_pipeline_config_fixture,
     ):
         with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.activate_pipeline_config"):
-                with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                    main(["--only-stage", "validate"])
+            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
+                main(["--only-stage", "validate"])
 
     assert pipeline.call_args.kwargs["only_stage"] == "validate"
     assert pipeline.call_args.kwargs["start_from_stage"] == "validate"
