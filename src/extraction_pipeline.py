@@ -79,6 +79,7 @@ from src.stage_manifest import (
 )
 from src.stage_timings import (
     PipelineTimings,
+    record_cache_outcome,
     record_cache_result,
     stage_span,
     stage_timings_path,
@@ -196,6 +197,22 @@ class RefactorLabOptions:
     prompt_observer: Any | None = None
     cluster_context_observer: Any | None = None
     singleton_context_observer: Any | None = None
+
+    def requires_refactor_run(self) -> bool:
+        """True when these options only take effect if Pass 1 / Pass 2 actually run.
+
+        Every warm-cache short-circuit in :func:`run_refactor_stage` returns
+        before ``refactor_internals_all_clusters``, so answering a lab run from
+        cache would silently drop the observers and make ``--dry-run`` /
+        ``--no-parity-gate`` no-ops.
+        """
+        return (
+            self.dry_run
+            or not self.parity_gate
+            or self.prompt_observer is not None
+            or self.cluster_context_observer is not None
+            or self.singleton_context_observer is not None
+        )
 
 
 class StageCacheMissingError(StageManifestError):
@@ -483,6 +500,11 @@ def _materialize_from_refactor_keys(
     When ``internals_key`` is absent (non-cacheable lab / ungated refactor), leave
     the on-disk package alone so rematerialization cannot overwrite lab output
     with pristine codegen.
+
+    The manifest pins the exact content key, so adoption of a committed ``dist/``
+    is gated on that key rather than on provenance. Adoption is tried first
+    because ``materialize_package`` needs a warm codegen cache, which a fresh
+    clone does not have.
     """
     if internals_key is None:
         print(
@@ -490,6 +512,12 @@ def _materialize_from_refactor_keys(
             "(no internals_cache_key; preserving on-disk dist/)",
             flush=True,
         )
+        return
+    if try_materialize_refactored_package_from_cache(
+        config,
+        codegen_key=codegen_key,
+        expected_internals_key=internals_key,
+    ):
         return
     materialize_package(
         config,
@@ -840,19 +868,29 @@ def run_refactor_stage(
     )
     from src.refactor_bindings import key_concept_vocabulary_from_bindings
 
+    from src.package_materialize import current_internals_inputs
+
     config = state.config
     lab = lab_options or RefactorLabOptions()
+    # A lab run that asked for observers, a dry run, or an ungated pass must
+    # reach refactor_internals_all_clusters; answering it from cache would
+    # silently do nothing at all.
+    use_internals_cache = (
+        not no_cache and not force_rebuild and not lab.requires_refactor_run()
+    )
     with (
         profile_if_enabled(config.graph_output_dir, basename="refactor"),
         stage_span(timings, "refactor") as timer,
     ):
-        # Fresh-clone / committed-dist path: trust sidecar keys (#238).
-        if (
-            not no_cache
-            and not force_rebuild
-            and try_materialize_refactored_package_from_cache(
-                config, codegen_key=state.codegen_cache_key
-            )
+        # Fresh-clone / committed-dist path: trust sidecar keys (#238), but only
+        # once the recorded provenance shows the module was built the way this
+        # run would build it. Clustering has not run yet, so the full content key
+        # is not available to compare against here.
+        adopt_started = time.perf_counter()
+        if use_internals_cache and try_materialize_refactored_package_from_cache(
+            config,
+            codegen_key=state.codegen_cache_key,
+            expected_internals_inputs=current_internals_inputs(),
         ):
             from src.package_materialize import read_package_cache_keys
 
@@ -863,6 +901,14 @@ def run_refactor_stage(
                 f"(adopted dist/ cache keys for codegen={state.codegen_cache_key[:12]})",
                 flush=True,
             )
+            if internals_key is not None:
+                record_cache_outcome(
+                    timings,
+                    "internals",
+                    cache_hit=True,
+                    elapsed_seconds=time.perf_counter() - adopt_started,
+                    cache_key=internals_key,
+                )
             result = RefactorStageState(
                 config=config,
                 codegen_cache_key=state.codegen_cache_key,
@@ -917,13 +963,21 @@ def run_refactor_stage(
             clusters_cache_key=cluster_result.cache_key,
             consumed_refactors_digest=refactor_digest,
         )
-        if not no_cache and not force_rebuild:
+        if use_internals_cache:
+            internals_started = time.perf_counter()
             cached_source = load_refactored_internals_payload(internals_key)
             if cached_source is not None:
                 materialize_package(
                     config,
                     codegen_key=state.codegen_cache_key,
                     internals_key=internals_key,
+                )
+                record_cache_outcome(
+                    timings,
+                    "internals",
+                    cache_hit=True,
+                    elapsed_seconds=time.perf_counter() - internals_started,
+                    cache_key=internals_key,
                 )
                 print(
                     "internals: cache hit "
@@ -1012,6 +1066,13 @@ def run_refactor_stage(
                 internals_key=post_key,
             )
             resolved_internals_key = post_key
+            record_cache_outcome(
+                timings,
+                "internals",
+                cache_hit=False,
+                elapsed_seconds=refactor_seconds,
+                cache_key=post_key,
+            )
             print(
                 f"internals: cache store (key={post_key[:12]})",
                 flush=True,
@@ -1210,16 +1271,31 @@ def _run_pipeline_stages(
     refactor_state: RefactorStageState | None = None
     graph_result: PipelineGraphResult | None = None
 
+    lab = lab_options or RefactorLabOptions()
     if start_from_stage != "extract":
         upstream = require_upstream_manifest(config, start_from_stage=start_from_stage)
         if start_from_stage == "refactor":
+            from src.package_materialize import current_internals_inputs
+
             export_state = export_stage_state_from_manifest(config, upstream)
             # Prefer committed-dist / content-keyed adopt before rematerializing
             # pristine codegen — rematerialize clears internals_key and defeats
             # the fresh-clone path (#238 / #239).
-            if not try_materialize_refactored_package_from_cache(
-                config, codegen_key=export_state.codegen_cache_key
-            ):
+            #
+            # A run that will rebuild the refactor must start from the pristine
+            # module: seeding dist/ with the cached refactored internals.py would
+            # make Pass 1 rewrite an already-rewritten module.
+            adopt = (
+                not no_cache
+                and not force_rebuild
+                and not lab.requires_refactor_run()
+                and try_materialize_refactored_package_from_cache(
+                    config,
+                    codegen_key=export_state.codegen_cache_key,
+                    expected_internals_inputs=current_internals_inputs(),
+                )
+            )
+            if not adopt:
                 materialize_package(config, codegen_key=export_state.codegen_cache_key)
         elif start_from_stage in ("validate", "document"):
             refactor_state = refactor_stage_state_from_manifest(config, upstream)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -90,8 +91,47 @@ def internals_cache_key(
     return hashlib.sha256(stable_json(payload).encode()).hexdigest()
 
 
+def internals_key_provenance(
+    *,
+    mechanical_body_schema_version: str = MECHANICAL_BODY_SCHEMA_VERSION,
+    parity_gate_schema_version: str = PARITY_GATE_SCHEMA_VERSION,
+    mechanical_refactor_bodies: str | None = None,
+    refactor_model: str | None = None,
+    excel_grapher_version: str | None = None,
+) -> dict[str, str]:
+    """Reproducible components of :func:`internals_cache_key`, for adopt checks.
+
+    ``dist/`` adoption (#238) runs before clustering, so it cannot recompute the
+    full content key — ``clusters_cache_key`` is not known yet. These fields are
+    the subset that describes *how* a refactored module was produced and that a
+    fresh clone can reproduce exactly, so they can gate adoption of a committed
+    ``dist/``.
+
+    ``consumed_refactors_digest`` is deliberately excluded: it hashes the whole
+    ``internals-refactors.json`` map, which a fresh clone does not have, so
+    including it would refuse every cold-clone adoption. Drift in the LLM
+    response cache is still caught by the strict content key once
+    ``.cache/internals/`` is warm.
+    """
+    if mechanical_refactor_bodies is None:
+        mechanical_refactor_bodies = mechanical_refactor_bodies_value()
+    if refactor_model is None:
+        from src.internals_refactor import refactor_model as _refactor_model
+
+        refactor_model = _refactor_model()
+    if excel_grapher_version is None:
+        excel_grapher_version = version("excel-grapher")
+    return {
+        "cache_schema_version": INTERNALS_CACHE_SCHEMA_VERSION,
+        "mechanical_body_schema_version": mechanical_body_schema_version,
+        "parity_gate_schema_version": parity_gate_schema_version,
+        "mechanical_refactor_bodies": mechanical_refactor_bodies,
+        "refactor_model": refactor_model,
+        "excel_grapher_version": excel_grapher_version,
+    }
+
+
 def _cache_paths(cache_dir: Path, cache_key: str) -> tuple[Path, Path]:
-    cache_dir.mkdir(parents=True, exist_ok=True)
     return (
         cache_dir / f"{cache_key}.py",
         cache_dir / f"{cache_key}.meta.json",
@@ -132,6 +172,7 @@ def save_refactored_internals_payload(
     cache_dir: Path | None = None,
 ) -> Path:
     resolved = _internals_cache_dir(cache_dir)
+    resolved.mkdir(parents=True, exist_ok=True)
     payload_path, meta_path = _cache_paths(resolved, cache_key)
     payload_path.write_text(source, encoding="utf-8", newline="\n")
     _write_internals_meta(
@@ -160,6 +201,33 @@ def _prune_stale_internals_for_other_excel_grapher_versions(cache_dir: Path) -> 
         if py_path.is_file():
             py_path.unlink()
         meta_path.unlink(missing_ok=True)
+
+
+def clear_internals_cache(*, cache_dir: Path | None = None) -> list[str]:
+    """Delete every refactored-internals entry and Pass 1 checkpoint.
+
+    There is no prune-to-current-keys counterpart: an internals key folds in
+    ``codegen_cache_key`` and ``clusters_cache_key``, so the current key set is
+    unknowable without running codegen and clustering. Tools that invalidate
+    upstream inputs therefore clear this cache outright, the same way they clear
+    ``.cache/clusters/``.
+
+    Per-package checkpoint directories are removed too. The checkpoint is Pass 1
+    crash-recovery state for one specific pristine module, so it is stale as soon
+    as the upstream caches are dropped.
+    """
+    resolved = _internals_cache_dir(cache_dir)
+    if not resolved.is_dir():
+        return []
+    removed: list[str] = []
+    for path in sorted(resolved.iterdir()):
+        if path.is_file():
+            path.unlink()
+            removed.append(path.name)
+        elif path.is_dir():
+            shutil.rmtree(path)
+            removed.append(f"{path.name}/")
+    return removed
 
 
 def load_refactored_internals_payload(

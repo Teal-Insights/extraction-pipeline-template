@@ -36,6 +36,7 @@ CACHE_NAMES: tuple[str, ...] = (
     "projection",
     "codegen",
     "clusters",
+    "internals",
 )
 
 _UNOBSERVED_CACHE: dict[str, Any] = {
@@ -219,11 +220,38 @@ def record_cache_result(
     result: CacheResultLike,
 ) -> None:
     """Record a ``get_or_build_*`` outcome when a run is collecting timings."""
+    # Return before touching ``result`` so a detached run never depends on the
+    # result object's shape.
     if timings is None:
         return
-    timings.record_cache(
+    record_cache_outcome(
+        timings,
         name,
         cache_hit=result.cache_hit,
         elapsed_seconds=result.elapsed_seconds,
         cache_key=result.cache_key,
+    )
+
+
+def record_cache_outcome(
+    timings: PipelineTimings | None,
+    name: str,
+    *,
+    cache_hit: bool,
+    elapsed_seconds: float,
+    cache_key: str,
+) -> None:
+    """Record a cache outcome resolved without a ``get_or_build_*`` result object.
+
+    The refactored-internals cache is resolved by direct load/save calls rather
+    than a single ``get_or_build_*`` helper, so its hit/miss has to be reported
+    from each of the refactor stage's resolution points.
+    """
+    if timings is None:
+        return
+    timings.record_cache(
+        name,
+        cache_hit=cache_hit,
+        elapsed_seconds=elapsed_seconds,
+        cache_key=cache_key,
     )

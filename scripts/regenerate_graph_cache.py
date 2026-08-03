@@ -11,9 +11,11 @@ or upgrading excel-grapher:
 
 Use ``--force`` to rebuild even when current entries already exist. Force also
 clears ``.cache/series-resolution``, ``.cache/series-derived``,
-``.cache/bindings-validation``, and ``.cache/clusters`` before rebuilding and
-pruning series/validation caches to keys derived from the current graph cache
-keys.
+``.cache/bindings-validation``, ``.cache/clusters``, and ``.cache/internals``
+before rebuilding and pruning series/validation caches to keys derived from the
+current graph cache keys. The cluster and internals caches are cleared rather
+than pruned because their keys fold in projection/codegen/cluster keys that this
+script does not compute.
 Commit the updated ``.cache/dependency-graph`` artifacts when your downstream
 pipeline chooses to vendor the cache (override ``.gitignore`` for that
 directory).
@@ -49,6 +51,7 @@ from src.graph_cache import (  # noqa: E402
     get_or_build_dependency_graph,
     prune_stale_graph_cache_entries,
 )
+from src.internals_cache import clear_internals_cache  # noqa: E402
 from src.pipeline_config import (  # noqa: E402
     load_pipeline_config,
     validate_pipeline_config,
@@ -97,6 +100,10 @@ def regenerate_graph_cache(
         clear_cluster_cache(
             cache_dir=COMMITTED_CLUSTER_CACHE_DIR,
         )
+        # Resolved at call time, not imported as a module constant: the internals
+        # cache dir is redirected by pytest via src.internals_refactor.
+        for name in clear_internals_cache():
+            print(f"cleared refactored-internals cache entry: {name}")
 
     current_keys: set[str] = set()
     default_graph_result = None
@@ -193,7 +200,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         help=(
             "Rebuild even when current entries already exist; also clear and "
             "prune series-resolution, series-derived, and bindings-validation "
-            "caches, and clear the clusters cache."
+            "caches, and clear the clusters and refactored-internals caches."
         ),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
