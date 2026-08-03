@@ -72,6 +72,11 @@ class StageManifest:
             raise ValueError(f"stage manifest missing stage: {path}")
         if not isinstance(schema_version, str) or not schema_version:
             raise ValueError(f"stage manifest missing schema_version: {path}")
+        if schema_version != STAGE_MANIFEST_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported stage manifest schema_version {schema_version!r} "
+                f"(expected {STAGE_MANIFEST_SCHEMA_VERSION!r}): {path}"
+            )
         if not isinstance(cache_keys, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in cache_keys.items()
         ):
@@ -106,6 +111,25 @@ def stage_manifest_path(repo_root: Path, stage: str) -> Path:
 
 def compute_input_fingerprints(config: PipelineConfig) -> dict[str, str]:
     """Return labeled fingerprints for pipeline inputs that gate stage entry."""
+    layout = config.projection_layout
+    layout_payload: object
+    if layout is None:
+        layout_payload = None
+    else:
+        layout_payload = {
+            "engine_sheet": layout.engine_sheet,
+            "engine_columns": list(layout.engine_columns),
+            "outputs_sheet": layout.outputs_sheet,
+            "outputs_column_to_engine": dict(layout.outputs_column_to_engine),
+            "time_period_to_engine_column": {
+                str(period): column
+                for period, column in sorted(
+                    layout.time_period_to_engine_column.items()
+                )
+            },
+            "time_period_header_row": layout.time_period_header_row,
+            "projection_dimension_id": layout.projection_dimension_id,
+        }
     return {
         "workbook": file_fingerprint(config.workbook_path),
         "bindings": bindings_fingerprint(config.bindings_path),
@@ -124,6 +148,9 @@ def compute_input_fingerprints(config: PipelineConfig) -> dict[str, str]:
         ),
         "internal_binding_exempt_cells": hashlib.sha256(
             stable_json(sorted(config.internal_binding_exempt_cells)).encode()
+        ).hexdigest(),
+        "projection_layout": hashlib.sha256(
+            stable_json(layout_payload).encode()
         ).hexdigest(),
     }
 

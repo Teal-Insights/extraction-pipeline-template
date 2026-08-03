@@ -269,6 +269,7 @@ def try_materialize_refactored_package_from_cache(
     config: PipelineConfig,
     *,
     codegen_key: str,
+    expected_internals_key: str | None = None,
 ) -> bool:
     """Materialize dist from caches when a recorded ``internals_key`` is available.
 
@@ -277,12 +278,18 @@ def try_materialize_refactored_package_from_cache(
     also cold, reconstruct non-oracle module texts from the committed package
     without writing them into ``.cache/codegen/`` (which must stay pristine).
 
+    When ``expected_internals_key`` is provided, the sidecar ``internals_key`` must
+    match it exactly — otherwise adoption is refused so a stale content key cannot
+    skip Pass 1 / parity / Pass 2.
+
     Returns True when materialization succeeded and the refactor stage can skip.
     """
     keys = read_package_cache_keys(config.dist_root)
     if keys is None or keys.codegen_key != codegen_key or keys.internals_key is None:
         return False
     internals_key = keys.internals_key
+    if expected_internals_key is not None and internals_key != expected_internals_key:
+        return False
     cache_path = internals_cache_path(internals_key)
     if not cache_path.is_file():
         if not adopt_internals_cache_from_dist(

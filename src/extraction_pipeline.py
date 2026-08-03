@@ -478,6 +478,19 @@ def _materialize_from_refactor_keys(
     codegen_key: str,
     internals_key: str | None,
 ) -> None:
+    """Rehydrate ``dist/`` for validate/document entry.
+
+    When ``internals_key`` is absent (non-cacheable lab / ungated refactor), leave
+    the on-disk package alone so rematerialization cannot overwrite lab output
+    with pristine codegen.
+    """
+    if internals_key is None:
+        print(
+            "materialize: skipping package rebuild "
+            "(no internals_cache_key; preserving on-disk dist/)",
+            flush=True,
+        )
+        return
     materialize_package(
         config,
         codegen_key=codegen_key,
@@ -1201,7 +1214,13 @@ def _run_pipeline_stages(
         upstream = require_upstream_manifest(config, start_from_stage=start_from_stage)
         if start_from_stage == "refactor":
             export_state = export_stage_state_from_manifest(config, upstream)
-            materialize_package(config, codegen_key=export_state.codegen_cache_key)
+            # Prefer committed-dist / content-keyed adopt before rematerializing
+            # pristine codegen — rematerialize clears internals_key and defeats
+            # the fresh-clone path (#238 / #239).
+            if not try_materialize_refactored_package_from_cache(
+                config, codegen_key=export_state.codegen_cache_key
+            ):
+                materialize_package(config, codegen_key=export_state.codegen_cache_key)
         elif start_from_stage in ("validate", "document"):
             refactor_state = refactor_stage_state_from_manifest(config, upstream)
             _materialize_from_refactor_keys(

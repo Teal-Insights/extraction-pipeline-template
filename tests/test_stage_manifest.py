@@ -12,6 +12,7 @@ from src.stage_manifest import (
     STAGE_MANIFEST_SCHEMA_VERSION,
     StageManifest,
     StageManifestDriftError,
+    StageManifestError,
     StageManifestMissingError,
     assert_manifest_fresh,
     compute_input_fingerprints,
@@ -98,6 +99,78 @@ def test_compute_input_fingerprints_labels(tmp_path: Path) -> None:
         fingerprints["guide"]
         == hashlib.sha256(config.guide_path.read_bytes()).hexdigest()
     )
+    assert "projection_layout" in fingerprints
+
+
+def test_compute_input_fingerprints_projection_layout_changes(tmp_path: Path) -> None:
+    from src.workbook_addresses import ProjectionColumnLayout
+
+    config = _sample_config(tmp_path)
+    layout_a = ProjectionColumnLayout(
+        engine_sheet="Engine",
+        engine_columns=("B", "C"),
+        outputs_sheet="Outputs",
+        outputs_column_to_engine={"B": "B", "C": "C"},
+        time_period_to_engine_column={1: "B", 2: "C"},
+    )
+    layout_b = replace(
+        layout_a,
+        engine_columns=("B", "C", "D"),
+        time_period_to_engine_column={1: "B", 2: "C", 3: "D"},
+    )
+    with_a = compute_input_fingerprints(replace(config, projection_layout=layout_a))
+    with_b = compute_input_fingerprints(replace(config, projection_layout=layout_b))
+    without = compute_input_fingerprints(replace(config, projection_layout=None))
+
+    assert with_a["projection_layout"] != with_b["projection_layout"]
+    assert with_a["projection_layout"] != without["projection_layout"]
+
+
+def test_assert_manifest_fresh_names_drifted_projection_layout(tmp_path: Path) -> None:
+    from src.workbook_addresses import ProjectionColumnLayout
+
+    layout_a = ProjectionColumnLayout(
+        engine_sheet="Engine",
+        engine_columns=("B", "C"),
+        outputs_sheet="Outputs",
+        outputs_column_to_engine={"B": "B", "C": "C"},
+        time_period_to_engine_column={1: "B", 2: "C"},
+    )
+    layout_b = replace(
+        layout_a,
+        engine_columns=("B", "C", "D"),
+        time_period_to_engine_column={1: "B", 2: "C", 3: "D"},
+    )
+    config = replace(_sample_config(tmp_path), projection_layout=layout_a)
+    manifest = write_stage_manifest(
+        config,
+        stage="export",
+        cache_keys={"codegen_cache_key": "c" * 64},
+        upstream_keys={},
+        fingerprints=compute_input_fingerprints(config),
+    )
+    drifted = replace(config, projection_layout=layout_b)
+
+    with pytest.raises(StageManifestDriftError, match="projection_layout"):
+        assert_manifest_fresh(manifest, drifted)
+
+
+def test_load_stage_manifest_rejects_unsupported_schema_version(tmp_path: Path) -> None:
+    path = stage_manifest_path(tmp_path, "export")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "{\n"
+        '  "stage": "export",\n'
+        '  "schema_version": "0.0.0",\n'
+        '  "cache_keys": {"codegen_cache_key": "' + ("c" * 64) + '"},\n'
+        '  "upstream_keys": {},\n'
+        '  "fingerprints": {"workbook": "abc"}\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises((ValueError, StageManifestError), match="schema_version"):
+        load_stage_manifest(tmp_path, "export")
 
 
 def test_write_and_load_stage_manifest_round_trip(tmp_path: Path) -> None:
