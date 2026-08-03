@@ -350,6 +350,14 @@ def test_run_refactor_stage_warm_hit_skips_pass1_parity_and_pass2(
     )
     with (
         patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
+        patch(
             "src.extraction_pipeline.load_export_stage_artifacts",
             return_value=artifacts,
         ),
@@ -440,6 +448,14 @@ def test_run_refactor_stage_saves_cacheable_result_and_materializes(
         address_to_series_id={},
     )
     with (
+        patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
         patch(
             "src.extraction_pipeline.load_export_stage_artifacts",
             return_value=artifacts,
@@ -532,6 +548,14 @@ def test_run_refactor_stage_does_not_cache_when_not_cacheable(
         address_to_series_id={},
     )
     with (
+        patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
         patch(
             "src.extraction_pipeline.load_export_stage_artifacts",
             return_value=artifacts,
