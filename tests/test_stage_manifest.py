@@ -256,6 +256,46 @@ def test_assert_manifest_fresh_names_drifted_constraints(tmp_path: Path) -> None
         assert_manifest_fresh(manifest, drifted)
 
 
+def test_assert_manifest_fresh_rejects_manifest_missing_a_newer_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """A manifest written before a fingerprint label existed cannot be verified.
+
+    Iterating only the stored labels would pass this manifest and silently skip
+    the new input, which is how the ``projection_layout`` label shipped without
+    invalidating older manifests. The label set is a separate axis from
+    ``STAGE_MANIFEST_SCHEMA_VERSION``, so this must not depend on a version bump.
+    """
+    config = _sample_config(tmp_path)
+    full = compute_input_fingerprints(config)
+    assert "projection_layout" in full
+    older = {name: value for name, value in full.items() if name != "projection_layout"}
+    manifest = write_stage_manifest(
+        config,
+        stage="extract",
+        cache_keys={"graph_cache_key": "g" * 64},
+        upstream_keys={},
+        fingerprints=older,
+    )
+
+    with pytest.raises(StageManifestDriftError, match="projection_layout"):
+        assert_manifest_fresh(manifest, config)
+
+
+def test_assert_manifest_fresh_passes_when_label_sets_match(tmp_path: Path) -> None:
+    """The symmetric check must not reject an ordinary up-to-date manifest."""
+    config = _sample_config(tmp_path)
+    manifest = write_stage_manifest(
+        config,
+        stage="extract",
+        cache_keys={"graph_cache_key": "g" * 64},
+        upstream_keys={},
+        fingerprints=compute_input_fingerprints(config),
+    )
+
+    assert_manifest_fresh(manifest, config)
+
+
 def test_load_stage_manifest_missing_raises(tmp_path: Path) -> None:
     with pytest.raises(StageManifestMissingError, match="export"):
         load_stage_manifest(tmp_path, "export")

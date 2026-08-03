@@ -88,7 +88,6 @@ def dependency_graph_cache_key(
 
 
 def _cache_paths(cache_dir: Path, cache_key: str) -> tuple[Path, Path]:
-    cache_dir.mkdir(parents=True, exist_ok=True)
     return (
         cache_dir / f"{cache_key}.pkl.gz",
         cache_dir / f"{cache_key}.meta.json",
@@ -125,6 +124,7 @@ def save_dependency_graph(
     cache_dir: Path | None = None,
 ) -> None:
     resolved_cache_dir = _graph_cache_dir(cache_dir)
+    resolved_cache_dir.mkdir(parents=True, exist_ok=True)
     payload_path, meta_path = _cache_paths(resolved_cache_dir, cache_key)
     with gzip.open(payload_path, "wb", compresslevel=1) as handle:
         pickle.dump(graph, handle, protocol=pickle.HIGHEST_PROTOCOL)

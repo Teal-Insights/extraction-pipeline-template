@@ -14,6 +14,7 @@ from src.package_materialize import (
     PackageCacheKeys,
     adopt_codegen_cache_from_dist,
     apply_export_api_rewrite,
+    current_internals_inputs,
     load_pristine_internals_from_codegen,
     materialize_package,
     read_package_cache_keys,
@@ -128,6 +129,69 @@ def test_materialize_package_byte_identical_after_dist_wipe(tmp_path: Path) -> N
     )
 
 
+def _emitted_runtime_source() -> str:
+    """The real codegen ``runtime.py``, which does not export the memo API."""
+    from excel_grapher.exporter.embed import emit_runtime, runtime_cache_seed_symbols
+
+    return emit_runtime(
+        set(runtime_cache_seed_symbols(include_dep_tracking=True)),
+        include_offset_table=False,
+    )
+
+
+def test_materialize_package_keeps_runtime_memoization_api(tmp_path: Path) -> None:
+    """``dist/`` must never ship internals importing a symbol runtime.py lacks.
+
+    Mechanical refactor decorates helpers with ``@xl_memoize`` and merges the
+    matching ``from .runtime import`` line into ``internals.py``. Codegen's
+    ``runtime.py`` does not define that API — the refactor stage patches the file
+    in place. Since ``materialize_package`` rewrites ``runtime.py`` from the
+    codegen payload and runs *after* refactor, it has to re-apply the patch or it
+    strips the API back out and the exported package fails to import.
+    """
+    from src.helper_memoization import runtime_source_has_helper_memoization
+
+    runtime_source = _emitted_runtime_source()
+    assert not runtime_source_has_helper_memoization(runtime_source)
+
+    config = _prepare_repo(tmp_path)
+    codegen_key = "a" * 64
+    modules = dict(_SAMPLE_MODULES)
+    modules["runtime.py"] = runtime_source
+    modules["internals.py"] = (
+        "from .runtime import xl_memoize\n\n\n@xl_memoize\ndef helper_x(ctx):\n"
+        "    return 1.0\n"
+    )
+    save_codegen_payload(modules, cache_key=codegen_key, projection_cache_key="p" * 64)
+
+    materialize_package(config, codegen_key=codegen_key)
+
+    written = (config.package_root / "runtime.py").read_text(encoding="utf-8")
+    assert runtime_source_has_helper_memoization(written)
+
+
+def test_materialize_package_runtime_memoization_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    """Re-materializing must not append the polyfill twice."""
+    from src.helper_memoization import runtime_source_has_helper_memoization
+
+    config = _prepare_repo(tmp_path)
+    codegen_key = "a" * 64
+    modules = dict(_SAMPLE_MODULES)
+    modules["runtime.py"] = _emitted_runtime_source()
+    save_codegen_payload(modules, cache_key=codegen_key, projection_cache_key="p" * 64)
+
+    materialize_package(config, codegen_key=codegen_key)
+    first = (config.package_root / "runtime.py").read_text(encoding="utf-8")
+    materialize_package(config, codegen_key=codegen_key)
+    second = (config.package_root / "runtime.py").read_text(encoding="utf-8")
+
+    assert first == second
+    assert runtime_source_has_helper_memoization(second)
+    assert second.count("def xl_memoize(") == 1
+
+
 def test_materialize_package_fails_loudly_on_missing_codegen_payload(
     tmp_path: Path,
 ) -> None:
@@ -181,7 +245,11 @@ def test_cold_cache_adoption_from_committed_dist_skips_refactor(
     (config.package_root / "internals.py").write_text(refactored, encoding="utf-8")
     write_package_cache_keys(
         config.dist_root,
-        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=internals_key,
+            internals_inputs=current_internals_inputs(),
+        ),
     )
 
     # Fresh-clone conditions: internals cache cold, committed dist present.
@@ -211,6 +279,7 @@ def test_cold_cache_adoption_from_committed_dist_skips_refactor(
     assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
         codegen_key=codegen_key,
         internals_key=internals_key,
+        internals_inputs=current_internals_inputs(),
     )
 
 
@@ -230,7 +299,11 @@ def test_try_materialize_refactored_package_adopts_when_internals_cache_cold(
     (config.package_root / "internals.py").write_text(refactored, encoding="utf-8")
     write_package_cache_keys(
         config.dist_root,
-        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=internals_key,
+            internals_inputs=current_internals_inputs(),
+        ),
     )
 
     from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
@@ -334,7 +407,11 @@ def test_try_materialize_adopts_when_expected_internals_key_matches_sidecar(
     (config.package_root / "internals.py").write_text(refactored, encoding="utf-8")
     write_package_cache_keys(
         config.dist_root,
-        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=internals_key,
+            internals_inputs=current_internals_inputs(),
+        ),
     )
 
     from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR

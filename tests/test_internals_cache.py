@@ -12,6 +12,7 @@ from src.codegen_cache import save_codegen_payload
 from src.internals_cache import (
     INTERNALS_CACHE_SCHEMA_VERSION,
     InternalsCacheResult,
+    clear_internals_cache,
     consumed_refactors_digest,
     get_or_load_refactored_internals,
     internals_cache_key,
@@ -21,6 +22,7 @@ from src.internals_cache import (
 from src.mechanical_body import MECHANICAL_BODY_SCHEMA_VERSION
 from src.package_materialize import (
     PackageCacheKeys,
+    current_internals_inputs,
     materialize_package,
     read_package_cache_keys,
     write_package_cache_keys,
@@ -380,6 +382,7 @@ def test_run_refactor_stage_warm_hit_skips_pass1_parity_and_pass2(
     assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
         codegen_key=codegen_key,
         internals_key=cache_key,
+        internals_inputs=current_internals_inputs(),
     )
 
 
@@ -481,6 +484,7 @@ def test_run_refactor_stage_saves_cacheable_result_and_materializes(
     assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
         codegen_key=codegen_key,
         internals_key=expected_key,
+        internals_inputs=current_internals_inputs(),
     )
 
 
@@ -607,7 +611,11 @@ def test_cold_adopt_still_skips_refactor_when_sidecar_present(
     (config.package_root / "internals.py").write_text(_REFACTORED, encoding="utf-8")
     write_package_cache_keys(
         config.dist_root,
-        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=internals_key,
+            internals_inputs=current_internals_inputs(),
+        ),
     )
     state = ExportStageState(
         config=config,
@@ -626,3 +634,33 @@ def test_cold_adopt_still_skips_refactor_when_sidecar_present(
     cluster_build.assert_not_called()
     refactor.assert_not_called()
     assert (DEFAULT_INTERNALS_CACHE_DIR / f"{internals_key}.py").is_file()
+
+
+def test_clear_internals_cache_removes_entries_and_checkpoints(tmp_path: Path) -> None:
+    """Clearing must take the Pass 1 checkpoint subdirectories with it.
+
+    The checkpoint is crash-recovery state for one specific pristine module, so
+    it is stale the moment the upstream caches are dropped. Only unlinking
+    top-level files would leave those namespace directories behind forever.
+    """
+    cache_dir = tmp_path / "internals"
+    cache_dir.mkdir()
+    entry = cache_dir / f"{'a' * 64}.py"
+    entry.write_text("def cell_a1(ctx):\n    return 1.0\n", encoding="utf-8")
+    meta = cache_dir / f"{'a' * 64}.meta.json"
+    meta.write_text("{}\n", encoding="utf-8")
+    checkpoint = cache_dir / "ns0123456789abcd" / "internals.mechanical.py"
+    checkpoint.parent.mkdir()
+    checkpoint.write_text("# checkpoint\n", encoding="utf-8")
+
+    removed = clear_internals_cache(cache_dir=cache_dir)
+
+    assert not entry.is_file()
+    assert not meta.is_file()
+    assert not checkpoint.parent.exists()
+    assert set(removed) == {entry.name, meta.name, "ns0123456789abcd/"}
+    assert cache_dir.is_dir()
+
+
+def test_clear_internals_cache_is_a_noop_when_cache_is_absent(tmp_path: Path) -> None:
+    assert clear_internals_cache(cache_dir=tmp_path / "missing") == []

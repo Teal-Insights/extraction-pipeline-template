@@ -154,6 +154,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help=(
+            "Rebuild warm caches even when keys match. The lab flags above "
+            "already force a real refactor run; use this to also discard warm "
+            "graph/projection/cluster payloads."
+        ),
+    )
+    parser.add_argument(
         "--report-synthesis",
         type=Path,
         default=None,
@@ -199,6 +208,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             config,
             only_stage="refactor",
             no_cache=args.no_cache,
+            force_rebuild=args.force_rebuild,
             lab_options=lab_options,
         )
     finally:

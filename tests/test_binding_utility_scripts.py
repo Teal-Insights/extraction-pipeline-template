@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -490,6 +491,67 @@ def test_regenerate_force_clears_redirected_cluster_cache(
     regenerate_graph_cache(force=True)
 
     assert not sentinel.is_file()
+
+
+def _seed_internals_cache() -> tuple[Path, Path]:
+    """Write one content-keyed entry and one Pass 1 checkpoint, return their paths."""
+    from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
+
+    DEFAULT_INTERNALS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    entry = DEFAULT_INTERNALS_CACHE_DIR / f"{'e' * 64}.py"
+    entry.write_text("def cell_a1(ctx):\n    return 1.0\n", encoding="utf-8")
+    checkpoint = DEFAULT_INTERNALS_CACHE_DIR / "abc123" / "internals.mechanical.py"
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint.write_text("# checkpoint\n", encoding="utf-8")
+    return entry, checkpoint
+
+
+def test_regenerate_force_clears_internals_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--force`` must drop refactored internals, which cannot be pruned by key.
+
+    An internals key folds in ``codegen_cache_key`` and ``clusters_cache_key``,
+    neither of which this script computes, so there is no current key set to
+    prune against. Leaving the entries would let a warm refactor be answered from
+    a module built against the previous workbook or bindings.
+    """
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    config = synthetic_pipeline_config(workbook_path=workbook_path)
+    _monkeypatch_temp_graph_cache(
+        monkeypatch, cache_dir=tmp_path / "dependency-graph", config=config
+    )
+    entry, checkpoint = _seed_internals_cache()
+
+    regenerate_graph_cache(force=True)
+
+    assert not entry.is_file()
+    assert not checkpoint.is_file()
+    assert not checkpoint.parent.is_dir()
+
+
+def test_regenerate_without_force_keeps_internals_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain regenerate is additive and must not discard refactor output."""
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    config = synthetic_pipeline_config(workbook_path=workbook_path)
+    _monkeypatch_temp_graph_cache(
+        monkeypatch, cache_dir=tmp_path / "dependency-graph", config=config
+    )
+    entry, checkpoint = _seed_internals_cache()
+
+    try:
+        regenerate_graph_cache(force=False)
+        assert entry.is_file()
+        assert checkpoint.is_file()
+    finally:
+        entry.unlink(missing_ok=True)
+        shutil.rmtree(checkpoint.parent, ignore_errors=True)
 
 
 def test_committed_graph_cache_is_fresh_when_present(

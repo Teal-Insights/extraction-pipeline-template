@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +56,13 @@ class PackageCacheKeys:
 
     codegen_key: str
     internals_key: str | None = None
+    internals_inputs: Mapping[str, str] | None = None
+    """How ``internals_key`` was produced (see ``internals_key_provenance``).
+
+    Committed alongside ``dist/`` so cold-clone adoption can reject a refactored
+    module built under a different refactor model, schema, or ``excel-grapher``
+    version without first paying for clustering.
+    """
 
 
 def package_cache_keys_path(dist_root: Path) -> Path:
@@ -63,10 +71,12 @@ def package_cache_keys_path(dist_root: Path) -> Path:
 
 def write_package_cache_keys(dist_root: Path, keys: PackageCacheKeys) -> None:
     dist_root.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, object] = {
         "codegen_key": keys.codegen_key,
         "internals_key": keys.internals_key,
     }
+    if keys.internals_inputs is not None:
+        payload["internals_inputs"] = dict(keys.internals_inputs)
     package_cache_keys_path(dist_root).write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -86,7 +96,54 @@ def read_package_cache_keys(dist_root: Path) -> PackageCacheKeys | None:
     internals_key = payload.get("internals_key")
     if internals_key is not None and not isinstance(internals_key, str):
         raise ValueError(f"package cache keys have non-string internals_key: {path}")
-    return PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key)
+    internals_inputs = payload.get("internals_inputs")
+    if internals_inputs is not None:
+        if not isinstance(internals_inputs, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in internals_inputs.items()
+        ):
+            raise ValueError(
+                f"package cache keys have invalid internals_inputs: {path}"
+            )
+    return PackageCacheKeys(
+        codegen_key=codegen_key,
+        internals_key=internals_key,
+        internals_inputs=internals_inputs,
+    )
+
+
+def apply_export_runtime_memoization(modules: dict[str, str]) -> dict[str, str]:
+    """Ensure ``runtime.py`` exports the helper-memoization API.
+
+    Mechanical refactor decorates helpers with ``@xl_memoize`` and merges
+    ``from .runtime import xl_memoize`` into ``internals.py``, but the codegen
+    payload's ``runtime.py`` does not define that API. The refactor stage patches
+    the file in place before Pass 1; without this, every later
+    :func:`materialize_package` would rewrite ``runtime.py`` from the codegen
+    payload and strip the API back out, leaving a package whose ``internals.py``
+    imports a symbol its ``runtime.py`` no longer defines.
+
+    Idempotent: a runtime that already exports the API is returned unchanged.
+    """
+    from src.helper_memoization import ensure_runtime_source_helper_memoization
+
+    rewritten_modules = dict(modules)
+    runtime_source = rewritten_modules.get("runtime.py")
+    if runtime_source is None:
+        return rewritten_modules
+    rewritten_modules["runtime.py"] = ensure_runtime_source_helper_memoization(
+        runtime_source
+    )
+    return rewritten_modules
+
+
+def apply_export_rewrites(modules: dict[str, str]) -> dict[str, str]:
+    """Apply every deterministic post-codegen rewrite ``dist/`` depends on.
+
+    ``dist/`` is a projection of the caches plus these rewrites, so every writer
+    must apply the same set or the tree it produces is not reproducible.
+    """
+    return apply_export_runtime_memoization(apply_export_api_rewrite(modules))
 
 
 def apply_export_api_rewrite(modules: dict[str, str]) -> dict[str, str]:
@@ -198,7 +255,7 @@ def materialize_package(
             f"codegen cache payload missing for key={codegen_key[:12]}; "
             "cannot materialize dist/"
         )
-    modules = apply_export_api_rewrite(dict(modules))
+    modules = apply_export_rewrites(dict(modules))
     if internals_key is not None:
         modules["internals.py"] = load_refactored_internals(internals_key)
 
@@ -208,8 +265,39 @@ def materialize_package(
 
     write_package_cache_keys(
         config.dist_root,
-        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=internals_key,
+            internals_inputs=(
+                None if internals_key is None else current_internals_inputs()
+            ),
+        ),
     )
+
+
+def current_internals_inputs() -> dict[str, str]:
+    """Provenance describing how a refactored ``internals.py`` would be built now."""
+    from src.internals_cache import internals_key_provenance
+
+    return internals_key_provenance()
+
+
+def _internals_inputs_match(
+    keys: PackageCacheKeys,
+    expected: Mapping[str, str] | None,
+) -> bool:
+    """True when a sidecar's recorded provenance is present and matches ``expected``.
+
+    A sidecar that carries an ``internals_key`` but no provenance is treated as
+    unverifiable and refused: the whole point of the check is that adoption
+    happens before clustering, so an unlabeled refactored module could have been
+    produced under any model, schema, or ``excel-grapher`` version.
+    """
+    if expected is None:
+        return True
+    if keys.internals_inputs is None:
+        return False
+    return dict(keys.internals_inputs) == dict(expected)
 
 
 def adopt_codegen_cache_from_dist(
@@ -232,8 +320,9 @@ def adopt_codegen_cache_from_dist(
     modules = _read_package_modules(config.package_root)
     if modules is None:
         return False
-    # Dist holds post-rewrite api.py; re-materialize re-applies the rewrite,
-    # which is idempotent for already-rewritten sources.
+    # Dist holds post-rewrite api.py and a memoization-patched runtime.py;
+    # re-materialize re-applies both rewrites, which are idempotent for
+    # already-rewritten sources.
     save_codegen_payload(
         modules,
         cache_key=expected_codegen_key,
@@ -270,6 +359,7 @@ def try_materialize_refactored_package_from_cache(
     *,
     codegen_key: str,
     expected_internals_key: str | None = None,
+    expected_internals_inputs: Mapping[str, str] | None = None,
 ) -> bool:
     """Materialize dist from caches when a recorded ``internals_key`` is available.
 
@@ -280,7 +370,11 @@ def try_materialize_refactored_package_from_cache(
 
     When ``expected_internals_key`` is provided, the sidecar ``internals_key`` must
     match it exactly — otherwise adoption is refused so a stale content key cannot
-    skip Pass 1 / parity / Pass 2.
+    skip Pass 1 / parity / Pass 2. Callers that reach this before clustering do
+    not know the content key yet; they pass ``expected_internals_inputs``
+    (see :func:`current_internals_inputs`) so adoption is still refused when the
+    refactor model, schema versions, ``MECHANICAL_REFACTOR_BODIES``, or the
+    ``excel-grapher`` version drifted from whatever produced the committed tree.
 
     Returns True when materialization succeeded and the refactor stage can skip.
     """
@@ -289,6 +383,8 @@ def try_materialize_refactored_package_from_cache(
         return False
     internals_key = keys.internals_key
     if expected_internals_key is not None and internals_key != expected_internals_key:
+        return False
+    if not _internals_inputs_match(keys, expected_internals_inputs):
         return False
     cache_path = internals_cache_path(internals_key)
     if not cache_path.is_file():
@@ -304,12 +400,19 @@ def try_materialize_refactored_package_from_cache(
         modules = _read_package_modules(config.package_root)
         if modules is None:
             return False
-        modules = apply_export_api_rewrite(modules)
+        modules = apply_export_rewrites(modules)
         modules["internals.py"] = load_refactored_internals(internals_key)
         _write_dist_tree(config, modules)
         write_package_cache_keys(
             config.dist_root,
-            PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+            PackageCacheKeys(
+                codegen_key=codegen_key,
+                internals_key=internals_key,
+                # Preserve, do not restamp: this branch rebuilds the tree from
+                # the committed package, so the module still has the provenance
+                # it was committed with.
+                internals_inputs=keys.internals_inputs,
+            ),
         )
         return True
 

@@ -88,10 +88,10 @@ Written by every `run_pipeline` invocation (`uv run python -m src.extraction_pip
 | `stages[].spans` | object | Seconds keyed by leaf span name inside that stage |
 | `caches` | object | One entry per on-disk cache; `null` fields mean the run never reached it |
 | `caches.<name>.cache_hit` | boolean \| null | Whether the payload was loaded from `.cache/` |
-| `caches.<name>.elapsed_seconds` | number \| null | Seconds spent in the `get_or_build_*` call |
+| `caches.<name>.elapsed_seconds` | number \| null | Seconds spent resolving the cache (the `get_or_build_*` call; for `internals`, the adopt/load on a hit and the refactor itself on a miss) |
 | `caches.<name>.cache_key` | string \| null | Content key the lookup resolved to |
 
-`caches` keys: `dependency-graph`, `bindings-validation`, `series-resolution`, `projection`, `codegen`.
+`caches` keys: `dependency-graph`, `bindings-validation`, `series-resolution`, `series-derived`, `projection`, `codegen`, `clusters`, `internals`.
 
 Spans are non-overlapping leaf measurements: do not invent a total by summing them with a parent rollup. A full `run_pipeline` records `extract`, `export`, `refactor`, `validate`, and `document` in order. Graph-build spans (`create_dependency_graph`, `derive_series`, `validate_series_bindings`, …) land under `extract`; projection/codegen spans (`build_refactor_projection`, `codegen`, `write_export_package`) land under `export`. Extract alone appears when `stop_after_stage=extract` (or `--extract-graph`).
 

@@ -197,16 +197,31 @@ def load_stage_manifest(repo_root: Path, stage: str) -> StageManifest:
 
 
 def assert_manifest_fresh(manifest: StageManifest, config: PipelineConfig) -> None:
-    """Recompute fingerprints and fail loudly when any labeled input drifted."""
+    """Recompute fingerprints and fail loudly when any labeled input drifted.
+
+    The label sets are compared both ways on purpose. Iterating only the stored
+    labels would silently skip any input added to
+    :func:`compute_input_fingerprints` after the manifest was written, which
+    makes every new label depend on someone also bumping
+    ``STAGE_MANIFEST_SCHEMA_VERSION``. That version guards the manifest's file
+    structure; which inputs are covered is a separate axis, so a manifest whose
+    label set does not match the current one is stale by definition.
+    """
     current = compute_input_fingerprints(config)
+    missing = sorted(set(manifest.fingerprints) - set(current))
+    if missing:
+        raise StageManifestDriftError(
+            f"{', '.join(missing)} fingerprint missing from current inputs "
+            f"(stage={manifest.stage!r})"
+        )
+    unchecked = sorted(set(current) - set(manifest.fingerprints))
+    if unchecked:
+        raise StageManifestDriftError(
+            f"manifest predates the {', '.join(unchecked)} fingerprint and cannot "
+            f"be verified (stage={manifest.stage!r}); re-run the upstream stage"
+        )
     for name, expected in manifest.fingerprints.items():
-        actual = current.get(name)
-        if actual is None:
-            raise StageManifestDriftError(
-                f"{name} fingerprint missing from current inputs "
-                f"(stage={manifest.stage!r})"
-            )
-        if actual != expected:
+        if current[name] != expected:
             raise StageManifestDriftError(
                 f"{name} fingerprint drifted (stage={manifest.stage!r})"
             )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from src.codegen_cache import DEFAULT_CODEGEN_CACHE_DIR, save_codegen_payload
 from src.extraction_pipeline import (
     PIPELINE_STAGES,
     ExportStageState,
+    RefactorLabOptions,
     RefactorStageState,
     main,
     run_export_stage,
@@ -21,6 +23,7 @@ from src.extraction_pipeline import (
 from src.formula_clustering import FormulaCluster
 from src.package_materialize import (
     PackageCacheKeys,
+    current_internals_inputs,
     materialize_package,
     read_package_cache_keys,
     write_package_cache_keys,
@@ -819,6 +822,7 @@ def test_run_pipeline_writes_stage_timings_artifact(
         "projection",
         "codegen",
         "clusters",
+        "internals",
     }
 
 
@@ -1033,7 +1037,11 @@ def _commit_refactored_dist(
     )
     write_package_cache_keys(
         config.dist_root,
-        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=internals_key,
+            internals_inputs=current_internals_inputs(),
+        ),
     )
     if not keep_codegen_cache:
         for suffix in (".pkl.gz", ".meta.json"):
@@ -1046,6 +1054,7 @@ def _commit_refactored_dist(
     assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
         codegen_key=codegen_key,
         internals_key=internals_key,
+        internals_inputs=current_internals_inputs(),
     )
 
 
@@ -1188,6 +1197,229 @@ def test_run_pipeline_start_from_refactor_aborts_on_workbook_drift(
         )
 
 
+def _refactor_entry_probe(
+    config: PipelineConfig,
+    *,
+    no_cache: bool = False,
+    force_rebuild: bool = False,
+    lab_options: RefactorLabOptions | None = None,
+) -> dict[str, Any]:
+    """Run ``start_from_stage=refactor`` and capture what refactor was handed.
+
+    Returns the ``internals.py`` text as it existed when
+    ``refactor_internals_all_clusters`` was invoked, plus the mock handles, so a
+    caller can assert on both the cache decision and the module Pass 1 started
+    from.
+    """
+    from src.cluster_cache import ClusterCacheResult
+    from src.extraction_pipeline import ExportStageArtifacts
+
+    cluster_result = ClusterCacheResult(
+        clusters=(),
+        schedule=(),
+        cache_key="k" * 64,
+        cache_hit=False,
+        elapsed_seconds=0.0,
+    )
+    export_artifacts = ExportStageArtifacts(
+        graph=MagicMock(),
+        refactor_projection=MagicMock(),
+        internal_binding_index={},
+        bound_address_keys={},
+        address_to_series_id={},
+    )
+    seen: dict[str, Any] = {}
+
+    def _capture(*_args, **kwargs):
+        seen["internals_at_refactor"] = kwargs["internals_path"].read_text(
+            encoding="utf-8"
+        )
+        return MagicMock(cacheable=False, final_source=None)
+
+    with (
+        patch(
+            "excel_grapher.series_bindings.load_series_bindings",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
+            return_value=(),
+        ),
+        patch(
+            "src.cluster_cache.get_or_build_clusters_and_schedule",
+            return_value=cluster_result,
+        ),
+        patch(
+            "src.internals_refactor.refactor_internals_all_clusters",
+            side_effect=_capture,
+        ) as refactor,
+        patch(
+            "src.extraction_pipeline.load_export_stage_artifacts",
+            return_value=export_artifacts,
+        ),
+    ):
+        run_pipeline(
+            config,
+            start_from_stage="refactor",
+            stop_after_stage="refactor",
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+            lab_options=lab_options,
+        )
+    seen["refactor"] = refactor
+    return seen
+
+
+@pytest.mark.parametrize("flag", ["force_rebuild", "no_cache"])
+def test_run_pipeline_start_from_refactor_rebuilds_from_pristine_internals(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+    flag: str,
+) -> None:
+    """A rebuild must not start Pass 1 from an already-refactored module.
+
+    Mid-pipeline entry materializes ``dist/`` before the refactor stage runs.
+    When the run is going to rebuild, that materialization has to be the pristine
+    codegen module — adopting the cached refactored ``internals.py`` would make
+    Pass 1 rewrite an already-rewritten module while the parity oracle still
+    compares against pristine.
+    """
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "c" * 64
+    _commit_refactored_dist(
+        config,
+        codegen_key=codegen_key,
+        internals_key="d" * 64,
+        keep_codegen_cache=True,
+    )
+    _write_export_manifest_for_codegen(config, codegen_key=codegen_key)
+
+    seen = _refactor_entry_probe(
+        config,
+        force_rebuild=flag == "force_rebuild",
+        no_cache=flag == "no_cache",
+    )
+
+    seen["refactor"].assert_called_once()
+    assert seen["internals_at_refactor"] != _COLD_CLONE_REFACTORED
+    assert seen["internals_at_refactor"] == _COLD_CLONE_MODULES["internals.py"]
+
+
+def test_run_pipeline_start_from_refactor_refuses_adopt_on_provenance_drift(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """A committed dist built under a different refactor recipe must not be adopted.
+
+    Adoption happens before clustering, so the full content key cannot be
+    recomputed there. The sidecar's recorded provenance is the only available
+    signal that the refactor model / schema versions / ``excel-grapher`` version
+    drifted, and none of those are covered by manifest fingerprints.
+    """
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "c" * 64
+    internals_key = "d" * 64
+    _commit_refactored_dist(
+        config,
+        codegen_key=codegen_key,
+        internals_key=internals_key,
+        keep_codegen_cache=True,
+    )
+    _write_export_manifest_for_codegen(config, codegen_key=codegen_key)
+
+    drifted = dict(current_internals_inputs())
+    drifted["refactor_model"] = "some-other-model"
+    write_package_cache_keys(
+        config.dist_root,
+        PackageCacheKeys(
+            codegen_key=codegen_key,
+            internals_key=internals_key,
+            internals_inputs=drifted,
+        ),
+    )
+
+    seen = _refactor_entry_probe(config)
+
+    seen["refactor"].assert_called_once()
+    assert seen["internals_at_refactor"] == _COLD_CLONE_MODULES["internals.py"]
+
+
+def test_run_pipeline_start_from_refactor_refuses_adopt_without_provenance(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """A sidecar with an internals_key but no provenance is unverifiable, so refuse."""
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "c" * 64
+    internals_key = "d" * 64
+    _commit_refactored_dist(
+        config,
+        codegen_key=codegen_key,
+        internals_key=internals_key,
+        keep_codegen_cache=True,
+    )
+    _write_export_manifest_for_codegen(config, codegen_key=codegen_key)
+    write_package_cache_keys(
+        config.dist_root,
+        PackageCacheKeys(codegen_key=codegen_key, internals_key=internals_key),
+    )
+
+    seen = _refactor_entry_probe(config)
+
+    seen["refactor"].assert_called_once()
+    assert seen["internals_at_refactor"] == _COLD_CLONE_MODULES["internals.py"]
+
+
+@pytest.mark.parametrize(
+    "lab_options",
+    [
+        pytest.param(RefactorLabOptions(dry_run=True), id="dry_run"),
+        pytest.param(RefactorLabOptions(parity_gate=False), id="no_parity_gate"),
+        pytest.param(
+            RefactorLabOptions(prompt_observer=lambda *_: None), id="prompt_observer"
+        ),
+        pytest.param(
+            RefactorLabOptions(cluster_context_observer=lambda *_: None),
+            id="cluster_observer",
+        ),
+        pytest.param(
+            RefactorLabOptions(singleton_context_observer=lambda *_: None),
+            id="singleton_observer",
+        ),
+    ],
+)
+def test_run_pipeline_lab_options_bypass_warm_cache_short_circuits(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+    lab_options: RefactorLabOptions,
+) -> None:
+    """Lab runs must reach the refactor: every short-circuit returns before it.
+
+    ``scripts/run_refactor_stage.py`` exists to observe prompts, report synthesis
+    coverage, and iterate with the gate off. Answering those runs from the dist
+    adopt or the internals cache would make every one of them a silent no-op.
+    """
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    codegen_key = "c" * 64
+    _commit_refactored_dist(
+        config,
+        codegen_key=codegen_key,
+        internals_key="d" * 64,
+        keep_codegen_cache=True,
+    )
+    _write_export_manifest_for_codegen(config, codegen_key=codegen_key)
+
+    seen = _refactor_entry_probe(config, lab_options=lab_options)
+
+    seen["refactor"].assert_called_once()
+    assert seen["internals_at_refactor"] == _COLD_CLONE_MODULES["internals.py"]
+
+
+def test_refactor_lab_options_requires_refactor_run_is_false_by_default() -> None:
+    """A production run carries no lab options and must stay fully cacheable."""
+    assert RefactorLabOptions().requires_refactor_run() is False
+
+
 def test_run_pipeline_start_from_refactor_adopts_committed_dist_when_internals_cold(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
@@ -1268,6 +1500,7 @@ def test_run_pipeline_start_from_refactor_adopts_committed_dist_when_internals_c
     assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
         codegen_key=codegen_key,
         internals_key=internals_key,
+        internals_inputs=current_internals_inputs(),
     )
 
 
@@ -1324,6 +1557,7 @@ def test_run_pipeline_start_from_refactor_adopts_when_codegen_and_internals_cold
     assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
         codegen_key=codegen_key,
         internals_key=internals_key,
+        internals_inputs=current_internals_inputs(),
     )
 
 
