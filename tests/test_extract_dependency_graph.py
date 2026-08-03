@@ -28,7 +28,8 @@ def test_extract_dependency_graph_writes_artifacts(
         graph_output_dir=output_dir,
     )
 
-    summary = extract_dependency_graph(config)
+    result = extract_dependency_graph(config)
+    summary = result.summary
 
     assert (output_dir / "index.html").is_file()
     assert (output_dir / "dependency-graph.json").is_file()
@@ -48,6 +49,8 @@ def test_extract_dependency_graph_writes_artifacts(
     assert summary["stage_timings"]
     assert summary["elapsed_seconds"] >= sum(summary["stage_timings"].values()) - 0.01
     assert summary["output_paths"]["index_html"].endswith("dependency-graph/index.html")
+    assert result.graph_result.graph_cache_key
+    assert len(result.graph_result.graph) == 6
 
 
 def test_extract_graph_cli_exits_zero_on_synthetic_workbook(

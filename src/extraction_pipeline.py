@@ -129,7 +129,7 @@ class PipelineGraphResult:
 
 @dataclass(frozen=True)
 class DependencyGraphExtraction:
-    """Graph build result plus timing diagnostics for the extract-only stage."""
+    """Graph build result plus timing diagnostics for the extract stage."""
 
     graph: DependencyGraph
     series_bindings: WorkbookSeriesBindings
@@ -143,6 +143,15 @@ class DependencyGraphExtraction:
     series_derived_cache_key: str
     timer: StageTimer
     elapsed_seconds: float
+    pipeline_graph: PipelineGraphResult
+
+
+@dataclass(frozen=True)
+class ExtractStageResult:
+    """Extract stage outputs: review summary plus the live graph for export."""
+
+    summary: dict[str, Any]
+    graph_result: PipelineGraphResult
 
 
 @dataclass(frozen=True)
@@ -260,6 +269,7 @@ def extract_dependency_graph_result(
         series_derived_cache_key=derived_key,
         timer=stage_timer,
         elapsed_seconds=elapsed_seconds,
+        pipeline_graph=graph_result,
     )
 
 
@@ -336,8 +346,8 @@ def extract_dependency_graph(
     no_cache: bool = False,
     force_rebuild: bool = False,
     timings: PipelineTimings | None = None,
-) -> dict[str, Any]:
-    """Build the dependency graph, write review artifacts, and return the summary."""
+) -> ExtractStageResult:
+    """Build the dependency graph, write review artifacts, and return the live graph."""
     with (
         profile_if_enabled(config.graph_output_dir, basename="extract"),
         stage_span(timings, "extract") as timer,
@@ -368,7 +378,10 @@ def extract_dependency_graph(
         print(
             f"Wrote dependency graph artifacts to {config.graph_output_dir.resolve()}/"
         )
-        return summary
+        return ExtractStageResult(
+            summary=summary,
+            graph_result=extraction.pipeline_graph,
+        )
 
 
 def load_export_stage_artifacts(state: ExportStageState) -> ExportStageArtifacts:
@@ -617,27 +630,34 @@ def run_export_stage(
     no_cache: bool = False,
     force_rebuild: bool = False,
     timings: PipelineTimings | None = None,
+    graph_result: PipelineGraphResult | None = None,
 ) -> ExportStageState:
-    """Build the graph, generate the package under dist/, and seed the harness."""
+    """Project, codegen, and materialize the package under dist/.
+
+    When ``graph_result`` is supplied (full pipeline after extract), the graph is
+    not rebuilt. Standalone export (``start_from_stage=export`` / direct calls)
+    still builds the graph inside this stage.
+    """
     configure_logging()
     stall_log_path = resolve_stall_log_path(config.graph_output_dir)
     with (
         profile_if_enabled(config.graph_output_dir, basename="export"),
         stage_span(timings, "export") as timer,
     ):
-        graph_result = build_pipeline_graph(
-            config,
-            timer=timer,
-            stall_log_path=stall_log_path,
-            no_cache=no_cache,
-            force_rebuild=force_rebuild,
-            timings=timings,
-        )
+        if graph_result is None:
+            graph_result = build_pipeline_graph(
+                config,
+                timer=timer,
+                stall_log_path=stall_log_path,
+                no_cache=no_cache,
+                force_rebuild=force_rebuild,
+                timings=timings,
+            )
+            if stall_log_path.is_file():
+                print(f"Stall diagnostics: {stall_log_path}")
         graph = graph_result.graph
         series_bindings = graph_result.series_bindings
         graph_cache_key = graph_result.graph_cache_key
-        if stall_log_path.is_file():
-            print(f"Stall diagnostics: {stall_log_path}")
         projection_started = time.perf_counter()
         refactor_projection = build_refactor_projection(
             graph,
@@ -1094,9 +1114,11 @@ def run_pipeline(
 ) -> None:
     """Run pipeline stages from ``start_from_stage`` through ``stop_after_stage``.
 
-    When ``only_stage`` is set it overrides both bounds to that single stage.
-    Entering mid-pipeline requires a warm upstream stage manifest whose
-    fingerprints still match the current inputs.
+    A full run records ``extract`` then ``export`` (handing the live graph from
+    extract into export so the graph is not built twice), then ``refactor``,
+    ``validate``, and ``document``. When ``only_stage`` is set it overrides both
+    bounds to that single stage. Entering mid-pipeline requires a warm upstream
+    stage manifest whose fingerprints still match the current inputs.
     """
     if only_stage is not None:
         if only_stage not in PIPELINE_STAGES:
@@ -1166,17 +1188,7 @@ def _run_pipeline_stages(
 ) -> None:
     export_state: ExportStageState | None = None
     refactor_state: RefactorStageState | None = None
-
-    # Extract-only path: graph review artifacts. A full run beginning at
-    # ``extract`` skips this and starts at export (export rebuilds the graph).
-    if start_from_stage == "extract" and stop_after_stage == "extract":
-        extract_dependency_graph(
-            config,
-            no_cache=no_cache,
-            force_rebuild=force_rebuild,
-            timings=timings,
-        )
-        return
+    graph_result: PipelineGraphResult | None = None
 
     if start_from_stage != "extract":
         upstream = require_upstream_manifest(config, start_from_stage=start_from_stage)
@@ -1192,6 +1204,21 @@ def _run_pipeline_stages(
             )
 
     if _stage_in_range(
+        "extract",
+        start_from_stage=start_from_stage,
+        stop_after_stage=stop_after_stage,
+    ):
+        extract_result = extract_dependency_graph(
+            config,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
+            timings=timings,
+        )
+        graph_result = extract_result.graph_result
+        if stop_after_stage == "extract":
+            return
+
+    if _stage_in_range(
         "export",
         start_from_stage=start_from_stage,
         stop_after_stage=stop_after_stage,
@@ -1201,6 +1228,7 @@ def _run_pipeline_stages(
             no_cache=no_cache,
             force_rebuild=force_rebuild,
             timings=timings,
+            graph_result=graph_result,
         )
         if stop_after_stage == "export":
             return

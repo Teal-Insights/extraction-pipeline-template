@@ -235,8 +235,13 @@ def test_run_pipeline_stop_after_export_runs_through_export(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
+    graph_result = object()
+    extract_result = MagicMock(graph_result=graph_result)
     with (
-        patch("src.extraction_pipeline.extract_dependency_graph") as extract,
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ) as extract,
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -251,16 +256,54 @@ def test_run_pipeline_stop_after_export_runs_through_export(
             no_cache=True,
         )
 
-    extract.assert_not_called()
-    export.assert_called_once_with(
+    extract.assert_called_once_with(
         synthetic_pipeline_config_fixture,
         no_cache=True,
         force_rebuild=False,
         timings=ANY,
     )
+    export.assert_called_once_with(
+        synthetic_pipeline_config_fixture,
+        no_cache=True,
+        force_rebuild=False,
+        timings=ANY,
+        graph_result=graph_result,
+    )
     refactor.assert_not_called()
     validate.assert_not_called()
     document.assert_not_called()
+
+
+def test_run_pipeline_full_run_records_extract_then_export(
+    synthetic_pipeline_config_fixture,
+) -> None:
+    """A full run includes extract before export and hands off the live graph."""
+    export_state = object()
+    graph_result = object()
+    extract_result = MagicMock(graph_result=graph_result)
+    refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
+    with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ) as extract,
+        patch(
+            "src.extraction_pipeline.run_export_stage",
+            return_value=export_state,
+        ) as export,
+        patch(
+            "src.extraction_pipeline.run_refactor_stage",
+            return_value=refactor_state,
+        ),
+        patch("src.extraction_pipeline.run_validate_stage", return_value=0),
+        patch("src.extraction_pipeline.run_document_stage"),
+    ):
+        run_pipeline(synthetic_pipeline_config_fixture)
+
+    assert extract.call_count == 1
+    assert export.call_count == 1
+    assert extract.call_args.kwargs["timings"] is export.call_args.kwargs["timings"]
+    assert export.call_args.kwargs["graph_result"] is graph_result
 
 
 def _mock_refactor_state(config: PipelineConfig) -> RefactorStageState:
@@ -275,8 +318,14 @@ def test_run_pipeline_stop_after_refactor_skips_validate_and_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
+    graph_result = object()
+    extract_result = MagicMock(graph_result=graph_result)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ),
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -294,6 +343,7 @@ def test_run_pipeline_stop_after_refactor_skips_validate_and_document(
         )
 
     export.assert_called_once()
+    assert export.call_args.kwargs["graph_result"] is graph_result
     refactor.assert_called_once_with(
         export_state,
         no_cache=False,
@@ -309,8 +359,13 @@ def test_run_pipeline_stop_after_validate_skips_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
+    extract_result = MagicMock(graph_result=object())
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ),
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -342,8 +397,13 @@ def test_run_pipeline_default_runs_through_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
+    extract_result = MagicMock(graph_result=object())
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ),
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -368,8 +428,13 @@ def test_run_pipeline_passes_no_cache_to_validate_stage(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
+    extract_result = MagicMock(graph_result=object())
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ),
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -452,8 +517,13 @@ def test_run_pipeline_skips_document_when_differential_failed(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
+    extract_result = MagicMock(graph_result=object())
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ),
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -478,8 +548,13 @@ def test_run_pipeline_force_document_runs_docs_after_differential_failure(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
+    extract_result = MagicMock(graph_result=object())
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ),
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -508,8 +583,13 @@ def test_run_pipeline_document_failure_raises_document_stage_error(
     from src.extraction_pipeline import DocumentStageError
 
     export_state = object()
+    extract_result = MagicMock(graph_result=object())
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=extract_result,
+        ),
         patch(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
@@ -672,6 +752,10 @@ def test_run_pipeline_writes_stage_timings_artifact(
 ) -> None:
     config = replace(synthetic_pipeline_config_fixture, repo_root=tmp_path)
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=MagicMock(graph_result=object()),
+        ),
         patch("src.extraction_pipeline.run_export_stage"),
         patch("src.extraction_pipeline.run_refactor_stage"),
         patch("src.extraction_pipeline.run_validate_stage", return_value=0),
@@ -702,6 +786,10 @@ def test_run_pipeline_threads_one_timings_object_through_every_stage(
     synthetic_pipeline_config_fixture,
 ) -> None:
     with (
+        patch(
+            "src.extraction_pipeline.extract_dependency_graph",
+            return_value=MagicMock(graph_result=object()),
+        ) as extract,
         patch("src.extraction_pipeline.run_export_stage") as export,
         patch("src.extraction_pipeline.run_refactor_stage") as refactor,
         patch("src.extraction_pipeline.run_validate_stage", return_value=0) as validate,
@@ -709,8 +797,9 @@ def test_run_pipeline_threads_one_timings_object_through_every_stage(
     ):
         run_pipeline(synthetic_pipeline_config_fixture)
 
-    timings = export.call_args.kwargs["timings"]
+    timings = extract.call_args.kwargs["timings"]
     assert isinstance(timings, PipelineTimings)
+    assert export.call_args.kwargs["timings"] is timings
     assert refactor.call_args.kwargs["timings"] is timings
     assert validate.call_args.kwargs["timings"] is timings
     assert document.call_args.kwargs["timings"] is timings

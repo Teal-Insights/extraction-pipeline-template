@@ -18,8 +18,8 @@ The dependency-graph directory is listed in `.gitignore` because graph payloads 
 | Stage | Command | Output |
 |---|---|---|
 | Audit | `uv run python -m src.workbook_audit --output artifacts/workbook-audit.md` | `workbook-audit.md` |
-| Extract | `uv run python -m src.extraction_pipeline --extract-graph` | `dependency-graph/…`, `stages/extract.json` |
-| Export+ | `uv run python -m src.extraction_pipeline [--stop-after-stage …]` | `stages/{export,refactor,validate,document}.json` as stages complete |
+| Extract | Full pipeline, or `uv run python -m src.extraction_pipeline --extract-graph` | `dependency-graph/…`, `stages/extract.json` |
+| Export+ | `uv run python -m src.extraction_pipeline [--stop-after-stage …]` | `stages/{export,refactor,validate,document}.json` as stages complete; a default full run also runs extract first |
 
 Serve the graph explorer locally (do not commit generated files):
 

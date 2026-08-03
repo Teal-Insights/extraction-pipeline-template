@@ -124,7 +124,7 @@ graph = create_dependency_graph(
 
 After manual review (onboarding step 5), run graph-oracle differential parity (step 6) before export.
 
-During graph build the pipeline also runs **internal binding derivation** and optional **internal binding coverage validation** (see below). Both run on `--extract-graph` and on the full export path.
+During graph build the pipeline also runs **internal binding derivation** and optional **internal binding coverage validation** (see below). Both run on `--extract-graph` and on the extract stage of a full pipeline run.
 
 #### Internal series bindings
 

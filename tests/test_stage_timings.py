@@ -142,7 +142,7 @@ def test_export_run_records_every_cache_it_reached(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
-    """An export run over the synthetic workbook observes all on-disk caches.
+    """A full extract+export run observes all on-disk caches under the right stages.
 
     Only the codegen LLM docstring callback is stubbed; the graph, bindings,
     series, and projection caches are exercised for real.
@@ -150,6 +150,7 @@ def test_export_run_records_every_cache_it_reached(
     from dataclasses import replace
     from unittest.mock import patch
 
+    from src.extraction_pipeline import build_pipeline_graph as real_build
     from src.extraction_pipeline import run_pipeline
 
     config = replace(
@@ -167,19 +168,26 @@ def test_export_run_records_every_cache_it_reached(
         ),
         patch("src.extraction_pipeline.CodeGenerator") as generator_cls,
         patch("src.package_materialize.seed_validation_harness"),
+        patch(
+            "src.extraction_pipeline.build_pipeline_graph",
+            wraps=real_build,
+        ) as build_graph,
     ):
         generator = generator_cls.return_value.__enter__.return_value
         generator.generate_modules.return_value = {"internals.py": "pass\n"}
         run_pipeline(config, stop_after_stage="export")
 
+    assert build_graph.call_count == 1
     payload = json.loads(stage_timings_path(tmp_path).read_text(encoding="utf-8"))
-    assert [stage["name"] for stage in payload["stages"]] == ["export"]
-    spans = payload["stages"][0]["spans"]
-    assert "create_dependency_graph" in spans
-    assert "derive_series" in spans
-    assert "build_refactor_projection" in spans
-    assert "codegen" in spans
-    assert "write_export_package" in spans
+    assert [stage["name"] for stage in payload["stages"]] == ["extract", "export"]
+    extract_spans = payload["stages"][0]["spans"]
+    export_spans = payload["stages"][1]["spans"]
+    assert "create_dependency_graph" in extract_spans
+    assert "derive_series" in extract_spans
+    assert "build_refactor_projection" in export_spans
+    assert "codegen" in export_spans
+    assert "write_export_package" in export_spans
+    assert "create_dependency_graph" not in export_spans
     caches = payload["caches"]
     for name in (
         "dependency-graph",
