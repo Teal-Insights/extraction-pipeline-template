@@ -36,7 +36,6 @@ from src.pipeline_config import (  # noqa: E402
     load_pipeline_config,
     validate_pipeline_config,
 )
-from src.pipeline_context import activate_pipeline_config  # noqa: E402
 from src.projection_cache import projection_cache_key  # noqa: E402
 from src.refactor_order import (  # noqa: E402
     RefactorUnit,
@@ -189,7 +188,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.clustering_mode,
     )
     validate_pipeline_config(config)
-    activate_pipeline_config(config)
 
     graph_result = build_pipeline_graph(config, no_cache=args.no_cache)
     projection = build_refactor_projection(

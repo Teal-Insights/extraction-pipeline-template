@@ -143,13 +143,9 @@ def restore_pipeline_disk_cache() -> None:
 
 
 def clear_runtime_caches() -> None:
-    from src.runtime_symbols import (
-        allowed_runtime_module_symbols,
-        allowed_runtime_symbols,
-    )
+    from src.runtime_symbols import clear_runtime_symbol_caches
 
-    allowed_runtime_symbols.cache_clear()
-    allowed_runtime_module_symbols.cache_clear()
+    clear_runtime_symbol_caches()
     try:
         from src.refactor_parity_gate import clear_parity_runtime_caches
 
@@ -159,9 +155,6 @@ def clear_runtime_caches() -> None:
 
 
 def reset_pipeline_test_state() -> None:
-    from src.pipeline_context import reset_pipeline_config
-
-    reset_pipeline_config()
     clear_runtime_caches()
     for module_name in _PROBE_MODULE_NAMES:
         sys.modules.pop(module_name, None)

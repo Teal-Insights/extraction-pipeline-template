@@ -41,7 +41,6 @@ from src.pipeline_config import (
     load_pipeline_config,
     validate_pipeline_config,
 )
-from src.pipeline_context import activate_pipeline_config
 
 DEFAULT_OUTPUT_ROOT = Path("artifacts/refactor-lab")
 
@@ -176,7 +175,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     validate_pipeline_config(config)
     if not args.in_place:
         config = replace(config, dist_root=args.output_root.resolve())
-    activate_pipeline_config(config)
 
     prompt_observer = None
     if args.dump_prompts is not None:

@@ -56,7 +56,6 @@ from src.pipeline_config import (
     load_pipeline_config,
     validate_pipeline_config,
 )
-from src.pipeline_context import activate_pipeline_config
 from src.pipeline_monitor import (
     StageTimer,
     monitor_pipeline_stage,
@@ -928,6 +927,8 @@ def run_refactor_stage(
                 bindings_path=config.bindings_path,
                 workbook_path=config.workbook_path,
                 address_to_series_id=address_to_series_id,
+                layout=config.projection_layout,
+                constraints=config.constraints,
                 refactor_schedule=cluster_result.schedule,
                 timer=timer,
                 codegen_cache_key=state.codegen_cache_key,
@@ -1361,7 +1362,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.clustering_mode,
     )
     validate_pipeline_config(config)
-    activate_pipeline_config(config)
 
     only_stage: PipelineStageName | None = None
     start_from_stage: PipelineStageName = "extract"

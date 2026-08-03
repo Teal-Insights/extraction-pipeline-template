@@ -621,7 +621,7 @@ def cell_engine_d4(ctx):
         "_refresh_mechanical_cluster_results",
         lambda results, **_k: list(results),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, _Projection()),
@@ -2099,7 +2099,7 @@ def cell_engine_d7(ctx):
         "_refresh_mechanical_cluster_results",
         lambda results, **_k: list(results),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, _Projection()),
@@ -2690,7 +2690,7 @@ def test_build_singleton_refactor_context_includes_collapsed_semantic_dependenci
 ) -> None:
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     internals_path = tmp_path / "internals.py"
     internals_path.write_text(INTERNALS_AFTER_C10_COLLAPSE, encoding="utf-8")
@@ -3852,7 +3852,7 @@ def test_build_cluster_refactor_context_rescues_gate_rejection_via_lookup(
     """
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
         **VARIABLE_PAIR_OPERAND_KEYS,
@@ -3887,7 +3887,9 @@ def test_build_cluster_refactor_context_rescues_gate_rejection_offset_lag(
     import src.internals_refactor as module
 
     monkeypatch.setattr(
-        module, "allowed_runtime_symbols", lambda: ALLOWED_RUNTIME_SYMBOLS
+        module,
+        "allowed_runtime_symbols",
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     monkeypatch.setattr(
         module, "select_cluster_refactor_contract", lambda *_a, **_k: None
@@ -3924,7 +3926,9 @@ def test_build_cluster_refactor_context_keeps_skip_when_gate_rejection_fails_syn
     from src.mechanical_body import MechanicalSynthesisError
 
     monkeypatch.setattr(
-        module, "allowed_runtime_symbols", lambda: ALLOWED_RUNTIME_SYMBOLS
+        module,
+        "allowed_runtime_symbols",
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     monkeypatch.setattr(
         module, "select_cluster_refactor_contract", lambda *_a, **_k: None
@@ -3956,7 +3960,7 @@ def test_build_cluster_refactor_context_selects_dimension_aware_contract(
     """Distinct dimension ids on the member cells unlock Contract B."""
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
         **VARIABLE_PAIR_OPERAND_KEYS,
@@ -3988,7 +3992,7 @@ def test_build_cluster_refactor_context_locks_helper_name_from_series_id(
 ) -> None:
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
         "Inputs!B10": {"TIME_PERIOD": 1},
@@ -4022,7 +4026,7 @@ def test_build_cluster_refactor_context_defaults_to_member_sweep(
     """A plain sweep cluster keeps Contract A."""
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     bound_address_keys: dict[str, dict[str, BindingKeyValue]] = {
         "Inputs!B10": {"TIME_PERIOD": 1},
@@ -4062,7 +4066,7 @@ def test_build_cluster_context_parses_internals_once_with_shared_index(
 ) -> None:
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     internals_path = _write_trade_balance_internals(tmp_path)
     index = InternalsSourceIndex.from_source(internals_path.read_text(encoding="utf-8"))
@@ -4108,7 +4112,7 @@ def test_build_singleton_prompt_context_uses_shared_index_without_rereads(
 ) -> None:
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     internals_path = _write_trade_balance_internals(tmp_path)
     runtime_path = tmp_path / "runtime.py"
@@ -4150,7 +4154,7 @@ def test_build_cluster_prompt_context_uses_shared_index_without_rereads(
 
     monkeypatch.setattr(
         "src.internals_refactor.allowed_runtime_symbols",
-        lambda: ALLOWED_RUNTIME_SYMBOLS,
+        lambda *_args, **_kwargs: ALLOWED_RUNTIME_SYMBOLS,
     )
     internals_path = _write_trade_balance_internals(tmp_path)
     runtime_path = tmp_path / "runtime.py"
@@ -4571,7 +4575,7 @@ def test_pass_one_defers_internals_write_until_single_flush(
     )
     monkeypatch.setattr(module, "apply_singleton_refactor_plan", fake_apply_plan)
     monkeypatch.setattr(module, "_run_semantic_naming_pass", fake_naming_pass)
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, graph),
@@ -4708,10 +4712,10 @@ def test_pass_one_writes_mechanical_checkpoint_before_parity_gate(
         "_run_semantic_naming_pass",
         lambda _pending, *, internals_index, **_k: (internals_index, {}),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
     monkeypatch.setattr(
         "src.refactor_parity_gate.build_default_input_vectors",
-        lambda: ({},),
+        lambda **_kwargs: ({},),
     )
     monkeypatch.setattr(
         "src.refactor_parity_gate.check_batched_mechanical_parity",
@@ -4726,6 +4730,7 @@ def test_pass_one_writes_mechanical_checkpoint_before_parity_gate(
         workbook_path=tmp_path / "workbook.xlsx",
         dry_run=False,
         parity_gate=True,
+        constraints={},
         address_to_series_id={
             "Engine!B2": "family_b",
             "Engine!C2": "family_c",
@@ -4820,10 +4825,10 @@ def test_pass_one_parity_failure_keeps_package_internals_pristine(
         "_run_semantic_naming_pass",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("pass2 must not run")),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
     monkeypatch.setattr(
         "src.refactor_parity_gate.build_default_input_vectors",
-        lambda: ({},),
+        lambda **_kwargs: ({},),
     )
     monkeypatch.setattr(
         "src.refactor_parity_gate.check_batched_mechanical_parity",
@@ -4839,6 +4844,7 @@ def test_pass_one_parity_failure_keeps_package_internals_pristine(
             workbook_path=tmp_path / "workbook.xlsx",
             dry_run=False,
             parity_gate=True,
+            constraints={},
             address_to_series_id={
                 "Engine!B2": "family_b",
                 "Engine!C2": "family_c",
@@ -4950,7 +4956,7 @@ def test_pass_one_defers_full_module_validate_until_end(
         "_run_semantic_naming_pass",
         lambda _pending, *, internals_index, **_k: (internals_index, {}),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, graph),
@@ -5071,7 +5077,7 @@ def test_pass_one_reindexes_lazily_per_layer(
         "_run_semantic_naming_pass",
         lambda _pending, *, internals_index, **_k: (internals_index, {}),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, graph),
@@ -5205,7 +5211,7 @@ def test_pass_one_fallback_applies_onto_accumulated_source(
         "_run_semantic_naming_pass",
         lambda _pending, *, internals_index, **_k: (internals_index, {}),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, graph),
@@ -5299,7 +5305,7 @@ def _run_wide_layer_mechanical_pass1(
         "_run_semantic_naming_pass",
         lambda _pending, *, internals_index, **_k: (internals_index, {}),
     )
-    monkeypatch.setattr(module, "apply_phase_c", lambda source: (source, 0))
+    monkeypatch.setattr(module, "apply_phase_c", lambda source, **_kwargs: (source, 0))
 
     module.refactor_internals_all_clusters(
         cast(ProjectionResult, graph),
@@ -5820,11 +5826,6 @@ def test_refactor_internals_all_clusters_forwards_bound_address_keys(
         received["bound_address_keys"] = bound_address_keys
         return None
 
-    def boom_default_bound_keys() -> dict[str, dict[str, object]]:
-        raise AssertionError(
-            "_bound_address_keys_from_series_derived_cache must not run"
-        )
-
     unit = RefactorUnit(
         parent_cluster_id=0,
         refactor_group_id=0,
@@ -5834,9 +5835,6 @@ def test_refactor_internals_all_clusters_forwards_bound_address_keys(
     )
     monkeypatch.setattr(module, "compute_refactor_schedule", lambda *_a, **_k: (unit,))
     monkeypatch.setattr(module, "build_cluster_refactor_context", fake_build_cluster)
-    monkeypatch.setattr(
-        module, "_bound_address_keys_from_series_derived_cache", boom_default_bound_keys
-    )
     monkeypatch.setattr(
         module, "build_singleton_refactor_context", lambda *_a, **_k: None
     )
