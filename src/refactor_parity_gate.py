@@ -41,6 +41,7 @@ from src.helper_memoization import (
     install_helper_memoization,
     memoize_namespace_helpers,
 )
+from src.refactor_types import unwrap_annotation
 from src.runtime_symbols import (
     discover_allowed_reader_symbols,
     discover_allowed_runtime_symbols,
@@ -809,8 +810,9 @@ def _sample_constraint(
             if isinstance(meta, Between):
                 return rng.randint(meta.min, meta.max)
         return default
-    if get_origin(annotation) is Literal:
-        choices = get_args(annotation)
+    resolved = unwrap_annotation(annotation)
+    if get_origin(resolved) is Literal:
+        choices = get_args(resolved)
         if len(choices) <= 1:
             return default
         return rng.choice(choices)

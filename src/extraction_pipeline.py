@@ -65,6 +65,7 @@ from src.projection_cache import (
     rehydrate_projection_result,
 )
 from src.refactor_bindings import BindingKeyValue
+from src.refactor_types import unwrap_annotation
 from src.series_derived_cache import (
     get_or_build_series_derived,
     load_series_derived_payload,
@@ -529,7 +530,8 @@ def _materialize_from_refactor_keys(
 
 def is_constant_constraint(constraint: object) -> bool:
     """True when the constraint fixes a single value (lookup/structural data)."""
-    return get_origin(constraint) is Literal and len(get_args(constraint)) == 1
+    resolved = unwrap_annotation(constraint)
+    return get_origin(resolved) is Literal and len(get_args(resolved)) == 1
 
 
 def classify_leaves_from_constraints(
