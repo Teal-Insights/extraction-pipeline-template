@@ -63,9 +63,11 @@ def test_extract_graph_cli_exits_zero_on_synthetic_workbook(
         graph_output_dir=output_dir,
     )
 
-    with patch("src.extraction_pipeline.load_pipeline_config", return_value=config):
-        with patch("src.extraction_pipeline.validate_pipeline_config"):
-            main(["--extract-graph"])
+    with (
+        patch("src.extraction_pipeline.load_pipeline_config", return_value=config),
+        patch("src.extraction_pipeline.validate_pipeline_config"),
+    ):
+        main(["--extract-graph"])
 
     assert (output_dir / "extraction-summary.json").is_file()
 
@@ -73,13 +75,15 @@ def test_extract_graph_cli_exits_zero_on_synthetic_workbook(
 def test_main_without_extract_graph_flag_runs_full_pipeline(
     synthetic_pipeline_config_fixture,
 ) -> None:
-    with patch(
-        "src.extraction_pipeline.load_pipeline_config",
-        return_value=synthetic_pipeline_config_fixture,
+    with (
+        patch(
+            "src.extraction_pipeline.load_pipeline_config",
+            return_value=synthetic_pipeline_config_fixture,
+        ),
+        patch("src.extraction_pipeline.validate_pipeline_config"),
+        patch("src.extraction_pipeline.run_pipeline") as pipeline,
     ):
-        with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                main([])
+        main([])
 
     pipeline.assert_called_once()
     assert pipeline.call_args.kwargs["stop_after_stage"] == "document"
@@ -291,13 +295,15 @@ def test_export_generated_package_passes_key_vocabulary_to_refactor(
 def test_main_passes_cli_variation_mode_to_pipeline(
     synthetic_pipeline_config_fixture,
 ) -> None:
-    with patch(
-        "src.extraction_pipeline.load_pipeline_config",
-        return_value=synthetic_pipeline_config_fixture,
+    with (
+        patch(
+            "src.extraction_pipeline.load_pipeline_config",
+            return_value=synthetic_pipeline_config_fixture,
+        ),
+        patch("src.extraction_pipeline.validate_pipeline_config"),
+        patch("src.extraction_pipeline.run_pipeline") as pipeline,
     ):
-        with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                main(["--variation-mode", "dominant_key_only"])
+        main(["--variation-mode", "dominant_key_only"])
 
     pipeline.assert_called_once()
     assert pipeline.call_args.args[0].variation_mode == "dominant_key_only"
@@ -306,13 +312,15 @@ def test_main_passes_cli_variation_mode_to_pipeline(
 def test_main_passes_cli_clustering_mode_to_pipeline(
     synthetic_pipeline_config_fixture,
 ) -> None:
-    with patch(
-        "src.extraction_pipeline.load_pipeline_config",
-        return_value=synthetic_pipeline_config_fixture,
+    with (
+        patch(
+            "src.extraction_pipeline.load_pipeline_config",
+            return_value=synthetic_pipeline_config_fixture,
+        ),
+        patch("src.extraction_pipeline.validate_pipeline_config"),
+        patch("src.extraction_pipeline.run_pipeline") as pipeline,
     ):
-        with patch("src.extraction_pipeline.validate_pipeline_config"):
-            with patch("src.extraction_pipeline.run_pipeline") as pipeline:
-                main(["--clustering-mode", "ast"])
+        main(["--clustering-mode", "ast"])
 
     pipeline.assert_called_once()
     assert pipeline.call_args.args[0].clustering_mode == "ast"

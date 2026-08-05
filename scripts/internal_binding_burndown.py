@@ -24,23 +24,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from excel_grapher.grapher import DependencyGraph, DynamicRefConfig  # noqa: E402
-from excel_grapher.series_bindings import load_series_bindings  # noqa: E402
+from excel_grapher.grapher import DependencyGraph, DynamicRefConfig
+from excel_grapher.series_bindings import load_series_bindings
 
-from src.graph_cache import (  # noqa: E402
+from src.graph_cache import (
     DEFAULT_GRAPH_CACHE_DIR,
     dependency_graph_cache_key,
     get_or_build_dependency_graph,
     load_dependency_graph,
     load_newest_cached_dependency_graph,
 )
-from src.internal_binding_coverage import (  # noqa: E402
+from src.internal_binding_coverage import (
     find_unbound_internal_formula_cells_from_manifest,
     format_row_column_spans,
     group_unbound_cells_by_sheet_row,
     suggested_layout_for_row,
 )
-from src.pipeline_config import (  # noqa: E402
+from src.pipeline_config import (
     PipelineConfig,
     load_pipeline_config,
     validate_pipeline_config,
@@ -146,8 +146,7 @@ def main() -> None:
         if args.per_sheet is not None and sheet != args.per_sheet:
             continue
         print(f"\n== {sheet} ==")
-        printed = 0
-        for row in sorted(rows):
+        for printed, row in enumerate(sorted(rows)):
             if args.max_rows is not None and printed >= args.max_rows:
                 print("  ... (truncated)")
                 break
@@ -155,7 +154,6 @@ def main() -> None:
             layout = suggested_layout_for_row(columns)
             spans = format_row_column_spans(sheet=sheet, row=row, columns=columns)
             print(f"  row {row}: {spans}  [{layout}]")
-            printed += 1
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.graph_dependency_audit import GraphAuditCase
-from src.pipeline_config import DistProjectMetadata
 from src.internal_binding_coverage import InternalBindingValidationMode
+from src.pipeline_config import DistProjectMetadata
 from src.workbook_addresses import ProjectionColumnLayout
 
 REPO_ROOT = Path(__file__).resolve().parent

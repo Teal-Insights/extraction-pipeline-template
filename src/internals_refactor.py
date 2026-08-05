@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import builtins
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -23,9 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from src.async_gather import run_map_as_completed
 from src.formula_clustering import FormulaCluster
+from src.internal_bindings import InternalBindingIndex, internal_binding_for_address
 from src.key_dispatch_synthesis import KeyDispatchPlan, plan_key_dispatch
-from src.mechanical_body import MechanicalBodyDraft
-from src.mechanical_naming import ClusterNamingLLMResponse
 from src.llm_json import (
     DEFAULT_MAX_ATTEMPTS,
     ValidatedJsonFailure,
@@ -39,9 +39,10 @@ from src.llm_providers import (
     model_from_env,
     provider_for_model,
 )
+from src.mechanical_body import MechanicalBodyDraft
+from src.mechanical_naming import ClusterNamingLLMResponse
+from src.peel_entrypoint_dispatch import inject_peel_entrypoint_dispatch
 from src.pipeline_monitor import StageTimer
-from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
-from src.internal_bindings import InternalBindingIndex, internal_binding_for_address
 from src.refactor_bindings import (
     BindingKeyValue,
     KeyConceptSpec,
@@ -54,17 +55,6 @@ from src.refactor_bindings import (
     render_literal_helper_call,
     resolve_dimension_key,
 )
-from src.refactor_return_types import (
-    ALLOWED_REFACTOR_RETURN_TYPE_HINTS,
-    KNOWN_RUNTIME_RETURN_HINTS,
-    _binding_dtype_to_python,
-    build_callee_return_hints,
-    infer_refactor_return_type_hint,
-    merge_callee_return_hints,
-    merge_callee_return_hints_from_functions,
-    normalize_return_type_hint_for_allowlist,
-    validate_scalar_return_type_hint,
-)
 from src.refactor_contracts import (
     ClusterRefactorContract,
     concepts_with_multiple_dimensions,
@@ -76,11 +66,21 @@ from src.refactor_fingerprints import (
     build_cluster_fingerprint_summary,
     format_cluster_fingerprint_dump,
 )
-from src.peel_entrypoint_dispatch import inject_peel_entrypoint_dispatch
 from src.refactor_order import (
     RefactorUnit,
     compute_refactor_schedule,
     refactor_failure_target,
+)
+from src.refactor_return_types import (
+    ALLOWED_REFACTOR_RETURN_TYPE_HINTS,
+    KNOWN_RUNTIME_RETURN_HINTS,
+    _binding_dtype_to_python,
+    build_callee_return_hints,
+    infer_refactor_return_type_hint,
+    merge_callee_return_hints,
+    merge_callee_return_hints_from_functions,
+    normalize_return_type_hint_for_allowlist,
+    validate_scalar_return_type_hint,
 )
 from src.runtime_symbols import (
     allowed_runtime_module_symbols,
@@ -91,12 +91,13 @@ from src.semantic_naming import (
     BindingRecordHints,
     _is_semantic_helper_def,
     allocate_schedule_helper_names,
+    binding_record_hints_from_cell,
     cluster_binding_naming_hints,
     semantic_helpers_available_for_calls,
-    binding_record_hints_from_cell,
     sole_series_id_for_addresses,
     validate_semantic_identifier,
 )
+from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
 
 repo_root = Path(__file__).resolve().parents[1]
 
@@ -542,7 +543,7 @@ def _log_mechanical_pass1_failure(
             context=context(),
             source="mechanical",
         )
-    except Exception as dump_error:
+    except Exception as dump_error:  # noqa: BLE001
         logger.error(
             "failed to write mechanical refactor diagnostic kind=%s target=%s: %s",
             kind,
@@ -834,8 +835,8 @@ def _validate_llm_response_error_or_success[T: BaseModel](
     success_fields: tuple[str, ...],
     optional_ignored_fields: tuple[str, ...] = (),
 ) -> T:
-    error = getattr(response, "error")
-    error_reason = getattr(response, "error_reason")
+    error = getattr(response, "error")  # noqa: B009
+    error_reason = getattr(response, "error_reason")  # noqa: B009
     if error is True:
         reason = error_reason.strip() if isinstance(error_reason, str) else ""
         if not reason:
@@ -881,9 +882,9 @@ def raise_if_llm_declared_error(
     target: str,
 ) -> None:
     """Abort immediately when the LLM sets ``error`` to true."""
-    if getattr(response, "error") is not True:
+    if getattr(response, "error") is not True:  # noqa: B009
         return
-    error_reason = getattr(response, "error_reason")
+    error_reason = getattr(response, "error_reason")  # noqa: B009
     reason = error_reason.strip() if isinstance(error_reason, str) else ""
     if not reason:
         raise ValueError("error_reason must be a non-empty string when error is true")
@@ -1836,10 +1837,13 @@ def _patch_function_docstring_in_source(source: str, docstring: str) -> str:
         function_def.body.insert(0, ast.Expr(value=ast.Constant(value=docstring)))
         return ast.unparse(module) + "\n"
     first = function_def.body[0]
-    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
-        if isinstance(first.value.value, str):
-            first.value.value = docstring
-            return ast.unparse(module) + "\n"
+    if (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    ):
+        first.value.value = docstring
+        return ast.unparse(module) + "\n"
     function_def.body.insert(0, ast.Expr(value=ast.Constant(value=docstring)))
     return ast.unparse(module) + "\n"
 
@@ -2052,15 +2056,10 @@ def _local_binding_names(function_def: ast.FunctionDef) -> set[str]:
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 names.update(_names_from_target(target))
-        elif isinstance(node, ast.AnnAssign):
-            names.update(_names_from_target(node.target))
-        elif isinstance(node, ast.NamedExpr):
-            names.update(_names_from_target(node.target))
-        elif isinstance(node, ast.AugAssign):
-            names.update(_names_from_target(node.target))
-        elif isinstance(node, ast.For):
-            names.update(_names_from_target(node.target))
-        elif isinstance(node, ast.comprehension):
+        elif isinstance(
+            node,
+            (ast.AnnAssign, ast.NamedExpr, ast.AugAssign, ast.For, ast.comprehension),
+        ):
             names.update(_names_from_target(node.target))
         elif isinstance(node, ast.ExceptHandler) and node.name is not None:
             names.add(node.name)
@@ -2565,8 +2564,7 @@ def strip_python_string_delimiters(docstring: str) -> str:
     for quote in ('"""', "'''"):
         if stripped.startswith(quote) and stripped.endswith(quote):
             inner = stripped[len(quote) : -len(quote)]
-            if inner.startswith("\n"):
-                inner = inner[1:]
+            inner = inner.removeprefix("\n")
             return inner.rstrip("\n")
     return docstring
 
@@ -2945,8 +2943,7 @@ def format_cluster_covered_addresses(addresses: Sequence[str]) -> str:
     )
     column_indices = [_column_index(column) for column in columns]
     contiguous = all(
-        later - earlier == 1
-        for earlier, later in zip(column_indices, column_indices[1:], strict=False)
+        later - earlier == 1 for earlier, later in itertools.pairwise(column_indices)
     )
     if contiguous:
         return f"{sheet}!{columns[0]}{row}:{columns[-1]}{row}"
@@ -4315,7 +4312,7 @@ def resolve_semantic_dependencies(
             call_form=_helper_pass_through_call_form(
                 source, helper_name, index=resolved
             ),
-            address_template=_column_address_template(sorted(entries)[0][0]),
+            address_template=_column_address_template(min(entries)[0]),
             columns=tuple(tag for _, tag in sorted(entries)),
             addresses=tuple(address for address, _ in sorted(entries)),
         )
@@ -4931,12 +4928,12 @@ def _parse_address_dispatch(
                             and isinstance(kw_key.value, str)
                             and isinstance(kw_value, ast.Constant)
                         ):
-                            raise ValueError(
+                            raise TypeError(
                                 "_ADDRESS_DISPATCH keyword args must be constant literals"
                             )
                         literal = kw_value.value
                         if not isinstance(literal, (str, int, float, bool)):
-                            raise ValueError(
+                            raise TypeError(
                                 "_ADDRESS_DISPATCH keyword args must be scalar literals"
                             )
                         key_kwargs[kw_key.value] = literal
@@ -4989,7 +4986,7 @@ def _parse_symbol_dispatch(
                         and isinstance(value, ast.Constant)
                         and isinstance(value.value, str)
                     ):
-                        raise ValueError("_SYMBOL_DISPATCH has unexpected entry shape")
+                        raise TypeError("_SYMBOL_DISPATCH has unexpected entry shape")
                     dispatch[key.value] = value.value
                 return dispatch
     return {}
@@ -5642,6 +5639,8 @@ def _run_semantic_naming_pass(
     """
     from src.mechanical_naming import (
         ClusterNamingLLMResponse as ClusterNamingModel,
+    )
+    from src.mechanical_naming import (
         SingletonNamingLLMResponse,
         apply_cluster_naming_response,
     )
@@ -5777,6 +5776,8 @@ def _gather_semantic_naming(
 ]:
     from src.mechanical_naming import (
         ClusterNamingLLMResponse as ClusterNamingModel,
+    )
+    from src.mechanical_naming import (
         SingletonNamingLLMResponse,
         apply_cluster_naming_response,
     )
@@ -5999,7 +6000,7 @@ def refactor_internals_all_clusters(
         seconds: float,
         *,
         attach: bool = True,
-        **metrics: int | float | str,
+        **metrics: float | str,
     ) -> None:
         """Log one refactor span; attach leaf spans to the caller's stage timer.
 
@@ -6287,8 +6288,8 @@ def refactor_internals_all_clusters(
                         target=diagnostic_target,
                         error=error,
                         prepared_response=prepared_dump,
-                        context=lambda: _mechanical_singleton_failure_context(
-                            singleton_ctx, draft
+                        context=lambda ctx=singleton_ctx, d=draft: (
+                            _mechanical_singleton_failure_context(ctx, d)
                         ),
                         log_message=(
                             "singleton mechanical refactor failed address=%s "
@@ -6446,8 +6447,8 @@ def refactor_internals_all_clusters(
                     target=diagnostic_target,
                     error=error,
                     prepared_response=prepared_dump,
-                    context=lambda: _mechanical_cluster_failure_context(
-                        cluster_ctx, draft
+                    context=lambda ctx=cluster_ctx, d=draft: (
+                        _mechanical_cluster_failure_context(ctx, d)
                     ),
                     log_message=(
                         "cluster mechanical refactor failed cluster_id=%s "
