@@ -220,9 +220,9 @@ def test_run_refactor_stage_prints_clustering_and_refactor_boundaries(
         run_refactor_stage(state)
 
     captured = capsys.readouterr().out
-    assert "clustering: partitioning formulas…" in captured
-    assert "clustering: 3 formulas → 2 clusters" in captured
-    assert "internals_refactor: rewriting 2 clusters…" in captured
+    assert "clustering: partitioning formulas..." in captured
+    assert "clustering: 3 formulas -> 2 clusters" in captured
+    assert "internals_refactor: rewriting 2 clusters..." in captured
     assert "internals_refactor: done (" in captured
 
 

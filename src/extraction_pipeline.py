@@ -932,7 +932,7 @@ def run_refactor_stage(
             load_series_bindings(config.bindings_path)
         )
         timer.record("build_refactor_bindings", time.perf_counter() - bindings_started)
-        print("clustering: partitioning formulas…", flush=True)
+        print("clustering: partitioning formulas...", flush=True)
         clustering_started = time.perf_counter()
         cluster_result = get_or_build_clusters_and_schedule(
             artifacts.refactor_projection,
@@ -953,7 +953,7 @@ def run_refactor_stage(
         record_cache_result(timings, "clusters", cluster_result)
         formula_count = sum(len(cluster.members) for cluster in formula_clusters)
         print(
-            f"clustering: {formula_count} formulas → {len(formula_clusters)} clusters "
+            f"clustering: {formula_count} formulas -> {len(formula_clusters)} clusters "
             f"({clustering_seconds:.1f}s)",
             flush=True,
         )
@@ -1001,7 +1001,7 @@ def run_refactor_stage(
                 return result
 
         print(
-            f"internals_refactor: rewriting {len(formula_clusters)} clusters…",
+            f"internals_refactor: rewriting {len(formula_clusters)} clusters...",
             flush=True,
         )
         if lab.prompt_observer is not None:
