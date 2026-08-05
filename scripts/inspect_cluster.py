@@ -21,14 +21,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.cluster_cache import get_or_build_clusters_and_schedule  # noqa: E402
-from src.extraction_pipeline import build_pipeline_graph  # noqa: E402
-from src.formula_clustering import FormulaCluster  # noqa: E402
-from src.internals_refactor import (  # noqa: E402
+from src.cluster_cache import get_or_build_clusters_and_schedule
+from src.extraction_pipeline import build_pipeline_graph
+from src.formula_clustering import FormulaCluster
+from src.internals_refactor import (
     InternalsSourceIndex,
     address_to_function_name,
 )
-from src.pipeline_config import (  # noqa: E402
+from src.pipeline_config import (
     add_clustering_mode_argument,
     add_variation_mode_argument,
     apply_clustering_mode_cli_override,
@@ -36,12 +36,12 @@ from src.pipeline_config import (  # noqa: E402
     load_pipeline_config,
     validate_pipeline_config,
 )
-from src.projection_cache import projection_cache_key  # noqa: E402
-from src.refactor_order import (  # noqa: E402
+from src.projection_cache import projection_cache_key
+from src.refactor_order import (
     RefactorUnit,
     refactor_failure_target,
 )
-from src.subgraph_projection import build_refactor_projection  # noqa: E402
+from src.subgraph_projection import build_refactor_projection
 
 
 def find_cluster(

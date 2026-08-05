@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
-from typing import Mapping
 
 from src.codegen_cache import guide_fingerprint
 from src.graph_cache import bindings_fingerprint, file_fingerprint, stable_json
@@ -62,7 +62,7 @@ class StageManifest:
         cls, payload: Mapping[str, object], *, path: Path
     ) -> StageManifest:
         if not isinstance(payload, dict):
-            raise ValueError(f"invalid stage manifest payload: {path}")
+            raise TypeError(f"invalid stage manifest payload: {path}")
         stage = payload.get("stage")
         schema_version = payload.get("schema_version")
         cache_keys = payload.get("cache_keys")

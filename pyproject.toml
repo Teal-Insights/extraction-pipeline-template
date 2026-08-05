@@ -18,7 +18,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "quarto>=0.1.0",
-    "ruff>=0.15.12",
+    "ruff>=0.16.0",
     "ty>=0.0.34",
     "xlwings>=0.35.3",
     "vl-convert-python>=1.9.0.post1",
@@ -36,3 +36,6 @@ addopts = "-v -p no:faulthandler -p no:cacheprovider"
 # Keep formatted Python on LF so Windows checkouts cannot reintroduce the CRLF
 # bytes that `git diff --check` flags as trailing whitespace.
 line-ending = "lf"
+# Golden Markdown fixtures embed exact Python dumps; Ruff 0.16 formats fenced
+# code blocks by default and would churn those expected strings.
+exclude = ["tests/fixtures/**/*.md"]

@@ -25,7 +25,7 @@ import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
@@ -368,7 +368,7 @@ def _environment_info(excel_version: str | None) -> dict[str, str]:
         import xlwings
 
         xlwings_version = xlwings.__version__
-    except Exception:  # pragma: no cover - xlwings always present in this repo
+    except Exception:  # noqa: BLE001  # pragma: no cover - xlwings always present in this repo
         xlwings_version = "unavailable"
     return {
         "python": sys.version.split()[0],
@@ -402,9 +402,7 @@ def write_txt_summary(
         handle.write(
             f"Parity report: exported {config.library_name} standalone library vs Excel\n"
         )
-        handle.write(
-            f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n"
-        )
+        handle.write(f"Generated: {datetime.now(UTC).isoformat(timespec='seconds')}\n")
         handle.write(f"Workbook:  {config.workbook_path}\n")
         handle.write(
             f"Package:   {config.package_dir} (imported as {config.package_name})\n"

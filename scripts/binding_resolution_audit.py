@@ -24,16 +24,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from excel_grapher.series_bindings import load_series_bindings  # noqa: E402
-from excel_grapher.series_bindings.resolve import BindingDirection  # noqa: E402
+from excel_grapher.series_bindings import load_series_bindings
+from excel_grapher.series_bindings.resolve import BindingDirection
 
-from scripts.internal_binding_burndown import load_graph  # noqa: E402
-from src.binding_resolution_audit import (  # noqa: E402
+from scripts.internal_binding_burndown import load_graph
+from src.binding_resolution_audit import (
     DIRECTIONS,
     audit_binding_resolutions,
     format_audit_findings,
 )
-from src.pipeline_config import (  # noqa: E402
+from src.pipeline_config import (
     load_pipeline_config,
     validate_pipeline_config,
 )
