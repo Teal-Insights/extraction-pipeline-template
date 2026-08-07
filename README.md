@@ -73,9 +73,9 @@ flowchart LR
 ### 1. Configure
 
 1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `CONSTRAINTS`, and `DIST_METADATA`.
-2. Author `bindings/*.bindings.yaml` (schema version `1.10.0`, one logical series per public API function or internal formula group).
-3. Constrain cells that control `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` so dynamic refs resolve completely.
-4. Classify every leaf as `input` or `constant`; every mutable input leaf must appear in `inputs.bindings.yaml`.
+2. Constrain cells that control `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` so dynamic refs resolve completely.
+3. Classify every graph leaf as `input` or `constant`; every mutable input leaf must appear in `inputs.bindings.yaml`.
+4. Author I/O `bindings/*.bindings.yaml` (schema version `1.10.0`, one logical series per public API function or input/constant group).
 5. Bind every internal formula cell in `internals.bindings.yaml` (see [Authoring internals](#authoring-internals) below).
 
 Validation checks:
