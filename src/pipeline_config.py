@@ -367,11 +367,9 @@ def validate_pipeline_config(config: PipelineConfig) -> None:
         missing.append(f"guide: {config.guide_path}")
     if not config.bindings_path.is_dir():
         missing.append(f"bindings directory: {config.bindings_path}")
-    elif not any(config.bindings_path.glob("*.bindings.yaml")):
-        missing.append(
-            f"bindings YAML files under {config.bindings_path} "
-            "(expected inputs.bindings.yaml, outputs.bindings.yaml, and optionally internals.bindings.yaml)"
-        )
+    # Binding YAML shards may be absent or empty ``series: []`` placeholders during
+    # bootstrap extract; export / ``build_pipeline_graph`` still require mergeable
+    # documents and fail loudly when they are incomplete.
     if not config.targets:
         missing.append("workbook_config.TARGETS (at least one extraction target)")
     if not config.constraints:

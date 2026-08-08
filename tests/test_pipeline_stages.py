@@ -262,8 +262,9 @@ def test_run_pipeline_stop_after_export_runs_through_export(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
-    graph_result = object()
-    extract_result = MagicMock(graph_result=graph_result)
+    graph = object()
+    graph_cache_key = "g" * 64
+    extract_result = MagicMock(graph=graph, graph_cache_key=graph_cache_key)
     with (
         patch(
             "src.extraction_pipeline.extract_dependency_graph",
@@ -294,7 +295,8 @@ def test_run_pipeline_stop_after_export_runs_through_export(
         no_cache=True,
         force_rebuild=False,
         timings=ANY,
-        graph_result=graph_result,
+        graph=graph,
+        graph_cache_key=graph_cache_key,
     )
     refactor.assert_not_called()
     validate.assert_not_called()
@@ -306,8 +308,9 @@ def test_run_pipeline_full_run_records_extract_then_export(
 ) -> None:
     """A full run includes extract before export and hands off the live graph."""
     export_state = object()
-    graph_result = object()
-    extract_result = MagicMock(graph_result=graph_result)
+    graph = object()
+    graph_cache_key = "g" * 64
+    extract_result = MagicMock(graph=graph, graph_cache_key=graph_cache_key)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -330,7 +333,8 @@ def test_run_pipeline_full_run_records_extract_then_export(
     assert extract.call_count == 1
     assert export.call_count == 1
     assert extract.call_args.kwargs["timings"] is export.call_args.kwargs["timings"]
-    assert export.call_args.kwargs["graph_result"] is graph_result
+    assert export.call_args.kwargs["graph"] is graph
+    assert export.call_args.kwargs["graph_cache_key"] is graph_cache_key
 
 
 def _mock_refactor_state(config: PipelineConfig) -> RefactorStageState:
@@ -345,8 +349,9 @@ def test_run_pipeline_stop_after_refactor_skips_validate_and_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
-    graph_result = object()
-    extract_result = MagicMock(graph_result=graph_result)
+    graph = object()
+    graph_cache_key = "g" * 64
+    extract_result = MagicMock(graph=graph, graph_cache_key=graph_cache_key)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -370,7 +375,8 @@ def test_run_pipeline_stop_after_refactor_skips_validate_and_document(
         )
 
     export.assert_called_once()
-    assert export.call_args.kwargs["graph_result"] is graph_result
+    assert export.call_args.kwargs["graph"] is graph
+    assert export.call_args.kwargs["graph_cache_key"] is graph_cache_key
     refactor.assert_called_once_with(
         export_state,
         no_cache=False,
@@ -386,7 +392,7 @@ def test_run_pipeline_stop_after_validate_skips_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
-    extract_result = MagicMock(graph_result=object())
+    extract_result = MagicMock(graph=object(), graph_cache_key="g" * 64)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -424,7 +430,7 @@ def test_run_pipeline_default_runs_through_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
-    extract_result = MagicMock(graph_result=object())
+    extract_result = MagicMock(graph=object(), graph_cache_key="g" * 64)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -455,7 +461,7 @@ def test_run_pipeline_passes_no_cache_to_validate_stage(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
-    extract_result = MagicMock(graph_result=object())
+    extract_result = MagicMock(graph=object(), graph_cache_key="g" * 64)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -550,7 +556,7 @@ def test_run_pipeline_skips_document_when_differential_failed(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
-    extract_result = MagicMock(graph_result=object())
+    extract_result = MagicMock(graph=object(), graph_cache_key="g" * 64)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -581,7 +587,7 @@ def test_run_pipeline_force_document_runs_docs_after_differential_failure(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
-    extract_result = MagicMock(graph_result=object())
+    extract_result = MagicMock(graph=object(), graph_cache_key="g" * 64)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -616,7 +622,7 @@ def test_run_pipeline_document_failure_raises_document_stage_error(
     from src.extraction_pipeline import DocumentStageError
 
     export_state = object()
-    extract_result = MagicMock(graph_result=object())
+    extract_result = MagicMock(graph=object(), graph_cache_key="g" * 64)
     refactor_state = _mock_refactor_state(synthetic_pipeline_config_fixture)
     with (
         patch(
@@ -803,7 +809,7 @@ def test_run_pipeline_writes_stage_timings_artifact(
     with (
         patch(
             "src.extraction_pipeline.extract_dependency_graph",
-            return_value=MagicMock(graph_result=object()),
+            return_value=MagicMock(graph=object(), graph_cache_key="g" * 64),
         ),
         patch("src.extraction_pipeline.run_export_stage"),
         patch("src.extraction_pipeline.run_refactor_stage"),
@@ -838,7 +844,7 @@ def test_run_pipeline_threads_one_timings_object_through_every_stage(
     with (
         patch(
             "src.extraction_pipeline.extract_dependency_graph",
-            return_value=MagicMock(graph_result=object()),
+            return_value=MagicMock(graph=object(), graph_cache_key="g" * 64),
         ) as extract,
         patch("src.extraction_pipeline.run_export_stage") as export,
         patch("src.extraction_pipeline.run_refactor_stage") as refactor,

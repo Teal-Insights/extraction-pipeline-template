@@ -346,6 +346,21 @@ def test_dependency_graph_cache_key_changes_when_workbook_changes(
     assert base_key != changed_key
 
 
+def test_bindings_fingerprint_stable_for_empty_bindings_dir(tmp_path: Path) -> None:
+    empty_dir = tmp_path / "bindings"
+    empty_dir.mkdir()
+    digest = bindings_fingerprint(empty_dir)
+    assert digest == bindings_fingerprint(empty_dir)
+    assert len(digest) == 64
+
+
+def test_bindings_fingerprint_stable_for_missing_bindings_dir(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist"
+    digest = bindings_fingerprint(missing)
+    assert digest == bindings_fingerprint(missing)
+    assert digest == bindings_fingerprint(tmp_path / "also-missing")
+
+
 def test_dependency_graph_cache_key_changes_when_bindings_change(
     synthetic_config,
     tmp_path: Path,

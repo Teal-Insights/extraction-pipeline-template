@@ -47,15 +47,20 @@ def file_fingerprint(path: Path) -> str:
 
 
 def bindings_fingerprint(bindings_path: Path) -> str:
-    """Hash binding YAML files under ``bindings_path`` in stable sorted order."""
+    """Hash binding YAML files under ``bindings_path`` in stable sorted order.
+
+    Missing directories and directories with no ``*.bindings.yaml`` files share a
+    stable empty digest so graph-cache keys stay well-defined during bootstrap
+    extract before bindings are authored.
+    """
     resolved = bindings_path.resolve()
+    if not resolved.exists():
+        return hashlib.sha256(b"").hexdigest()
     if not resolved.is_dir():
         raise NotADirectoryError(f"Bindings path is not a directory: {resolved}")
     binding_files = sorted(resolved.glob("*.bindings.yaml"))
     if not binding_files:
-        raise FileNotFoundError(
-            f"No *.bindings.yaml files found under bindings path: {resolved}"
-        )
+        return hashlib.sha256(b"").hexdigest()
     digest = hashlib.sha256()
     for binding_file in binding_files:
         digest.update(binding_file.name.encode("utf-8"))
