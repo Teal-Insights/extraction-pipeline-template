@@ -411,7 +411,7 @@ def test_cluster_graph_formulas_requires_bound_address_keys(
         cluster_graph_formulas(synthetic_projection, bound_address_keys=None)
 
 
-def test_cluster_graph_formulas_groups_parallel_row_on_synthetic_projection(
+def test_cluster_graph_formulas_groups_parallel_outputs_on_synthetic_projection(
     synthetic_projection,
     synthetic_bound_address_keys,
     synthetic_pipeline_config_fixture,
@@ -423,13 +423,13 @@ def test_cluster_graph_formulas_groups_parallel_row_on_synthetic_projection(
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
         layout=synthetic_pipeline_config_fixture.projection_layout,
     )
-    engine_cluster = next(
+    outputs_cluster = next(
         cluster
         for cluster in clusters
-        if set(cluster.members) == {"Engine!B2", "Engine!C2"}
+        if set(cluster.members) == {"Outputs!B1", "Outputs!C1"}
     )
-    assert engine_cluster.row == 2
-    assert engine_cluster.canonical_template == "=Inputs!A1+Inputs!B1+1"
+    assert outputs_cluster.row == 1
+    assert outputs_cluster.canonical_template == "=(Inputs!A1+Inputs!B1+1)"
 
 
 def test_cluster_graph_formulas_groups_trade_balance_with_binding_keys() -> None:

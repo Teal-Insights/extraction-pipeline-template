@@ -66,7 +66,7 @@ def test_refactor_projection_uses_optimal_compression(
     assert len(projection) <= len(synthetic_graph)
 
 
-def test_cluster_graph_formulas_finds_parallel_engine_row(
+def test_cluster_graph_formulas_finds_parallel_outputs_row(
     synthetic_projection,
     synthetic_bound_address_keys,
     synthetic_pipeline_config_fixture,
@@ -79,9 +79,11 @@ def test_cluster_graph_formulas_finds_parallel_engine_row(
         layout=synthetic_pipeline_config_fixture.projection_layout,
     )
     parallel = next(
-        cluster for cluster in clusters if cluster.members == ("Engine!B2", "Engine!C2")
+        cluster
+        for cluster in clusters
+        if cluster.members == ("Outputs!B1", "Outputs!C1")
     )
-    assert parallel.row == 2
+    assert parallel.row == 1
 
 
 def test_compute_cluster_refactor_order_respects_dependencies(
@@ -98,9 +100,8 @@ def test_compute_cluster_refactor_order_respects_dependencies(
     )
     ordered = compute_cluster_refactor_order(synthetic_projection, clusters)
 
-    assert len(ordered) == 2
-    assert ordered[0].members == ("Engine!B2", "Engine!C2")
-    assert ordered[1].members == ("Outputs!B1", "Outputs!C1")
+    assert len(ordered) == 1
+    assert ordered[0].members == ("Outputs!B1", "Outputs!C1")
     assert_valid_cluster_refactor_order(synthetic_projection, ordered)
     assert len({cluster.cluster_id for cluster in ordered}) == len(ordered)
 
