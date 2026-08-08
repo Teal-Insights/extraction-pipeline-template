@@ -795,6 +795,8 @@ def run_export_stage(
         projection_started = time.perf_counter()
         refactor_projection = build_refactor_projection(
             graph,
+            series_bindings=series_bindings,
+            bindings_workbook=config.workbook_path,
             graph_cache_key=graph_cache_key,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
@@ -829,7 +831,10 @@ def _generate_export_package(
     timer: StageTimer,
 ) -> ExportStageState:
     """Generate the package modules under dist/ and seed the validation harness."""
-    proj_cache_key = projection_cache_key(graph_cache_key=graph_cache_key)
+    proj_cache_key = projection_cache_key(
+        graph_cache_key=graph_cache_key,
+        series_bindings_preserve=True,
+    )
     targets = list(config.targets)
     unpack_return = True
     docstring_renderer = "google"

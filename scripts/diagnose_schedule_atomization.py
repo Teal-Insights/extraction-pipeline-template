@@ -240,6 +240,8 @@ def main() -> None:
     graph_result = build_pipeline_graph(config, no_cache=args.no_cache)
     projection = build_refactor_projection(
         graph_result.graph,
+        series_bindings=graph_result.series_bindings,
+        bindings_workbook=config.workbook_path,
         graph_cache_key=graph_result.graph_cache_key,
         no_cache=args.no_cache,
     )

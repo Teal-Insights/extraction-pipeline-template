@@ -73,6 +73,8 @@ def _projection_and_bindings(config, *, graph_cache_dir: Path):
     graph_result = build_pipeline_graph(config)
     projection = build_refactor_projection(
         graph_result.graph,
+        series_bindings=graph_result.series_bindings,
+        bindings_workbook=config.workbook_path,
         graph_cache_key=graph_result.graph_cache_key,
     )
     return graph_result, projection
@@ -99,7 +101,10 @@ def _call_get_or_build(
         layout=config.projection_layout,
         bindings_path=bindings_path or config.bindings_path,
         projection_cache_key=projection_key
-        or projection_cache_key(graph_cache_key=graph_result.graph_cache_key),
+        or projection_cache_key(
+            graph_cache_key=graph_result.graph_cache_key,
+            series_bindings_preserve=True,
+        ),
         variation_mode=variation_mode or config.variation_mode,
         clustering_mode=clustering_mode or config.clustering_mode,
         cache_dir=cluster_cache_dir,
@@ -519,7 +524,8 @@ def test_invalid_cluster_payload_shape_is_rebuilt(
     )
     cache_key = cluster_cache_key(
         projection_cache_key=projection_cache_key(
-            graph_cache_key=graph_result.graph_cache_key
+            graph_cache_key=graph_result.graph_cache_key,
+            series_bindings_preserve=True,
         ),
         variation_mode=synthetic_config.variation_mode,
         clustering_mode=synthetic_config.clustering_mode,
@@ -636,7 +642,9 @@ def test_run_refactor_stage_uses_cluster_cache(
     )
     from src.series_derived_cache import series_derived_cache_key
 
-    proj_key = projection_cache_key(graph_cache_key=graph_result.graph_cache_key)
+    proj_key = projection_cache_key(
+        graph_cache_key=graph_result.graph_cache_key, series_bindings_preserve=True
+    )
     derived_key = series_derived_cache_key(
         graph_cache_key=graph_result.graph_cache_key,
         validation_mode=synthetic_config.internal_binding_validation_mode,
@@ -687,7 +695,9 @@ def test_run_refactor_stage_no_cache_bypasses_cluster_cache(
         "def placeholder():\n    return None\n",
         encoding="utf-8",
     )
-    proj_key = projection_cache_key(graph_cache_key=graph_result.graph_cache_key)
+    proj_key = projection_cache_key(
+        graph_cache_key=graph_result.graph_cache_key, series_bindings_preserve=True
+    )
     derived_key = series_derived_cache_key(
         graph_cache_key=graph_result.graph_cache_key,
         validation_mode=synthetic_config.internal_binding_validation_mode,

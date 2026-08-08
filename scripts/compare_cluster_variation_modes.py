@@ -321,6 +321,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     graph_result = build_pipeline_graph(config, no_cache=args.no_cache)
     projection = build_refactor_projection(
         graph_result.graph,
+        series_bindings=graph_result.series_bindings,
+        bindings_workbook=config.workbook_path,
         graph_cache_key=graph_result.graph_cache_key,
         no_cache=args.no_cache,
     )
@@ -328,7 +330,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     address_to_series_id = graph_result.address_to_series_id
     layout = config.projection_layout
 
-    projection_key = projection_cache_key(graph_cache_key=graph_result.graph_cache_key)
+    projection_key = projection_cache_key(
+        graph_cache_key=graph_result.graph_cache_key,
+        series_bindings_preserve=True,
+    )
     independent = _cluster_by_mode(
         variation_mode="independent",
         bound_address_keys=bound_address_keys,
