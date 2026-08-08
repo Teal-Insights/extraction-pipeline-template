@@ -294,11 +294,16 @@ def export_generated_modules(
     """
     refactor_projection = build_refactor_projection(
         graph,
+        series_bindings=series_bindings,
+        bindings_workbook=config.workbook_path,
         graph_cache_key=graph_cache_key,
         no_cache=no_cache,
         force_rebuild=force_rebuild,
     )
-    proj_cache_key = projection_cache_key(graph_cache_key=graph_cache_key)
+    proj_cache_key = projection_cache_key(
+        graph_cache_key=graph_cache_key,
+        series_bindings_preserve=True,
+    )
     targets = list(config.targets)
     unpack_return = True
     docstring_renderer = "google"
@@ -363,7 +368,10 @@ def record_refactor_buckets(
             workbook_path=config.workbook_path,
             layout=layout,
             bindings_path=config.bindings_path,
-            projection_cache_key=projection_cache_key(graph_cache_key=graph_cache_key),
+            projection_cache_key=projection_cache_key(
+                graph_cache_key=graph_cache_key,
+                series_bindings_preserve=True,
+            ),
             variation_mode=config.variation_mode,
             clustering_mode=config.clustering_mode,
             no_cache=no_cache,
@@ -746,6 +754,8 @@ def run_record_refactor_buckets(
     graph_result = build_pipeline_graph(config, no_cache=no_cache)
     projection = build_refactor_projection(
         graph_result.graph,
+        series_bindings=graph_result.series_bindings,
+        bindings_workbook=config.workbook_path,
         graph_cache_key=graph_result.graph_cache_key,
         no_cache=no_cache,
     )

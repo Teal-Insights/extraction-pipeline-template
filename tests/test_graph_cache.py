@@ -346,6 +346,21 @@ def test_dependency_graph_cache_key_changes_when_workbook_changes(
     assert base_key != changed_key
 
 
+def test_bindings_fingerprint_stable_for_empty_bindings_dir(tmp_path: Path) -> None:
+    empty_dir = tmp_path / "bindings"
+    empty_dir.mkdir()
+    digest = bindings_fingerprint(empty_dir)
+    assert digest == bindings_fingerprint(empty_dir)
+    assert len(digest) == 64
+
+
+def test_bindings_fingerprint_stable_for_missing_bindings_dir(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist"
+    digest = bindings_fingerprint(missing)
+    assert digest == bindings_fingerprint(missing)
+    assert digest == bindings_fingerprint(tmp_path / "also-missing")
+
+
 def test_dependency_graph_cache_key_changes_when_bindings_change(
     synthetic_config,
     tmp_path: Path,
@@ -433,6 +448,7 @@ def test_corrupt_dependency_graph_cache_is_rebuilt(
 
 def test_projection_cache_roundtrip(
     synthetic_config,
+    synthetic_series_bindings,
     graph_cache_dir: Path,
     projection_cache_dir: Path,
 ) -> None:
@@ -440,11 +456,15 @@ def test_projection_cache_roundtrip(
     first = get_or_build_refactor_projection(
         graph_result.graph,
         graph_cache_key=graph_result.cache_key,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_config.workbook_path,
         cache_dir=projection_cache_dir,
     )
     second = get_or_build_refactor_projection(
         graph_result.graph,
         graph_cache_key=graph_result.cache_key,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_config.workbook_path,
         cache_dir=projection_cache_dir,
     )
 
@@ -462,6 +482,8 @@ def test_rehydrated_projection_supports_codegen(
     graph_result = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
     projection = build_refactor_projection(
         graph_result.graph,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_config.workbook_path,
         graph_cache_key=graph_result.cache_key,
     )
     modules = CodeGenerator(cast(GraphLike, projection)).generate_modules(
@@ -480,6 +502,7 @@ def test_projection_cache_key_follows_graph_cache_key() -> None:
 
 def test_projection_cache_miss_when_graph_cache_key_changes(
     synthetic_config,
+    synthetic_series_bindings,
     graph_cache_dir: Path,
     projection_cache_dir: Path,
 ) -> None:
@@ -487,12 +510,16 @@ def test_projection_cache_miss_when_graph_cache_key_changes(
     first = get_or_build_refactor_projection(
         graph_result.graph,
         graph_cache_key=graph_result.cache_key,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_config.workbook_path,
         cache_dir=projection_cache_dir,
     )
     other_graph_key = hashlib.sha256(b"other-graph-key").hexdigest()
     second = get_or_build_refactor_projection(
         graph_result.graph,
         graph_cache_key=other_graph_key,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_config.workbook_path,
         cache_dir=projection_cache_dir,
     )
     assert not first.cache_hit
@@ -502,11 +529,19 @@ def test_projection_cache_miss_when_graph_cache_key_changes(
 
 def test_rehydrate_projection_result_uses_original_graph(
     synthetic_graph,
+    synthetic_series_bindings,
+    synthetic_workbook_path,
 ) -> None:
-    live = build_refactor_projection(synthetic_graph)
+    live = build_refactor_projection(
+        synthetic_graph,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_workbook_path,
+    )
     cached = get_or_build_refactor_projection(
         synthetic_graph,
         graph_cache_key="synthetic-graph-key",
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_workbook_path,
         no_cache=True,
     ).projection
     rehydrated = rehydrate_projection_result(
@@ -532,6 +567,7 @@ def test_clear_dependency_graph_cache_removes_entries(
 
 def test_clear_projection_cache_removes_entries(
     synthetic_config,
+    synthetic_series_bindings,
     graph_cache_dir: Path,
     projection_cache_dir: Path,
 ) -> None:
@@ -539,6 +575,8 @@ def test_clear_projection_cache_removes_entries(
     projection_result = get_or_build_refactor_projection(
         graph_result.graph,
         graph_cache_key=graph_result.cache_key,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_config.workbook_path,
         cache_dir=projection_cache_dir,
     )
     payload_path = projection_cache_dir / f"{projection_result.cache_key}.pkl.gz"

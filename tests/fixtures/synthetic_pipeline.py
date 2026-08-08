@@ -97,8 +97,15 @@ def write_synthetic_workbook(path: Path) -> Path:
 
 def build_synthetic_projection(
     graph: DependencyGraph,
+    *,
+    series_bindings: WorkbookSeriesBindings | None = None,
+    bindings_workbook: Path | None = None,
 ) -> ProjectionResult:
-    return build_refactor_projection(graph)
+    return build_refactor_projection(
+        graph,
+        series_bindings=series_bindings,
+        bindings_workbook=bindings_workbook,
+    )
 
 
 def load_synthetic_series_bindings(

@@ -134,6 +134,19 @@ def test_validate_pipeline_config_reports_missing_inputs() -> None:
         validate_pipeline_config(config)
 
 
+def test_validate_pipeline_config_allows_empty_bindings_directory(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    """Bootstrap extract may start before any ``*.bindings.yaml`` shards exist."""
+    from dataclasses import replace
+
+    bindings = tmp_path / "bindings"
+    bindings.mkdir()
+    config = replace(synthetic_pipeline_config_fixture, bindings_path=bindings)
+    validate_pipeline_config(config)
+
+
 def test_parse_workbook_address() -> None:
     assert parse_workbook_address("Inputs!C16") == ("Inputs", "C", 16)
 

@@ -50,8 +50,16 @@ def _interleaved_family_cycle_schedule(
     return _InterleavedProjection(), (cluster_a, cluster_b)
 
 
-def test_refactor_projection_uses_optimal_compression(synthetic_graph) -> None:
-    projection = build_refactor_projection(synthetic_graph)
+def test_refactor_projection_uses_optimal_compression(
+    synthetic_graph,
+    synthetic_series_bindings,
+    synthetic_workbook_path,
+) -> None:
+    projection = build_refactor_projection(
+        synthetic_graph,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_workbook_path,
+    )
     manifest = projection.manifest
     assert isinstance(manifest, BaseProjectionManifest)
     assert manifest.kind == "optimal_compression"

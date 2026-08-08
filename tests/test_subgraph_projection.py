@@ -19,8 +19,14 @@ def _base_manifest(manifest: object) -> BaseProjectionManifest:
 
 def test_refactor_projection_preserves_targets_and_parallel_members(
     synthetic_graph,
+    synthetic_series_bindings,
+    synthetic_workbook_path,
 ) -> None:
-    projection = build_refactor_projection(synthetic_graph)
+    projection = build_refactor_projection(
+        synthetic_graph,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_workbook_path,
+    )
     manifest = _base_manifest(projection.manifest)
 
     assert manifest.kind == "optimal_compression"
@@ -46,8 +52,10 @@ def test_build_refactor_projection_forwards_cache_dir(
         cache_dir: Path | None = None,
         no_cache: bool = False,
         force_rebuild: bool = False,
+        series_bindings: object | None = None,
+        bindings_workbook: object | None = None,
     ) -> object:
-        del graph, no_cache, force_rebuild
+        del graph, no_cache, force_rebuild, series_bindings, bindings_workbook
         captured["graph_cache_key"] = graph_cache_key
         captured["cache_dir"] = cache_dir
 
@@ -77,7 +85,11 @@ def test_projected_codegen_preserves_public_series_api(
     synthetic_series_bindings,
     synthetic_workbook_path,
 ) -> None:
-    projection = build_refactor_projection(synthetic_graph)
+    projection = build_refactor_projection(
+        synthetic_graph,
+        series_bindings=synthetic_series_bindings,
+        bindings_workbook=synthetic_workbook_path,
+    )
     modules = CodeGenerator(cast(GraphLike, projection)).generate_modules(
         list(synthetic_graph.target_keys()),
         series_bindings=synthetic_series_bindings,

@@ -1,8 +1,10 @@
 # Series bindings
 
-Author `inputs.bindings.yaml`, `outputs.bindings.yaml`, and `internals.bindings.yaml` here before running the pipeline.
+Author `inputs.bindings.yaml`, `outputs.bindings.yaml`, and `internals.bindings.yaml` here.
 
-Use schema version `1.10.0` and the prompt in [templates/binding-authoring-prompt.txt](../templates/binding-authoring-prompt.txt).
+Bootstrap extract (`--extract-graph` / `--stop-after-stage extract`) is graph-first: empty `series: []` placeholder shards are fine so you can review `artifacts/dependency-graph/` before bindings exist. excel-grapher 5.1.4+ also loads and merges those placeholders (including divergent `concept_scheme` blocks). Author real series before export so the public API and leaf coverage are complete.
+
+Use schema version `1.10.0` and the prompt in [templates/binding-authoring-prompt.txt](../templates/binding-authoring-prompt.txt). Prefer authoring from an extracted graph rather than guessing sheet geometry up front.
 
 ## Output compute helpers
 

@@ -10,10 +10,10 @@ Follow this order when adapting the template to a new workbook. Each step has a 
 
 | Step | Owner | Action |
 |---|---|---|
-| 1. Ingest | **Config author** | Clone the repo. Replace `data/workbook.xlsx` and `data/guide.md`. Clear workbook-specific state: delete `bindings/*.bindings.yaml`, `dist/`, and `.cache/`. Point [workbook_config.py](workbook_config.py) paths at the new workbook. |
+| 1. Ingest | **Config author** | Clone the repo. Replace `data/workbook.xlsx` and `data/guide.md`. Clear workbook-specific state: reset `bindings/*.bindings.yaml` to empty `series: []` placeholders (or delete them), and delete `dist/` and `.cache/`. Point [workbook_config.py](workbook_config.py) paths at the new workbook. |
 | 2. Audit | **Config author** | Run `uv run python -m src.workbook_audit --output artifacts/workbook-audit.md`. Resolve blocking automation (VBA, macros, external links) before graph work. |
-| 3. Configure | **Config author** | Declare extraction targets, author bindings, constrain every dynamic-ref controller, and classify all graph leaves. See [Configure](#1-configure) below. |
-| 4. Extract | **Config author** | Run `uv run python -m src.extraction_pipeline --extract-graph`. Confirm the graph builds without `DynamicRefError`. |
+| 3. Configure | **Config author** | Declare extraction targets and dynamic-ref constraints (empty `series: []` binding placeholders are fine). See [Configure](#1-configure) below. |
+| 4. Extract | **Config author** | Run `uv run python -m src.extraction_pipeline --extract-graph`. Confirm the graph builds without `DynamicRefError` (bindings are not required yet). |
 | 5. Review graph | **Graph reviewer** | Inspect `artifacts/dependency-graph/` (see [artifacts/README.md](artifacts/README.md)). Confirm expected sheets, no spurious nodes, and complete shock/engine paths. Optionally run opt-in LLM dependency audits: `uv run pytest tests/test_extraction_graph_accuracy.py --run-skipped` (workbook audits require `GRAPH_AUDIT_CASES` in `workbook_config.py`; the synthetic smoke-test audit runs without extra configuration). Set the provider API key for `LLM_GRAPH_AUDIT_MODEL` (defaults to `gpt-5.5`). |
 | 6. Verify graph | **Parity owner** | Define a scenario matrix in `tests/differential/` and run graph-oracle differential parity before export (see [Verify graph](#3-verify-graph)). Do not proceed to export until graph-oracle parity passes. |
 | 7. Export and test | **Parity owner** | Run the full pipeline (`uv run python -m src.extraction_pipeline`). Run exported-library differential parity; on Windows with Excel, re-run from the exported project (see [Test](#5-test)). |
@@ -48,12 +48,12 @@ Use [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.
 
 The linear `configure → extract` summary is a stage gate, not a one-shot workflow. Expect several passes:
 
-1. **Draft** `TARGETS`, `CONSTRAINTS`, and minimal bindings so the graph can build.
+1. **Draft** `TARGETS` and dynamic-ref `CONSTRAINTS`. Keep `bindings/*.bindings.yaml` as empty `series: []` placeholders (or draft shards) — extract does not load or merge series bindings.
 2. **Extract** with `--extract-graph` and review `artifacts/dependency-graph/`.
-3. **Refine** bindings, constraints, and leaf classification using what the graph reveals (missing paths, unbound leaves, lookup tables).
-4. **Re-extract** and repeat until graph review and graph-oracle parity are stable.
+3. **Constrain** any remaining unconstrained graph leaves (for input/constant classification), then author / refine bindings using what the graph reveals.
+4. **Re-extract** as needed for graph review; run export (or `build_pipeline_graph`) only once bindings are mergeable and complete.
 
-Binding authoring explicitly assumes an extracted graph. Leaf classification (`CONSTRAINTS`) and series bindings belong to the same configure bundle and should settle before you treat export as done.
+Extract is graph-first. Binding load, validation, derivation, and internal-coverage enforcement run at export (and any other bindings-ready path). Empty placeholder shards are expected during bootstrap.
 
 ## Pipeline stages
 
@@ -72,10 +72,10 @@ flowchart LR
 
 ### 1. Configure
 
-1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `CONSTRAINTS`, and `DIST_METADATA`.
-2. Constrain cells that control `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` so dynamic refs resolve completely.
-3. Classify every graph leaf as `input` or `constant`; every mutable input leaf must appear in `inputs.bindings.yaml`.
-4. Author I/O `bindings/*.bindings.yaml` (schema version `1.10.0`, one logical series per public API function or input/constant group).
+1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `CONSTRAINTS`, and `DIST_METADATA`. Keep `bindings/*.bindings.yaml` as empty `series: []` placeholders until after the first extract if needed.
+2. **Dynamic-ref pass** — list leaves that need domains to resolve `OFFSET` / `INDIRECT` / `INDEX` (`excel_grapher.list_dynamic_ref_constraint_candidates` against `TARGETS`), constrain them, and iterate until `--extract-graph` succeeds without `DynamicRefError`. That lister only covers dynamic-ref argument leaves; it will not enumerate every leaf that later appears in the finished graph.
+3. **Leaf-classification pass** — after a successful extract, constrain every remaining unconstrained graph leaf (`graph.leaf_keys()` minus `CONSTRAINTS`) so each leaf classifies as `input` or `constant`. Every mutable input leaf must appear in `inputs.bindings.yaml`.
+4. Author I/O `bindings/*.bindings.yaml` (schema version `1.10.0`, one logical series per public API function or input/constant group). Empty `series: []` placeholders load (excel-grapher 5.1.4+); author real series before export.
 5. Bind every internal formula cell in `internals.bindings.yaml` (see [Authoring internals](#authoring-internals) below).
 
 Validation checks:
@@ -124,11 +124,11 @@ graph = create_dependency_graph(
 
 After manual review (onboarding step 5), run graph-oracle differential parity (step 6) before export.
 
-During graph build the pipeline also runs **internal binding derivation** and optional **internal binding coverage validation** (see below). Both run on `--extract-graph` and on the extract stage of a full pipeline run.
+`--extract-graph` builds the dependency graph and writes review artifacts only. **Internal binding derivation** and optional **internal binding coverage validation** run later during export (and any other call that uses `build_pipeline_graph` / `resolve_pipeline_bindings`), once series bindings are mergeable.
 
 #### Internal series bindings
 
-After the dependency graph is extracted and bindings are validated, the pipeline derives **internal series** for formula cells declared with `internal: {}` in `bindings/internals.bindings.yaml`. Each resolved cell carries `{address, key, record}` triangulation data used by the graph explorer and internals refactor. Effective dimension ids live in binding manifests and derived series records, not on graph node metadata.
+After bindings are validated (export / bindings-ready path), the pipeline derives **internal series** for formula cells declared with `internal: {}` in `bindings/internals.bindings.yaml`. Each resolved cell carries `{address, key, record}` triangulation data used by the graph explorer and internals refactor. Effective dimension ids live in binding manifests and derived series records, not on graph node metadata.
 
 #### Authoring internals
 
@@ -384,19 +384,19 @@ Open `http://localhost:8000/`.
 
 Ordered to match the [onboarding checklist](#clone-and-configure-onboarding-checklist):
 
-- [ ] **Ingest:** `data/workbook.xlsx` and `data/guide.md` populated; stale bindings, `dist/`, and `.cache/` cleared
+- [ ] **Ingest:** `data/workbook.xlsx` and `data/guide.md` populated; bindings reset to empty placeholders (or removed); `dist/` and `.cache/` cleared
 - [ ] **Audit:** Pre-extraction workbook audit reviewed (`uv run python -m src.workbook_audit`); blocking automation resolved
 - [ ] **Configure:** Outputs declared as extraction targets in `workbook_config.py`
-- [ ] **Configure:** `bindings/inputs.bindings.yaml` + `outputs.bindings.yaml` validated
-- [ ] **Configure:** Dynamic-ref constraint candidates constrained
-- [ ] **Configure:** All leaves classified; mutable leaves bound
+- [ ] **Configure:** Dynamic-ref constraint candidates constrained (`list_dynamic_ref_constraint_candidates`; graph builds without `DynamicRefError`)
+- [ ] **Extract:** Graph extracts with provenance (`--extract-graph`; empty `series: []` placeholders OK)
+- [ ] **Configure:** Remaining graph leaves constrained and classified; mutable leaves bound
+- [ ] **Configure:** `bindings/inputs.bindings.yaml` + `outputs.bindings.yaml` authored and validated
 - [ ] **Configure:** Internal binding exemptions reviewed (`INTERNAL_BINDING_EXEMPT_CELLS`)
 - [ ] **Configure:** `bindings/internals.bindings.yaml` covers internal formula cells
-- [ ] **Extract:** Graph extracts with provenance (`--extract-graph`)
 - [ ] **Review graph:** Manual completeness review done; optional LLM dependency audit passed (`pytest --run-skipped`)
 - [ ] **Verify graph:** Scenario matrix defined in `tests/differential/`; graph-oracle parity passes (`uv run python -m tests.differential.differential_test_graph`)
 - [ ] **Configure:** Internal binding coverage passes (`uv run pytest tests/test_internal_binding_coverage.py`)
-- [ ] **Export:** `dist/` package builds; semantic API scenario runs
+- [ ] **Export:** `dist/` package builds; semantic API scenario runs (bindings authored beyond empty placeholders)
 - [ ] **Export:** Validation bundle exported; exported-library differential parity passes (Windows Excel sweep when available)
 - [ ] **Document / refactor:** Public API uses domain language; docstrings present
 - [ ] **Document / refactor:** Internals refactored; parity re-confirmed after refactor passes

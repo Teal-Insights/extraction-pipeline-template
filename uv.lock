@@ -474,16 +474,16 @@ wheels = [
 
 [[package]]
 name = "excel-grapher"
-version = "3.19.0"
+version = "5.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastpyxl" },
     { name = "jsonschema" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/a4/9bc507500183328c80a3c37d7bdb065f2de0447dd23a3e70c936a6e51772/excel_grapher-3.19.0.tar.gz", hash = "sha256:410dd889e17f373802e7d1c46e79661621703fb4173edf6faff1244b537c8981", size = 599636, upload-time = "2026-07-21T15:57:37.589Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/fa/2851ae21ad768921539cf809e3dddae84ea43eafed474a6a2650a59fda90/excel_grapher-5.1.4.tar.gz", hash = "sha256:e0dbdec150087a9c66a34487ba3b3c0f3e58153ffcb5dbb0132d1c10d742853f", size = 5815056, upload-time = "2026-08-08T20:45:53.461Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/ce/9b97fe99dac6dcd1e0431f3622635fcb3ec65cca78f321a752f9f09bff7c/excel_grapher-3.19.0-py3-none-any.whl", hash = "sha256:d70ff666791711d471e312b8de47b3dc586a8751fbab750128d20d4ae6d4d0e1", size = 367694, upload-time = "2026-07-21T15:57:35.951Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/4b/a618e0fe6edc7be5ae48414723e79454ae98b0110470db51eb3fa4d2f599/excel_grapher-5.1.4-py3-none-any.whl", hash = "sha256:5b3be069f579c2601e662beb48749c7328ac0f2167740db3bd0e34993714e9cb", size = 390829, upload-time = "2026-08-08T20:45:52.029Z" },
 ]
 
 [[package]]
@@ -526,7 +526,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "excel-grapher", specifier = ">=3.19.0" },
+    { name = "excel-grapher", specifier = ">=5.1.4" },
     { name = "openai", specifier = ">=2.38.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
