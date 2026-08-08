@@ -4,13 +4,13 @@ Author `inputs.bindings.yaml`, `outputs.bindings.yaml`, and `internals.bindings.
 
 Bootstrap extract (`--extract-graph` / `--stop-after-stage extract`) is graph-first: empty `series: []` placeholder shards are fine so you can review `artifacts/dependency-graph/` before bindings exist. excel-grapher 5.1.4+ also loads and merges those placeholders (including divergent `concept_scheme` blocks). Author real series before export so the public API and leaf coverage are complete.
 
-Use schema version `1.10.0` and the prompt in [templates/binding-authoring-prompt.txt](../templates/binding-authoring-prompt.txt). Prefer authoring from an extracted graph rather than guessing sheet geometry up front.
+Use schema version `1.13.0` and the prompt in [templates/binding-authoring-prompt.txt](../templates/binding-authoring-prompt.txt). Prefer authoring from an extracted graph rather than guessing sheet geometry up front.
 
 ## Output compute helpers
 
 When an internals helper covers a published output series' leaves, declare
 `output.compute.helper` so generated `compute_*` calls the helper from record
-dims instead of `xl_cell(address)` (excel-grapher schema 1.10.0):
+dims instead of `xl_cell(address)` (excel-grapher schema 1.13.0):
 
 ```yaml
 output:
