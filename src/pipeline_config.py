@@ -368,8 +368,8 @@ def validate_pipeline_config(config: PipelineConfig) -> None:
     if not config.bindings_path.is_dir():
         missing.append(f"bindings directory: {config.bindings_path}")
     # Binding YAML shards may be absent or empty ``series: []`` placeholders during
-    # bootstrap extract; export / ``build_pipeline_graph`` still require mergeable
-    # documents and fail loudly when they are incomplete.
+    # bootstrap extract. excel-grapher 5.1.4+ loads empty placeholders; author real
+    # series before export so the public API and leaf coverage are complete.
     if not config.targets:
         missing.append("workbook_config.TARGETS (at least one extraction target)")
     if not config.constraints:

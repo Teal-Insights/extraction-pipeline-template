@@ -75,7 +75,7 @@ flowchart LR
 1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `CONSTRAINTS`, and `DIST_METADATA`. Keep `bindings/*.bindings.yaml` as empty `series: []` placeholders until after the first extract if needed.
 2. **Dynamic-ref pass** — list leaves that need domains to resolve `OFFSET` / `INDIRECT` / `INDEX` (`excel_grapher.list_dynamic_ref_constraint_candidates` against `TARGETS`), constrain them, and iterate until `--extract-graph` succeeds without `DynamicRefError`. That lister only covers dynamic-ref argument leaves; it will not enumerate every leaf that later appears in the finished graph.
 3. **Leaf-classification pass** — after a successful extract, constrain every remaining unconstrained graph leaf (`graph.leaf_keys()` minus `CONSTRAINTS`) so each leaf classifies as `input` or `constant`. Every mutable input leaf must appear in `inputs.bindings.yaml`.
-4. Author I/O `bindings/*.bindings.yaml` (schema version `1.10.0`, one logical series per public API function or input/constant group). Export requires mergeable non-empty shards.
+4. Author I/O `bindings/*.bindings.yaml` (schema version `1.10.0`, one logical series per public API function or input/constant group). Empty `series: []` placeholders load (excel-grapher 5.1.4+); author real series before export.
 5. Bind every internal formula cell in `internals.bindings.yaml` (see [Authoring internals](#authoring-internals) below).
 
 Validation checks:
@@ -396,7 +396,7 @@ Ordered to match the [onboarding checklist](#clone-and-configure-onboarding-chec
 - [ ] **Review graph:** Manual completeness review done; optional LLM dependency audit passed (`pytest --run-skipped`)
 - [ ] **Verify graph:** Scenario matrix defined in `tests/differential/`; graph-oracle parity passes (`uv run python -m tests.differential.differential_test_graph`)
 - [ ] **Configure:** Internal binding coverage passes (`uv run pytest tests/test_internal_binding_coverage.py`)
-- [ ] **Export:** `dist/` package builds; semantic API scenario runs (export fails loudly if bindings are still incomplete)
+- [ ] **Export:** `dist/` package builds; semantic API scenario runs (bindings authored beyond empty placeholders)
 - [ ] **Export:** Validation bundle exported; exported-library differential parity passes (Windows Excel sweep when available)
 - [ ] **Document / refactor:** Public API uses domain language; docstrings present
 - [ ] **Document / refactor:** Internals refactored; parity re-confirmed after refactor passes

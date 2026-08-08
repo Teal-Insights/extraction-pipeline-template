@@ -210,10 +210,26 @@ def _select_visible_dependencies(
     return selected[:child_limit]
 
 
-def _format_provenance(causes: frozenset[DependencyCause]) -> str:
+def _node_formula(node: object | None) -> str | None:
+    """Return display formula text: raw if stored, else normalized."""
+    if node is None:
+        return None
+    raw = getattr(node, "formula", None)
+    if isinstance(raw, str) and raw:
+        return raw
+    normalized = getattr(node, "normalized_formula", None)
+    return normalized if isinstance(normalized, str) and normalized else None
+
+
+def _format_provenance(causes: DependencyCause) -> str:
     if not causes:
         return "none"
-    return ",".join(sorted(cause.value for cause in causes))
+    return ",".join(sorted(flag.name for flag in causes if flag.name is not None))
+
+
+_DYNAMIC_DEPENDENCY_CAUSES = (
+    DependencyCause.dynamic_offset | DependencyCause.dynamic_indirect
+)
 
 
 def _node_role(
@@ -232,7 +248,7 @@ def _node_role(
     node = graph.get_node(key)
     if node is None:
         return "missing"
-    if node.formula:
+    if _node_formula(node):
         return "formula"
     if leaf_classification is not None:
         kind = leaf_classification.get(key)
@@ -254,18 +270,7 @@ def case_difficulty_score(
         if edge.guard is not None:
             dynamic_or_guarded += 1
         provenance = edge.provenance
-        if (
-            provenance is not None
-            and provenance.causes
-            and any(
-                cause
-                in {
-                    DependencyCause.dynamic_offset,
-                    DependencyCause.dynamic_indirect,
-                }
-                for cause in provenance.causes
-            )
-        ):
+        if provenance is not None and provenance.causes & _DYNAMIC_DEPENDENCY_CAUSES:
             dynamic_or_guarded += 1
         if _sheet_name(dependency) != parent_sheet:
             cross_sheet.add(_sheet_name(dependency))
@@ -283,7 +288,7 @@ def validate_audit_cases(
         if node is None:
             missing.append(case.parent_key)
             continue
-        if node.formula is None:
+        if _node_formula(node) is None:
             non_formula.append(case.parent_key)
     if missing:
         raise ValueError(f"audit parent cells missing from graph: {missing}")
@@ -362,14 +367,15 @@ def collect_parent_audit_evidence(
     parent = graph.get_node(parent_key)
     if parent is None:
         raise KeyError(f"parent cell not found in graph: {case.parent_key}")
-    if parent.formula is None:
+    parent_formula = _node_formula(parent)
+    if parent_formula is None:
         raise ValueError(f"parent cell is not a formula node: {case.parent_key}")
 
     dependencies = sorted(graph.get_dependencies(parent_key))
     visible_dependencies = _select_visible_dependencies(
         dependencies,
         child_limit=child_limit,
-        parent_formula=parent.formula,
+        parent_formula=parent_formula,
         parent_sheet=_sheet_name(parent_key),
     )
     records: list[DirectDependencyRecord] = []
@@ -386,13 +392,13 @@ def collect_parent_audit_evidence(
                     leaf_classification=leaf_classification,
                 ),
                 formula=_truncate_text(
-                    child.formula if child is not None else None,
+                    _node_formula(child),
                     max_length=formula_limit,
                 ),
                 value=child.value if child is not None else None,
                 guard=str(edge.guard) if edge.guard is not None else None,
                 provenance=_format_provenance(
-                    provenance.causes if provenance is not None else frozenset()
+                    provenance.causes if provenance is not None else DependencyCause(0)
                 ),
             )
         )
@@ -400,7 +406,7 @@ def collect_parent_audit_evidence(
     return ParentAuditEvidence(
         case=case,
         parent_key=parent_key,
-        parent_formula=_truncate_text(parent.formula, max_length=formula_limit),
+        parent_formula=_truncate_text(parent_formula, max_length=formula_limit),
         parent_normalized_formula=_truncate_text(
             parent.normalized_formula,
             max_length=formula_limit,
@@ -412,7 +418,7 @@ def collect_parent_audit_evidence(
             0, len(dependencies) - len(visible_dependencies)
         ),
         parent_formula_truncated=_text_was_truncated(
-            parent.formula,
+            parent_formula,
             max_length=formula_limit,
         ),
     )

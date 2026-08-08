@@ -5,9 +5,6 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-from excel_grapher.series_bindings.load import SeriesBindingsLoadError
-
 from src.extraction_pipeline import (
     build_pipeline_graph,
     count_provenance_edges,
@@ -101,11 +98,11 @@ def test_extract_dependency_graph_succeeds_with_empty_binding_shards(
     assert len(result.graph) == 6
 
 
-def test_build_pipeline_graph_rejects_empty_binding_shards(
+def test_build_pipeline_graph_accepts_empty_binding_shards(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
-    """Bindings-ready paths (export / full stack) still fail on empty placeholders."""
+    """excel-grapher 5.1.4+ loads empty ``series: []`` placeholders (unioned schemes)."""
     bindings = tmp_path / "bindings"
     _write_empty_placeholder_bindings(bindings)
     config = replace(
@@ -114,8 +111,14 @@ def test_build_pipeline_graph_rejects_empty_binding_shards(
         graph_output_dir=tmp_path / "dependency-graph",
     )
 
-    with pytest.raises(SeriesBindingsLoadError, match="non-empty series list"):
-        build_pipeline_graph(config)
+    result = build_pipeline_graph(config)
+
+    assert result.series_bindings["series"] == []
+    assert result.input_series == []
+    assert result.output_series == []
+    assert result.internal_series == []
+    assert result.graph_cache_key
+    assert len(result.graph) == 6
 
 
 def test_extract_dependency_graph_succeeds_without_binding_yaml_files(

@@ -483,7 +483,7 @@ def build_cytoscape_preset_payload(
             "sheet": _node_sheet(key, graph),
             "role": role,
             "is_leaf": node.is_leaf,
-            "formula": node.formula,
+            "formula": node.formula or node.normalized_formula,
         }
         _attach_internal_binding_fields(
             data,
@@ -610,7 +610,7 @@ def build_cytoscape_structure_payload(
             "sheet": _node_sheet(key, graph),
             "role": role,
             "is_leaf": node.is_leaf,
-            "formula": node.formula,
+            "formula": node.formula or node.normalized_formula,
             "parent": cluster_node_id_by_sheet[_node_sheet(key, graph)],
         }
         _attach_internal_binding_fields(
