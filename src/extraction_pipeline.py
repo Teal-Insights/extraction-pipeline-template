@@ -601,7 +601,6 @@ def build_dependency_graph(
             workbook_path=config.workbook_path,
             targets=config.targets,
             constraints=config.constraints,
-            bindings_path=config.bindings_path,
             dynamic_refs=dynamic_ref_config,
             load_values=True,
             capture_dependency_provenance=True,
@@ -648,6 +647,7 @@ def resolve_pipeline_bindings(
             series_bindings,
             workbook_path=config.workbook_path,
             graph_cache_key=graph_cache_key,
+            bindings_path=config.bindings_path,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
         )
@@ -664,6 +664,7 @@ def resolve_pipeline_bindings(
             series_bindings,
             workbook_path=config.workbook_path,
             graph_cache_key=graph_cache_key,
+            bindings_path=config.bindings_path,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
         )
@@ -687,6 +688,7 @@ def resolve_pipeline_bindings(
             validation_mode=config.internal_binding_validation_mode,
             context="pipeline",
             graph_cache_key=graph_cache_key,
+            bindings_path=config.bindings_path,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
         )
@@ -880,6 +882,7 @@ def _generate_export_package(
 
     derived_key = series_derived_cache_key(
         graph_cache_key=graph_cache_key,
+        bindings_path=config.bindings_path,
         validation_mode=config.internal_binding_validation_mode,
         exempt_cells=config.internal_binding_exempt_cells,
     )

@@ -647,6 +647,7 @@ def test_run_refactor_stage_uses_cluster_cache(
     )
     derived_key = series_derived_cache_key(
         graph_cache_key=graph_result.graph_cache_key,
+        bindings_path=synthetic_config.bindings_path,
         validation_mode=synthetic_config.internal_binding_validation_mode,
         exempt_cells=synthetic_config.internal_binding_exempt_cells,
     )
@@ -700,6 +701,7 @@ def test_run_refactor_stage_no_cache_bypasses_cluster_cache(
     )
     derived_key = series_derived_cache_key(
         graph_cache_key=graph_result.graph_cache_key,
+        bindings_path=synthetic_config.bindings_path,
         validation_mode=synthetic_config.internal_binding_validation_mode,
         exempt_cells=synthetic_config.internal_binding_exempt_cells,
     )
