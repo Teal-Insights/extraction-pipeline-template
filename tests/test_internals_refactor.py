@@ -85,20 +85,11 @@ from src.llm_json import (
 )
 from src.refactor_bindings import BindingKeyValue, KeyConceptSpec
 from src.refactor_parity_gate import ParityError
-from src.workbook_addresses import ProjectionColumnLayout
 
 ALLOWED_RUNTIME_SYMBOLS = (
     "XlError",
     "xl_cell",
     "xl_eval",
-)
-
-TEST_LAYOUT = ProjectionColumnLayout(
-    engine_sheet="Engine",
-    engine_columns=("C", "D"),
-    outputs_sheet="Outputs",
-    outputs_column_to_engine={},
-    time_period_to_engine_column={1: "C", 2: "D"},
 )
 
 RUNTIME_IMPORT = """from __future__ import annotations
@@ -976,16 +967,12 @@ def test_prompt_for_refactor_lists_allowed_runtime_symbols() -> None:
 
 
 def test_validate_cluster_accepts_well_formed_response() -> None:
-    with patch(
-        "src.internals_refactor._resolved_projection_layout",
-        return_value=TEST_LAYOUT,
-    ):
-        validate_cluster_refactor_response(
-            CLUSTER_CONTEXT,
-            _cluster_response(),
-            existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
-            internals_source=PRISTINE_CLUSTER,
-        )
+    validate_cluster_refactor_response(
+        CLUSTER_CONTEXT,
+        _cluster_response(),
+        existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+        internals_source=PRISTINE_CLUSTER,
+    )
 
 
 _INDEX_REF_HINT = "xl_index_ref expects a geometry tuple"
@@ -1068,13 +1055,7 @@ def test_validate_cluster_rejects_xl_index_ref_of_xl_range() -> None:
     data_range = xl_range(ctx, f"Inputs!A{{time_period}}:B10")
     return xl_offset(ctx, xl_index_ref(data_range, 1.0, 1.0), 0.0, 0.0)
 '''
-    with (
-        patch(
-            "src.internals_refactor._resolved_projection_layout",
-            return_value=TEST_LAYOUT,
-        ),
-        pytest.raises(ValueError, match=_INDEX_REF_HINT) as exc_info,
-    ):
+    with pytest.raises(ValueError, match=_INDEX_REF_HINT) as exc_info:
         validate_cluster_refactor_response(
             ctx,
             _cluster_response(helper_source=bad_source),
@@ -1086,22 +1067,18 @@ def test_validate_cluster_rejects_xl_index_ref_of_xl_range() -> None:
 
 def test_validate_cluster_allows_locked_helper_name_already_in_internals() -> None:
     """Re-applying the schedule-allocated helper must not look like a foreign collision."""
-    with patch(
-        "src.internals_refactor._resolved_projection_layout",
-        return_value=TEST_LAYOUT,
-    ):
-        validate_cluster_refactor_response(
-            CLUSTER_CONTEXT,
-            _cluster_response(),
-            existing_names=frozenset(
-                {
-                    "cell_engine_c6",
-                    "cell_engine_d6",
-                    CLUSTER_CONTEXT.expected_helper_name,
-                }
-            ),
-            internals_source=PRISTINE_CLUSTER,
-        )
+    validate_cluster_refactor_response(
+        CLUSTER_CONTEXT,
+        _cluster_response(),
+        existing_names=frozenset(
+            {
+                "cell_engine_c6",
+                "cell_engine_d6",
+                CLUSTER_CONTEXT.expected_helper_name,
+            }
+        ),
+        internals_source=PRISTINE_CLUSTER,
+    )
 
 
 def test_validate_refactored_internals_rejects_duplicate_top_level_defs() -> None:
@@ -1159,20 +1136,6 @@ def test_insert_helper_source_rejects_existing_helper_name() -> None:
         insert_helper_source(source, helper)
 
 
-def test_validate_cluster_skips_engine_column_check_without_projection_layout() -> None:
-    """Bindings already triangulate members; layout mapping is optional."""
-    with patch(
-        "src.internals_refactor._resolved_projection_layout",
-        return_value=None,
-    ):
-        validate_cluster_refactor_response(
-            CLUSTER_CONTEXT,
-            _cluster_response(),
-            existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
-            internals_source=PRISTINE_CLUSTER,
-        )
-
-
 def test_validate_cluster_rejects_duplicate_member_key_combinations() -> None:
     duplicate_member_keys = (
         CLUSTER_MEMBER_KEYS[0],
@@ -1182,13 +1145,7 @@ def test_validate_cluster_rejects_duplicate_member_key_combinations() -> None:
             keys=(MemberKeyEntry(dimension_id="TIME_PERIOD", value=1),),
         ),
     )
-    with (
-        patch(
-            "src.internals_refactor._resolved_projection_layout",
-            return_value=TEST_LAYOUT,
-        ),
-        pytest.raises(ValueError, match="unique key combination"),
-    ):
+    with pytest.raises(ValueError, match="unique key combination"):
         validate_cluster_refactor_response(
             CLUSTER_CONTEXT,
             _cluster_response(member_keys=duplicate_member_keys),
@@ -1215,13 +1172,7 @@ def test_validate_cluster_rejects_helper_that_cannot_serve_a_member_key() -> Non
     column = columns[time_period]
     return xl_cell(ctx, f'Inputs!{{column}}1')
 '''
-    with (
-        patch(
-            "src.internals_refactor._resolved_projection_layout",
-            return_value=TEST_LAYOUT,
-        ),
-        pytest.raises(ValueError, match="cannot serve member keys"),
-    ):
+    with pytest.raises(ValueError, match="cannot serve member keys"):
         validate_cluster_refactor_response(
             CLUSTER_CONTEXT,
             _cluster_response(helper_source=helper_source),
@@ -1237,13 +1188,7 @@ def test_validate_cluster_rejects_key_dispatch_chain_missing_a_member_key() -> N
         return xl_cell(ctx, 'Inputs!C1')
     raise ValueError(time_period)
 '''
-    with (
-        patch(
-            "src.internals_refactor._resolved_projection_layout",
-            return_value=TEST_LAYOUT,
-        ),
-        pytest.raises(ValueError, match="cannot serve member keys"),
-    ):
+    with pytest.raises(ValueError, match="cannot serve member keys"):
         validate_cluster_refactor_response(
             CLUSTER_CONTEXT,
             _cluster_response(helper_source=helper_source),
@@ -1262,16 +1207,12 @@ def test_validate_cluster_accepts_member_key_handled_by_a_guard_branch() -> None
     column = columns[time_period]
     return xl_cell(ctx, f'Inputs!{{column}}1')
 '''
-    with patch(
-        "src.internals_refactor._resolved_projection_layout",
-        return_value=TEST_LAYOUT,
-    ):
-        validate_cluster_refactor_response(
-            CLUSTER_CONTEXT,
-            _cluster_response(helper_source=helper_source),
-            existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
-            internals_source=PRISTINE_CLUSTER,
-        )
+    validate_cluster_refactor_response(
+        CLUSTER_CONTEXT,
+        _cluster_response(helper_source=helper_source),
+        existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+        internals_source=PRISTINE_CLUSTER,
+    )
 
 
 def test_validate_cluster_accepts_eval_context_type_hint() -> None:
@@ -1281,16 +1222,12 @@ def test_validate_cluster_accepts_eval_context_type_hint() -> None:
     column = columns[time_period]
     return xl_cell(ctx, f'Inputs!{{column}}1')
 '''
-    with patch(
-        "src.internals_refactor._resolved_projection_layout",
-        return_value=TEST_LAYOUT,
-    ):
-        validate_cluster_refactor_response(
-            CLUSTER_CONTEXT,
-            _cluster_response(helper_source=helper_source),
-            existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
-            internals_source=PRISTINE_CLUSTER,
-        )
+    validate_cluster_refactor_response(
+        CLUSTER_CONTEXT,
+        _cluster_response(helper_source=helper_source),
+        existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+        internals_source=PRISTINE_CLUSTER,
+    )
 
 
 def test_validate_cluster_rejects_wrong_parameter_name() -> None:
@@ -1414,13 +1351,7 @@ def test_validate_cluster_allowlist_excludes_cell_star_names() -> None:
     """{CLUSTER_DOCSTRING}"""
     return mystery_helper(ctx)
 '''
-    with (
-        patch(
-            "src.internals_refactor._resolved_projection_layout",
-            return_value=TEST_LAYOUT,
-        ),
-        pytest.raises(ValueError, match="disallowed function") as exc_info,
-    ):
+    with pytest.raises(ValueError, match="disallowed function") as exc_info:
         validate_cluster_refactor_response(
             ctx,
             _cluster_response(helper_source=bad_source),
@@ -3447,15 +3378,6 @@ def test_llm_refactor_singleton_multi_attempt_failure_dumps_full_history(
 
 # --- Dual cluster-refactor contracts (issue #74) ---
 
-DUAL_PERIOD_LAYOUT = ProjectionColumnLayout(
-    engine_sheet="Engine",
-    engine_columns=("C", "D"),
-    outputs_sheet="Outputs",
-    outputs_column_to_engine={},
-    time_period_to_engine_column={1: "C", 2: "D"},
-    projection_dimension_id="PROJECTION_PERIOD",
-)
-
 DUAL_PERIOD_VOCABULARY = (
     KeyConceptSpec(
         dimension_id="PROJECTION_PERIOD",
@@ -3543,16 +3465,12 @@ def _dimension_aware_response(
 
 def test_validate_dimension_aware_accepts_counterpart_parameters() -> None:
     """Contract B accepts two parameters sharing one concept via distinct ids."""
-    with patch(
-        "src.internals_refactor._resolved_projection_layout",
-        return_value=DUAL_PERIOD_LAYOUT,
-    ):
-        validate_cluster_refactor_response(
-            DUAL_PERIOD_CONTEXT,
-            _dimension_aware_response(),
-            existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
-            internals_source=PRISTINE_CLUSTER,
-        )
+    validate_cluster_refactor_response(
+        DUAL_PERIOD_CONTEXT,
+        _dimension_aware_response(),
+        existing_names=frozenset({"cell_engine_c6", "cell_engine_d6"}),
+        internals_source=PRISTINE_CLUSTER,
+    )
 
 
 def test_validate_dimension_aware_rejects_collapsed_concept_parameter() -> None:
@@ -3569,13 +3487,7 @@ def test_validate_dimension_aware_rejects_collapsed_concept_parameter() -> None:
             keys=(MemberKeyEntry(dimension_id="PROJECTION_PERIOD", value=2),),
         ),
     )
-    with (
-        patch(
-            "src.internals_refactor._resolved_projection_layout",
-            return_value=DUAL_PERIOD_LAYOUT,
-        ),
-        pytest.raises(ValueError, match="collapses distinct dimensions"),
-    ):
+    with pytest.raises(ValueError, match="collapses distinct dimensions"):
         validate_cluster_refactor_response(
             DUAL_PERIOD_CONTEXT,
             _dimension_aware_response(
@@ -3630,14 +3542,8 @@ def test_validate_member_sweep_rejects_invented_counterpart_parameter() -> None:
             dtype="str",
         ),
     )
-    with (
-        patch(
-            "src.internals_refactor._resolved_projection_layout",
-            return_value=TEST_LAYOUT,
-        ),
-        pytest.raises(
-            ValueError, match="parameters must match varying binding key dimensions"
-        ),
+    with pytest.raises(
+        ValueError, match="parameters must match varying binding key dimensions"
     ):
         validate_cluster_refactor_response(
             ctx,
@@ -4314,11 +4220,6 @@ def test_llm_refactor_cluster_uses_shared_index_without_rereads(
     monkeypatch.setattr(module, "_refactor_provider_key_present", lambda: True)
     monkeypatch.setattr(module, "refactor_model", lambda: "test-model")
     monkeypatch.setattr(module, "build_client", lambda _model: (object(), object()))
-    monkeypatch.setattr(
-        module,
-        "_resolved_projection_layout",
-        lambda layout=None: DUAL_PERIOD_LAYOUT,
-    )
     _guard_internals_path_reads(monkeypatch, internals_path)
     with _block_internals_index_from_source():
         response = llm_refactor_cluster(
@@ -5495,11 +5396,6 @@ def test_llm_refactor_cluster_uses_dimension_aware_prompt(
         "build_cluster_refactor_prompt_context",
         lambda *_args, **_kwargs: "context",
     )
-    monkeypatch.setattr(
-        module,
-        "_resolved_projection_layout",
-        lambda layout=None: DUAL_PERIOD_LAYOUT,
-    )
 
     response = llm_refactor_cluster(DUAL_PERIOD_CONTEXT, internals_path=internals_path)
 
@@ -6138,7 +6034,6 @@ def test_build_cluster_refactor_prompt_context_uses_fingerprint_for_large_cluste
         expected_member_keys=expected_member_keys,
         bound_address_keys=bound_keys,
         workbook_path=None,
-        layout=None,
     )
     assert summary.fallback_reason is None
     internals_path = tmp_path / "internals.py"

@@ -76,7 +76,6 @@ def test_cluster_graph_formulas_finds_parallel_outputs_row(
         bound_address_keys=synthetic_bound_address_keys,
         clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
-        layout=synthetic_pipeline_config_fixture.projection_layout,
     )
     parallel = next(
         cluster
@@ -96,7 +95,6 @@ def test_compute_cluster_refactor_order_respects_dependencies(
         bound_address_keys=synthetic_bound_address_keys,
         clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
-        layout=synthetic_pipeline_config_fixture.projection_layout,
     )
     ordered = compute_cluster_refactor_order(synthetic_projection, clusters)
 
@@ -149,7 +147,6 @@ def test_compute_cluster_refactor_order_includes_all_eligible_clusters(
         bound_address_keys=synthetic_bound_address_keys,
         clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
-        layout=synthetic_pipeline_config_fixture.projection_layout,
     )
     eligible = [cluster for cluster in clusters if cluster.members]
     ordered = compute_cluster_refactor_order(synthetic_projection, clusters)
@@ -167,7 +164,6 @@ def test_compute_refactor_schedule_dag_matches_cluster_order(
         bound_address_keys=synthetic_bound_address_keys,
         clustering_mode="ast",
         workbook_path=synthetic_pipeline_config_fixture.workbook_path,
-        layout=synthetic_pipeline_config_fixture.projection_layout,
     )
     ordered_clusters = compute_cluster_refactor_order(synthetic_projection, clusters)
     units = compute_refactor_schedule(synthetic_projection, clusters)
