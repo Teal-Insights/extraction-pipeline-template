@@ -893,7 +893,10 @@ def test_binding_guidance_documents_constant_direction() -> None:
 
     assert "non_leaf_constant_overlap" in bindings_readme
     assert "bind.kind: constant" in bindings_readme
-    assert "derive_constant_series" in pipeline_readme or "derive_constant_series" in prompt
+    assert (
+        "derive_constant_series" in pipeline_readme
+        or "derive_constant_series" in prompt
+    )
 
 
 def test_binding_resolution_audit_directions_include_constant() -> None:
