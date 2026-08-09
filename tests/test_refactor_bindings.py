@@ -49,7 +49,7 @@ def test_load_key_concept_vocabulary_falls_back_to_concept_when_id_omitted(
     bindings.mkdir()
     (bindings / "internals.bindings.yaml").write_text(
         """
-schema_version: 1.10.0
+schema_version: 1.13.0
 workbook: workbook.xlsx
 concept_scheme:
   id: legacy
