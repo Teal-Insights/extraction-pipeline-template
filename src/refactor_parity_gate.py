@@ -69,8 +69,6 @@ _MAX_REPORTED_MISMATCHES = 10
 _BATCHED_PROGRESS_EVERY_CHECKS = 5_000
 _BATCHED_PROGRESS_EVERY_SECONDS = 30.0
 
-repo_root = Path(__file__).resolve().parents[1]
-
 
 def _resolved_package_root(package_root: Path) -> str:
     return str(package_root.resolve())
@@ -78,14 +76,6 @@ def _resolved_package_root(package_root: Path) -> str:
 
 def _runtime_path(package_root: Path) -> Path:
     return Path(_resolved_package_root(package_root)) / "runtime.py"
-
-
-def _readers_path(package_root: Path) -> Path:
-    return Path(_resolved_package_root(package_root)) / "_readers.py"
-
-
-def _data_path(package_root: Path) -> Path:
-    return Path(_resolved_package_root(package_root)) / "data.py"
 
 
 InputVector = Mapping[str, Any]

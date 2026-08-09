@@ -33,11 +33,6 @@ def dimension_id_to_param_name(dimension_id: str) -> str:
     return dimension_id.lower()
 
 
-def concept_to_param_name(concept: str) -> str:
-    """Backward-compatible alias; prefer ``dimension_id_to_param_name``."""
-    return dimension_id_to_param_name(concept)
-
-
 def resolve_dimension_key(
     name: str,
     vocabulary: Sequence[KeyConceptSpec],
@@ -129,13 +124,6 @@ def build_bound_address_keys(
             for cell in series["cells"]:
                 index[str(cell["address"])] = _coerce_binding_keys(cell["key"])
     return index
-
-
-def internal_series_cell_owners(
-    internal_series: Sequence[Mapping[str, Any]],
-) -> dict[str, tuple[str, ...]]:
-    """Map each internal-series cell address to the series ids that claim it."""
-    return series_cell_owners(internal_series)
 
 
 def series_cell_owners(

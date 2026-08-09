@@ -79,7 +79,6 @@ from src.refactor_return_types import (
     merge_callee_return_hints,
     merge_callee_return_hints_from_functions,
     normalize_return_type_hint_for_allowlist,
-    validate_scalar_return_type_hint,
 )
 from src.runtime_symbols import (
     allowed_runtime_module_symbols,
@@ -280,16 +279,6 @@ def _emit_pass1_unit_timing(timing: Pass1UnitTiming) -> None:
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     with jsonl_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(timing.as_log_fields(), sort_keys=True) + "\n")
-
-
-def fingerprint_fallback_count() -> int:
-    """Return how many clusters fell back to the legacy sampled dump this process."""
-    return _FINGERPRINT_FALLBACK_COUNT
-
-
-def reset_fingerprint_fallback_count() -> None:
-    global _FINGERPRINT_FALLBACK_COUNT
-    _FINGERPRINT_FALLBACK_COUNT = 0
 
 
 def _record_fingerprint_fallback(reason: str, *, cluster_id: int) -> None:
@@ -1119,10 +1108,6 @@ def _binding_hints_for_address(
             "record": binding.record,
         }
     )
-
-
-def _default_source_graph() -> DependencyGraph | None:
-    return None
 
 
 def _default_key_vocabulary(bindings_path: Path) -> tuple[KeyConceptSpec, ...]:
@@ -2545,17 +2530,6 @@ def inject_signature_return_type_hint(signature: str, return_hint: str) -> str:
     return f"{without_return} -> {return_hint}:"
 
 
-def validate_singleton_return_type_hint(hint: str) -> None:
-    validate_scalar_return_type_hint(hint)
-
-
-def _parse_symbol_name_from_signature(signature: str) -> str:
-    match = re.match(r"def\s+(\w+)\s*\(", signature.strip())
-    if match is None:
-        raise ValueError(f"invalid function signature: {signature!r}")
-    return match.group(1)
-
-
 def build_locked_helper_signature(
     helper_name: str,
     *,
@@ -3072,23 +3046,6 @@ def _yaml_scalar(value: object) -> str:
             return json.dumps(value)
         return value
     return str(value)
-
-
-def _format_label_group_yaml(labels: object) -> list[str]:
-    if not isinstance(labels, list) or not labels:
-        return ["[]"]
-    lines: list[str] = []
-    for item in labels:
-        if not isinstance(item, Mapping):
-            continue
-        label = item.get("label")
-        if label is None:
-            continue
-        lines.append(f"  - label: {_yaml_scalar(label)}")
-        concept = item.get("concept")
-        if concept is not None:
-            lines.append(f"    concept: {concept}")
-    return lines if lines else ["[]"]
 
 
 def _format_key_vocabulary_yaml(
@@ -3712,22 +3669,6 @@ def validate_singleton_refactor_response(
         )
 
     validate_allowed_global_references(symbol_def, allowed_names=allowed_names)
-
-
-def _replace_function_definition(
-    source: str,
-    old_name: str,
-    new_source: str,
-    *,
-    module: ast.Module | None = None,
-) -> str:
-    tree = module if module is not None else ast.parse(source)
-    span = _function_def_char_span(source, tree, old_name)
-    if span is None:
-        raise KeyError(f"Function {old_name!r} not found")
-    start, end = span
-    replacement = new_source.strip() + "\n\n"
-    return source[:start] + replacement + source[end:]
 
 
 def _unify_peel_split_entrypoints(
@@ -7448,13 +7389,3 @@ def _function_names(
     return frozenset(
         node.name for node in module.body if isinstance(node, ast.FunctionDef)
     )
-
-
-def _collect_assigned_and_loaded_names(function_def: ast.FunctionDef) -> set[str]:
-    names: set[str] = set()
-    for node in ast.walk(function_def):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            names.add(node.id)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            names.add(node.id)
-    return names
