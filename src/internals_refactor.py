@@ -4120,13 +4120,13 @@ def _parse_thin_helper_return(
     return None
 
 
-_ENGINE_ADDRESS_PATTERN = re.compile(
+_SHEET_ADDRESS_PATTERN = re.compile(
     r"^(?P<sheet>.+!)(?P<column>[A-Za-z]+)(?P<row>\d+)$"
 )
 
 
 def _column_address_template(address: str) -> str:
-    match = _ENGINE_ADDRESS_PATTERN.match(address)
+    match = _SHEET_ADDRESS_PATTERN.match(address)
     if match is None:
         return address
     return f"{match.group('sheet')}{{col}}{match.group('row')}"
@@ -4248,7 +4248,7 @@ def _address_in_docstring_range(docstring: str, address: str) -> bool:
         return False
     if address.replace("$", "") in covered:
         return True
-    match = _ENGINE_ADDRESS_PATTERN.match(address)
+    match = _SHEET_ADDRESS_PATTERN.match(address)
     if match is None:
         return False
     sheet = match.group("sheet")
@@ -4952,13 +4952,6 @@ def insert_helper_source(source: str, helper_source: str) -> str:
     return source[:insert_at] + helper_source + "\n\n" + source[insert_at:]
 
 
-def _engine_row_from_address(address: str) -> int:
-    match = re.search(r"\d+", address.split("!", 1)[1])
-    if match is None:
-        raise ValueError(f"Cannot parse engine row from address {address!r}")
-    return int(match.group())
-
-
 def _xl_eval_address_arg(node: ast.Call) -> str | None:
     if len(node.args) < 2:
         return None
@@ -5000,8 +4993,7 @@ def _xl_eval_matches_collapse(
     if address_pattern == binding.address:
         return callee_function == binding.function_name
 
-    row = _engine_row_from_address(binding.address)
-    if address_pattern == f"Engine!{{col}}{row}":
+    if address_pattern == _column_address_template(binding.address):
         return callee_function == binding.function_name
     return False
 
