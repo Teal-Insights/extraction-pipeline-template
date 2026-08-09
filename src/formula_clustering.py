@@ -26,7 +26,7 @@ from excel_grapher.grapher.graph import DependencyGraph
 
 from src.refactor_bindings import BindingKeyValue, expected_keys_for_address
 from src.refactor_types import ClusteringMode, VariationMode
-from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
+from src.workbook_addresses import parse_workbook_address
 
 type ClusterableGraph = DependencyGraph | ProjectionResult
 
@@ -116,7 +116,6 @@ def _apply_variation_mode_splits(
     *,
     variation_mode: VariationMode,
     workbook_path: Path | None,
-    layout: ProjectionColumnLayout | None,
     key_cache: _ClusteringKeyCache | None,
 ) -> list[tuple[str, ...]]:
     ordered_members = tuple(sorted(members))
@@ -127,7 +126,6 @@ def _apply_variation_mode_splits(
                 formula_nodes,
                 bound_address_keys,
                 workbook_path=workbook_path,
-                layout=layout,
                 key_cache=key_cache,
             )
         )
@@ -138,7 +136,6 @@ def _apply_variation_mode_splits(
 class _ClusteringKeyCache:
     bound_address_keys: BoundAddressKeys
     workbook_path: Path | None = None
-    layout: ProjectionColumnLayout | None = None
     _concept_cache: dict[str, tuple[str, ...] | None] = field(
         default_factory=dict, repr=False
     )
@@ -161,7 +158,6 @@ class _ClusteringKeyCache:
                 formula,
                 bound_address_keys=self.bound_address_keys,
                 workbook_path=self.workbook_path,
-                layout=self.layout,
                 key_cache=self,
             )
         return self._fingerprint_cache[address]
@@ -181,8 +177,6 @@ class _ClusteringKeyCache:
             keys = expected_keys_for_address(
                 address,
                 bound_address_keys=self.bound_address_keys,
-                workbook_path=self.workbook_path,
-                layout=self.layout,
             )
             return tuple(sorted(keys))
         raw_keys = self.bound_address_keys.get(address)
@@ -195,8 +189,6 @@ class _ClusteringKeyCache:
             return expected_keys_for_address(
                 address,
                 bound_address_keys=self.bound_address_keys,
-                workbook_path=self.workbook_path,
-                layout=self.layout,
             )
         raw_keys = self.bound_address_keys.get(address)
         if raw_keys is None:
@@ -240,7 +232,6 @@ def _binding_key_concepts_for_address(
     bound_address_keys: BoundAddressKeys,
     *,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> tuple[str, ...] | None:
     if key_cache is not None:
@@ -249,8 +240,6 @@ def _binding_key_concepts_for_address(
         keys = expected_keys_for_address(
             address,
             bound_address_keys=bound_address_keys,
-            workbook_path=workbook_path,
-            layout=layout,
         )
         return tuple(sorted(keys))
     keys = bound_address_keys.get(address)
@@ -315,7 +304,6 @@ def _structural_tuple(
     *,
     bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> tuple:
     if isinstance(node, NumberNode):
@@ -334,7 +322,6 @@ def _structural_tuple(
             node.address,
             bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=key_cache,
         )
         if key_concepts is None:
@@ -350,14 +337,12 @@ def _structural_tuple(
             node.start,
             bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=key_cache,
         )
         end_keys = _binding_key_concepts_for_address(
             node.end,
             bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=key_cache,
         )
         if start_keys is None or end_keys is None:
@@ -378,7 +363,6 @@ def _structural_tuple(
                 refs,
                 bound_address_keys=bound_address_keys,
                 workbook_path=workbook_path,
-                layout=layout,
                 key_cache=key_cache,
             ),
         )
@@ -391,7 +375,6 @@ def _structural_tuple(
                 refs,
                 bound_address_keys=bound_address_keys,
                 workbook_path=workbook_path,
-                layout=layout,
                 key_cache=key_cache,
             ),
             _structural_tuple(
@@ -399,7 +382,6 @@ def _structural_tuple(
                 refs,
                 bound_address_keys=bound_address_keys,
                 workbook_path=workbook_path,
-                layout=layout,
                 key_cache=key_cache,
             ),
         )
@@ -413,7 +395,6 @@ def _structural_tuple(
                     refs,
                     bound_address_keys=bound_address_keys,
                     workbook_path=workbook_path,
-                    layout=layout,
                     key_cache=key_cache,
                 )
                 for arg in node.args
@@ -427,7 +408,6 @@ def _structural_fingerprint(
     *,
     bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> StructuralFingerprint | None:
     try:
@@ -441,7 +421,6 @@ def _structural_fingerprint(
             refs,
             bound_address_keys=bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=key_cache,
         ),
         tuple(refs),
@@ -465,7 +444,6 @@ def structural_fingerprint(
     *,
     bound_address_keys: BoundAddressKeys | None,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> StructuralFingerprint | None:
     """Return ``(skeleton, refs)`` with binding-aware ref placeholders."""
@@ -474,7 +452,6 @@ def structural_fingerprint(
         normalized_formula,
         bound_address_keys=resolved_bound_keys,
         workbook_path=workbook_path,
-        layout=layout,
         key_cache=key_cache,
     )
 
@@ -636,7 +613,6 @@ def _formulas_are_parameterizable(
     *,
     bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> bool:
     """Return whether two normalized formulas belong in the same parameterizable bucket."""
@@ -644,14 +620,12 @@ def _formulas_are_parameterizable(
         left_formula,
         bound_address_keys=bound_address_keys,
         workbook_path=workbook_path,
-        layout=layout,
         key_cache=key_cache,
     )
     right_fingerprint = _structural_fingerprint(
         right_formula,
         bound_address_keys=bound_address_keys,
         workbook_path=workbook_path,
-        layout=layout,
         key_cache=key_cache,
     )
     if left_fingerprint is None or right_fingerprint is None:
@@ -674,7 +648,6 @@ def formulas_are_parameterizable(
     *,
     bound_address_keys: BoundAddressKeys | None,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> bool:
     """Return whether two normalized formulas belong in the same parameterizable bucket."""
@@ -684,7 +657,6 @@ def formulas_are_parameterizable(
         right_formula,
         bound_address_keys=resolved_bound_keys,
         workbook_path=workbook_path,
-        layout=layout,
         key_cache=key_cache,
     )
 
@@ -695,7 +667,6 @@ def _should_cluster(
     *,
     bound_address_keys: BoundAddressKeys,
     workbook_path: Path | None,
-    layout: ProjectionColumnLayout | None,
     key_cache: _ClusteringKeyCache | None,
 ) -> bool:
     return _formulas_are_parameterizable(
@@ -703,7 +674,6 @@ def _should_cluster(
         right_formula,
         bound_address_keys=bound_address_keys,
         workbook_path=workbook_path,
-        layout=layout,
         key_cache=key_cache,
     )
 
@@ -728,7 +698,6 @@ def _ref_position_key_values(
     bound_address_keys: BoundAddressKeys,
     *,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> list[dict[str, BindingKeyValue]] | None:
     if key_cache is not None:
@@ -738,7 +707,6 @@ def _ref_position_key_values(
             formula,
             bound_address_keys=bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=None,
         )
     if fingerprint is None or not _binding_aware_fingerprint_complete(fingerprint):
@@ -756,8 +724,6 @@ def _ref_position_key_values(
             keys = expected_keys_for_address(
                 ref_address,
                 bound_address_keys=bound_address_keys,
-                workbook_path=workbook_path,
-                layout=layout,
             )
         else:
             raw_keys = bound_address_keys.get(ref_address)
@@ -828,7 +794,6 @@ def _dominant_varying_concepts_at_ref(
     ref_index: int,
     *,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> frozenset[str]:
     member_matrices = {
@@ -837,7 +802,6 @@ def _dominant_varying_concepts_at_ref(
             formula_nodes[member],
             bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=key_cache,
         )
         for member in members
@@ -853,7 +817,6 @@ def _dominant_key_for_ref(
     varying_concepts: frozenset[str],
     *,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> str | None:
     member_matrices = {
@@ -862,7 +825,6 @@ def _dominant_key_for_ref(
             formula_nodes[member],
             bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=key_cache,
         )
         for member in members
@@ -881,7 +843,6 @@ def _dominant_key_split_signature(
     varying_concepts: frozenset[str],
     *,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> tuple[BindingKeyValue, ...] | None:
     ref_values = _ref_position_key_values(
@@ -889,7 +850,6 @@ def _dominant_key_split_signature(
         formula_nodes[member],
         bound_address_keys,
         workbook_path=workbook_path,
-        layout=layout,
         key_cache=key_cache,
     )
     if ref_values is None or ref_index >= len(ref_values):
@@ -905,7 +865,6 @@ def _split_cluster_by_dominant_keys(
     bound_address_keys: BoundAddressKeys,
     *,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> tuple[tuple[str, ...], ...]:
     if len(members) < 2:
@@ -919,7 +878,6 @@ def _split_cluster_by_dominant_keys(
             canonical_formula,
             bound_address_keys=bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=None,
         )
     if fingerprint is None:
@@ -934,7 +892,6 @@ def _split_cluster_by_dominant_keys(
             formula_nodes[member],
             bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
             key_cache=key_cache,
         )
         for member in members
@@ -989,7 +946,6 @@ def cluster_has_independent_operand_variation(
     varying_concepts: frozenset[str],
     *,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
     key_cache: _ClusteringKeyCache | None = None,
 ) -> bool:
     """Return whether a cluster needs unsupported per-operand parameterization."""
@@ -1004,7 +960,6 @@ def cluster_has_independent_operand_variation(
                 formula_nodes[member],
                 bound_address_keys,
                 workbook_path=workbook_path,
-                layout=layout,
                 key_cache=key_cache,
             )
             if ref_values is None:
@@ -1041,7 +996,6 @@ def cluster_graph_formulas(
     clustering_mode: ClusteringMode = "series_ast",
     address_to_series_id: AddressToSeriesId | None = None,
     workbook_path: Path | None = None,
-    layout: ProjectionColumnLayout | None = None,
 ) -> tuple[FormulaCluster, ...]:
     """Cluster non-leaf formula nodes for internals refactor.
 
@@ -1069,7 +1023,6 @@ def cluster_graph_formulas(
         key_cache = _ClusteringKeyCache(
             bound_address_keys=resolved_bound_keys,
             workbook_path=workbook_path,
-            layout=layout,
         )
         key_cache.warm_from_formula_nodes(formula_nodes)
 
@@ -1103,7 +1056,6 @@ def cluster_graph_formulas(
                         resolved_bound_keys,
                         variation_mode=variation_mode,
                         workbook_path=workbook_path,
-                        layout=layout,
                         key_cache=key_cache,
                     )
                 )

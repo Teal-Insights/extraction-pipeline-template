@@ -35,7 +35,6 @@ from src.pipeline_config import (
 from src.projection_cache import projection_cache_key
 from src.refactor_order import compute_refactor_schedule_with_diagnostics
 from src.subgraph_projection import build_refactor_projection
-from src.workbook_addresses import ProjectionColumnLayout
 
 IncludeSection = Literal["changes", "members", "fingerprints"]
 INCLUDE_SECTIONS: tuple[IncludeSection, ...] = ("changes", "members", "fingerprints")
@@ -79,7 +78,6 @@ def _cluster_by_mode(
     clustering_mode: ClusteringMode,
     projection,
     workbook_path,
-    layout,
     bindings_path: Path,
     projection_key: str,
     no_cache: bool,
@@ -89,7 +87,6 @@ def _cluster_by_mode(
         bound_address_keys=bound_address_keys,
         address_to_series_id=address_to_series_id,
         workbook_path=workbook_path,
-        layout=layout,
         bindings_path=bindings_path,
         projection_cache_key=projection_key,
         variation_mode=variation_mode,
@@ -268,7 +265,6 @@ def _print_fingerprints(
     clusters: tuple[FormulaCluster, ...],
     bound_address_keys: BoundAddressKeys,
     workbook_path: Path,
-    layout: ProjectionColumnLayout | None,
     include: Collection[str],
 ) -> None:
     if "fingerprints" not in include:
@@ -282,7 +278,6 @@ def _print_fingerprints(
             cluster.canonical_template,
             bound_address_keys=bound_address_keys,
             workbook_path=workbook_path,
-            layout=layout,
         )
         member_count = len(cluster.members)
         if fingerprint is None:
@@ -328,7 +323,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     bound_address_keys = graph_result.bound_address_keys
     address_to_series_id = graph_result.address_to_series_id
-    layout = config.projection_layout
 
     projection_key = projection_cache_key(
         graph_cache_key=graph_result.graph_cache_key,
@@ -341,7 +335,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         clustering_mode=config.clustering_mode,
         projection=projection,
         workbook_path=config.workbook_path,
-        layout=layout,
         bindings_path=config.bindings_path,
         projection_key=projection_key,
         no_cache=args.no_cache,
@@ -353,7 +346,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         clustering_mode=config.clustering_mode,
         projection=projection,
         workbook_path=config.workbook_path,
-        layout=layout,
         bindings_path=config.bindings_path,
         projection_key=projection_key,
         no_cache=args.no_cache,
@@ -403,7 +395,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         clusters=independent,
         bound_address_keys=bound_address_keys,
         workbook_path=config.workbook_path,
-        layout=layout,
         include=include,
     )
     _print_fingerprints(
@@ -411,7 +402,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         clusters=dominant_key_only,
         bound_address_keys=bound_address_keys,
         workbook_path=config.workbook_path,
-        layout=layout,
         include=include,
     )
 

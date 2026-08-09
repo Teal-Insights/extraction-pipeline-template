@@ -290,14 +290,14 @@ def test_refactor_buckets_document_series_partition_note(
     assert "not automatically singleton" in markdown
 
 
-def test_member_engine_column_falls_back_without_projection_layout() -> None:
+def test_member_engine_column_uses_the_address_column_letter() -> None:
     from src.record_refactor_buckets import _member_engine_column
 
-    assert _member_engine_column("'Hot Adapted'!AA11", None) == "AA"
-    assert _member_engine_column("Outputs!B14", None) == "B"
+    assert _member_engine_column("'Hot Adapted'!AA11") == "AA"
+    assert _member_engine_column("Outputs!B14") == "B"
 
 
-def test_cluster_contract_resolves_without_projection_layout(
+def test_cluster_contract_resolves_from_bindings(
     synthetic_graph,
     synthetic_bound_address_keys,
     synthetic_pipeline_config_fixture: PipelineConfig,
@@ -322,7 +322,6 @@ def test_cluster_contract_resolves_without_projection_layout(
         synthetic_graph,
         cluster,
         internals_source,
-        layout=None,
         bound_address_keys=synthetic_bound_address_keys,
         key_vocabulary=load_key_concept_vocabulary(
             synthetic_pipeline_config_fixture.bindings_path
@@ -448,7 +447,6 @@ def test_record_refactor_buckets_requires_bound_address_keys(
             graph=synthetic_projection,
             internals_path=None,
             internal_binding_index=None,
-            layout=None,
             compression="none",
             bound_address_keys=None,
         )
@@ -464,7 +462,6 @@ def test_record_refactor_buckets_schedules_inter_cluster_cycle_mcve(
         graph=graph,
         internals_path=None,
         internal_binding_index=None,
-        layout=None,
         compression="none",
         bound_address_keys=bindings,
     )
@@ -524,7 +521,6 @@ def test_record_refactor_buckets_allocates_against_semantic_helper_names(
             internals_path=internals_path,
             refactor_graph=cast(ProjectionResult, graph),
             internal_binding_index=None,
-            layout=None,
             compression="optimal",
             bound_address_keys=bindings,
             address_to_series_id={

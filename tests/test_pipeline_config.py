@@ -9,7 +9,7 @@ from src.pipeline_config import (
     load_pipeline_config,
     validate_pipeline_config,
 )
-from src.workbook_addresses import ProjectionColumnLayout, parse_workbook_address
+from src.workbook_addresses import parse_workbook_address
 
 
 def test_load_pipeline_config_reads_workbook_config() -> None:
@@ -149,19 +149,6 @@ def test_validate_pipeline_config_allows_empty_bindings_directory(
 
 def test_parse_workbook_address() -> None:
     assert parse_workbook_address("Inputs!C16") == ("Inputs", "C", 16)
-
-
-def test_projection_column_layout_maps_outputs_to_engine() -> None:
-    layout = ProjectionColumnLayout(
-        engine_sheet="Engine",
-        engine_columns=("C", "D"),
-        outputs_sheet="Outputs",
-        outputs_column_to_engine={"B": "C", "C": "D"},
-        time_period_to_engine_column={1: "C", 2: "D"},
-    )
-    assert layout.logical_engine_column("Engine!D10") == "D"
-    assert layout.logical_engine_column("Outputs!C12") == "D"
-    assert layout.time_period_for_engine_column("C") == 1
 
 
 def test_dist_project_metadata_install_command_without_repo() -> None:
