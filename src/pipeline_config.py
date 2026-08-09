@@ -21,7 +21,6 @@ from src.refactor_types import (
     parse_variation_mode,
     variation_mode_choices,
 )
-from src.workbook_addresses import ProjectionColumnLayout
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,7 +86,6 @@ class PipelineConfig:
     constraints: dict[str, object]
     dist_metadata: DistProjectMetadata
     docstring_callback_name: str
-    projection_layout: ProjectionColumnLayout | None
     canonical_api_example_path: Path
     binding_authoring_prompt_path: Path
     section_rewrite_introduction_focus_path: Path
@@ -257,7 +255,6 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
     constraints = dict(user_config.CONSTRAINTS)
     dist_metadata = user_config.DIST_METADATA
     docstring_callback_name = str(user_config.DOCSTRING_CALLBACK_NAME)
-    projection_layout = getattr(user_config, "PROJECTION_LAYOUT", None)
 
     templates_root = root / "templates"
     canonical_api_example_path = templates_root / "canonical-api-usage.md"
@@ -334,7 +331,6 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
         constraints=constraints,
         dist_metadata=dist_metadata,
         docstring_callback_name=docstring_callback_name,
-        projection_layout=projection_layout,
         canonical_api_example_path=canonical_api_example_path,
         binding_authoring_prompt_path=binding_authoring_prompt_path,
         section_rewrite_introduction_focus_path=section_rewrite_introduction_focus_path,

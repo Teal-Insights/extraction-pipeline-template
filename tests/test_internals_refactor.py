@@ -36,6 +36,7 @@ from src.internals_refactor import (
     SingletonRefactorResponse,
     _attempt_artifacts_from_validated_json_failure,
     _dump_validated_json_failure,
+    _parse_address_dispatch,
     _prepare_cluster_refactor_response,
     _prompt_for_refactor,
     _prompt_for_singleton_refactor,
@@ -2241,7 +2242,9 @@ def cell_engine_c10(ctx):
     updated, pruned = apply_phase_c(source)
     assert pruned >= 1
     assert "def cell_engine_c10" not in updated
-    assert "_ADDRESS_DISPATCH" in updated
+    assert _parse_address_dispatch(updated) == {
+        "Engine!C10": ("shock_active", {"time_period": 1}),
+    }
 
 
 # --- RED: stranded identity-passthrough dependency resolution -----------------

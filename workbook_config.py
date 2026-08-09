@@ -11,7 +11,6 @@ from pathlib import Path
 from src.graph_dependency_audit import GraphAuditCase
 from src.internal_binding_coverage import InternalBindingValidationMode
 from src.pipeline_config import DistProjectMetadata
-from src.workbook_addresses import ProjectionColumnLayout
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -49,35 +48,6 @@ DIST_METADATA = DistProjectMetadata(
 )
 
 DOCSTRING_CALLBACK_NAME = "series_docs"
-
-# Optional layout for parallel time-series columns during internals refactoring.
-# Set to None when the workbook does not use a repeating Engine/Outputs projection.
-PROJECTION_LAYOUT: ProjectionColumnLayout | None = None
-
-# Reference example (Tiny DSA — uncomment and adapt for a similar workbook):
-#
-# PROJECTION_LAYOUT = ProjectionColumnLayout(
-#     engine_sheet="Engine",
-#     engine_columns=("C", "D", "E", "F", "G"),
-#     outputs_sheet="Outputs",
-#     outputs_column_to_engine={
-#         "B": "C",
-#         "C": "D",
-#         "D": "E",
-#         "E": "F",
-#         "F": "G",
-#     },
-#     time_period_to_engine_column={
-#         1: "C",
-#         2: "D",
-#         3: "E",
-#         4: "F",
-#         5: "G",
-#     },
-#     # Effective dimension id for the projection axis (defaults to TIME_PERIOD).
-#     # Use an explicit id when bindings distinguish projection from other
-#     # TIME_PERIOD dimensions, e.g. projection_dimension_id="PROJECTION_PERIOD".
-# )
 
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")

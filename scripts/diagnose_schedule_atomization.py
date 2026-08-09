@@ -255,7 +255,6 @@ def main() -> None:
         clustering_mode=config.clustering_mode,
         address_to_series_id=address_to_series_id,
         workbook_path=config.workbook_path,
-        layout=config.projection_layout,
     )
     clusters_by_id = {cluster.cluster_id: cluster for cluster in clusters}
 

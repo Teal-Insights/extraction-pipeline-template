@@ -204,7 +204,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         bound_address_keys=bound_address_keys,
         address_to_series_id=address_to_series_id,
         workbook_path=config.workbook_path,
-        layout=config.projection_layout,
         bindings_path=config.bindings_path,
         projection_cache_key=projection_cache_key(
             graph_cache_key=graph_result.graph_cache_key,

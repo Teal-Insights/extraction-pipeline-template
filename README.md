@@ -33,7 +33,6 @@ Before running the pipeline, populate this repository with workbook-specific inp
 | Constraints | `workbook_config.py` → `CONSTRAINTS` | Dynamic-ref resolution and leaf input/constant classification |
 | Series bindings | `bindings/inputs.bindings.yaml`, `bindings/outputs.bindings.yaml`, `bindings/internals.bindings.yaml`, `bindings/constants.bindings.yaml` | Records-shaped public API, internal formula-cell triangulation, and reader-only constant leaves |
 | Package metadata | `workbook_config.py` → `DIST_METADATA` | Generated `dist/` project name, docs URLs, README |
-| Projection layout | `workbook_config.py` → `PROJECTION_LAYOUT` | Optional Engine/Outputs column mapping for internals refactor (see below) |
 | Variation mode | `workbook_config.py` → `VARIATION_MODE` | Formula-cluster splitting for internals refactor (see [Refactor](#7-refactor)) |
 | Clustering mode | `workbook_config.py` → `CLUSTERING_MODE` | Base formula-cluster grouping before variation splitting (see [Refactor](#7-refactor)) |
 | Internal binding exemptions | `workbook_config.py` → `INTERNAL_BINDING_EXEMPT_CELLS` | Reviewed formula cells allowed to remain unbound |
@@ -90,12 +89,6 @@ uv run python -m src.workbook_audit --output artifacts/workbook-audit.md
 ```
 
 See [artifacts/README.md](artifacts/README.md) and [artifacts/artifacts-catalog.md](artifacts/artifacts-catalog.md) for report sections and commit policy. Optional hooks in [workbook_config.py](workbook_config.py) (`AUDIT_TITLE`, `AUDIT_PUBLIC_INPUTS`, `AUDIT_GUIDE_USE_CASES`) add workbook-specific inventory tables when populated.
-
-#### Projection column layout (optional)
-
-Set `PROJECTION_LAYOUT` in [workbook_config.py](workbook_config.py) when the workbook has parallel time-series columns on an engine sheet and a related outputs sheet. The internals refactor uses this mapping to name helpers by economic time period instead of raw column letters. Set `projection_dimension_id` when the projection axis uses an explicit dimension id other than `TIME_PERIOD` (for example `PROJECTION_PERIOD`). Leave it `None` when formulas do not follow that pattern.
-
-See the commented reference example at the bottom of `workbook_config.py` (Tiny DSA Engine columns C–G mapped to Outputs columns B–F).
 
 ### 2. Extract
 
