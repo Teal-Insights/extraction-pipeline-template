@@ -29,7 +29,7 @@ Each gate has a default owner role. Adapt names to your team; the responsibiliti
 | Criterion | Pass condition |
 |---|---|
 | **Targets declared** | Every published output is a named target (range name or sheet-qualified address) driving target-driven graph extraction. |
-| **Series bindings authored** | `bindings/inputs.bindings.yaml` and `bindings/outputs.bindings.yaml` exist, use `schema_version: 1.13.0`, and declare one logical scalar/series/table per public I/O function. Every dimension should have an explicit `id`; record/key fields and refactor parameters use the effective dimension id, with concept as semantic metadata and unambiguous fallback. |
+| **Series bindings authored** | `bindings/inputs.bindings.yaml` and `bindings/outputs.bindings.yaml` exist, use `schema_version: 1.13.0`, and declare one logical scalar/series/table per public I/O function. Every dimension should have an explicit `id`; record/key fields and refactor parameters use the effective dimension id, with concept as semantic metadata and unambiguous fallback. Reader-only fixed leaves that formulas should call via `read_*` are declared with `constant: {}` (typically in `bindings/constants.bindings.yaml`). |
 | **Bindings validated against graph** | `validate_series_bindings(...)` reports `ok`; input bindings overlap graph leaves, output bindings overlap target nodes. |
 | **Dynamic refs resolved** | All `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` dependencies are resolved via `DynamicRefConfig.from_constraints(...)` without `DynamicRefError`. |
 | **Every mutable leaf is bound** | Each leaf classified as `input` appears in `inputs.bindings.yaml`; unbound mutable leaves fail the pipeline. |
@@ -116,7 +116,7 @@ Ordered to match the onboarding checklist in [README.md](README.md#clone-and-con
 [ ] Ingest: workbook and guide populated; stale bindings, dist/, and .cache/ cleared
 [ ] Audit: pre-extraction workbook audit reviewed; blocking automation resolved
 [ ] Configure: outputs declared as extraction targets
-[ ] Configure: bindings/inputs.bindings.yaml + outputs.bindings.yaml validated
+[ ] Configure: bindings/inputs.bindings.yaml + outputs.bindings.yaml validated; constant leaves that need read_* bound in constants.bindings.yaml when applicable
 [ ] Configure: dynamic-ref constraint candidates constrained
 [ ] Configure: all leaves classified; mutable leaves bound
 [ ] Configure: public enum input labels resolved to workbook reference literals

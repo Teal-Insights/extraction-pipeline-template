@@ -31,7 +31,7 @@ Before running the pipeline, populate this repository with workbook-specific inp
 | Human guide | `data/guide.md` | Domain usage, public I/O catalog, scenario narrative |
 | Targets | `workbook_config.py` → `TARGETS` | Named ranges or addresses driving graph extraction |
 | Constraints | `workbook_config.py` → `CONSTRAINTS` | Dynamic-ref resolution and leaf input/constant classification |
-| Series bindings | `bindings/inputs.bindings.yaml`, `bindings/outputs.bindings.yaml`, `bindings/internals.bindings.yaml` | Records-shaped public API surface and internal formula-cell triangulation |
+| Series bindings | `bindings/inputs.bindings.yaml`, `bindings/outputs.bindings.yaml`, `bindings/internals.bindings.yaml`, `bindings/constants.bindings.yaml` | Records-shaped public API, internal formula-cell triangulation, and reader-only constant leaves |
 | Package metadata | `workbook_config.py` → `DIST_METADATA` | Generated `dist/` project name, docs URLs, README |
 | Projection layout | `workbook_config.py` → `PROJECTION_LAYOUT` | Optional Engine/Outputs column mapping for internals refactor (see below) |
 | Variation mode | `workbook_config.py` → `VARIATION_MODE` | Formula-cluster splitting for internals refactor (see [Refactor](#7-refactor)) |
@@ -74,14 +74,14 @@ flowchart LR
 
 1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `CONSTRAINTS`, and `DIST_METADATA`. Keep `bindings/*.bindings.yaml` as empty `series: []` placeholders until after the first extract if needed.
 2. **Dynamic-ref pass** — list leaves that need domains to resolve `OFFSET` / `INDIRECT` / `INDEX` (`excel_grapher.list_dynamic_ref_constraint_candidates` against `TARGETS`), constrain them, and iterate until `--extract-graph` succeeds without `DynamicRefError`. That lister only covers dynamic-ref argument leaves; it will not enumerate every leaf that later appears in the finished graph.
-3. **Leaf-classification pass** — after a successful extract, constrain every remaining unconstrained graph leaf (`graph.leaf_keys()` minus `CONSTRAINTS`) so each leaf classifies as `input` or `constant`. Every mutable input leaf must appear in `inputs.bindings.yaml`.
+3. **Leaf-classification pass** — after a successful extract, constrain every remaining unconstrained graph leaf (`graph.leaf_keys()` minus `CONSTRAINTS`) so each leaf classifies as `input` or `constant`. Every mutable input leaf must appear in `inputs.bindings.yaml`. Fixed leaves that formulas should read via `read_*` (not `xl_cell`) need a `constant: {}` series in `constants.bindings.yaml` (see [Authoring constants](#authoring-constants)).
 4. Author I/O `bindings/*.bindings.yaml` (schema version `1.13.0`, one logical series per public API function or input/constant group). Empty `series: []` placeholders load (excel-grapher 5.1.4+); author real series before export.
 5. Bind every internal formula cell in `internals.bindings.yaml` (see [Authoring internals](#authoring-internals) below).
 
 Validation checks:
 
 - `validate_series_bindings(...)` reports `ok`
-- `derive_input_series` / `derive_output_series` / `derive_internal_series` resolve every binding
+- `derive_input_series` / `derive_output_series` / `derive_internal_series` / `derive_constant_series` resolve every binding
 - No unbound mutable input leaves
 - Run the pre-extraction workbook audit and review blocking automation before graph work:
 
@@ -143,6 +143,18 @@ Author `internals.bindings.yaml` after `--extract-graph`, when you can see which
 - **Review** — re-run `--extract-graph` and confirm bound formula nodes show `keys:` / `record:` labels in the graph explorer.
 
 Schema details and field shapes: excel-grapher `user_guide/05-series-bindings.qmd` (internal direction, schema 1.13.0). Use [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.txt) for agent-assisted drafting.
+
+#### Authoring constants
+
+Author `constants.bindings.yaml` for graph **leaves** that formulas depend on but that are not user-editable public inputs. Classification via `Literal[...]` in `CONSTRAINTS` marks those leaves as `constant` for codegen `CONSTANTS`; a `constant: {}` binding additionally emits a semantic `read_*` and rewrites formula bodies off bare `xl_cell`.
+
+- **Same YAML shape as public bindings** — use `constant: {}` instead of `input` / `output` / `internal`. Mutually exclusive with those directions.
+- **Leaf-only** — `data_range` must cover graph leaves (not formula nodes). Formula triangulation stays in `internals.bindings.yaml`.
+- **Reader name** — default `read_<series_id>`; override with `constant.reader.name` when needed.
+- **No public setter** — do not declare `input.setter` on constant series. If downstream users must edit the cell, use an `input` binding instead.
+- **Validate** — `validate_series_bindings(...)`, then `derive_constant_series(...)`. Run `uv run python -m scripts.binding_resolution_audit` (includes the `constant` direction by default).
+
+Synthetic example: [tests/fixtures/synthetic/constants.bindings.yaml](tests/fixtures/synthetic/constants.bindings.yaml). Full rules: [bindings/README.md](bindings/README.md#constant-bindings-reader-only-leaves). Schema reference: excel-grapher `user_guide/05-series-bindings.qmd` (constant direction, schema 1.11.0+).
 
 #### Internal binding coverage validation
 
@@ -391,6 +403,7 @@ Ordered to match the [onboarding checklist](#clone-and-configure-onboarding-chec
 - [ ] **Extract:** Graph extracts with provenance (`--extract-graph`; empty `series: []` placeholders OK)
 - [ ] **Configure:** Remaining graph leaves constrained and classified; mutable leaves bound
 - [ ] **Configure:** `bindings/inputs.bindings.yaml` + `outputs.bindings.yaml` authored and validated
+- [ ] **Configure:** Fixed leaves that need semantic `read_*` bound in `bindings/constants.bindings.yaml` (`constant: {}`)
 - [ ] **Configure:** Internal binding exemptions reviewed (`INTERNAL_BINDING_EXEMPT_CELLS`)
 - [ ] **Configure:** `bindings/internals.bindings.yaml` covers internal formula cells
 - [ ] **Review graph:** Manual completeness review done; optional LLM dependency audit passed (`pytest --run-skipped`)

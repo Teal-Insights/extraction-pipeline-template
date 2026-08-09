@@ -765,7 +765,7 @@ def test_binding_catalog_roundtrip_matches_synthetic_fixtures(
     catalog = load_binding_catalog(catalog_path)
     documents = build_binding_documents(catalog)
 
-    for direction in ("inputs", "outputs", "internals"):
+    for direction in ("inputs", "outputs", "internals", "constants"):
         fixture_path = (
             Path(__file__).resolve().parent
             / "fixtures"
@@ -834,6 +834,56 @@ def test_binding_guidance_documents_unique_vs_shared_compute_names() -> None:
     assert "compute_/set_" in prompt or "compute_" in prompt
 
 
+def test_binding_guidance_documents_constant_direction() -> None:
+    """Authoring materials teach constant: {} for reader-only graph leaves."""
+    root = Path(__file__).resolve().parents[1]
+    bindings_readme = (root / "bindings" / "README.md").read_text(encoding="utf-8")
+    pipeline_readme = (root / "README.md").read_text(encoding="utf-8")
+    prompt = (root / "templates" / "binding-authoring-prompt.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for text in (bindings_readme, pipeline_readme, prompt):
+        lowered = text.lower()
+        assert "constant: {}" in text
+        assert "constants.bindings.yaml" in lowered
+        assert "read_" in lowered
+        assert "set_" in lowered
+        assert (
+            "xl_cell" in lowered
+            or "formula-body" in lowered
+            or "phase 2" in lowered
+            or "body rewrite" in lowered
+        )
+
+    assert "non_leaf_constant_overlap" in bindings_readme
+    assert "bind.kind: constant" in bindings_readme
+    assert "derive_constant_series" in pipeline_readme or "derive_constant_series" in prompt
+
+
+def test_binding_resolution_audit_directions_include_constant() -> None:
+    from src.binding_resolution_audit import DIRECTIONS
+
+    assert DIRECTIONS == ("input", "output", "internal", "constant")
+
+
+def test_binding_catalog_emits_constants_sidecar() -> None:
+    catalog_path = (
+        Path(__file__).resolve().parents[1]
+        / "templates"
+        / "binding-catalog.example.yaml"
+    )
+    documents = build_binding_documents(load_binding_catalog(catalog_path))
+    assert "constants.bindings.yaml" in documents
+    constants = documents["constants.bindings.yaml"]["series"]
+    assert len(constants) == 1
+    assert constants[0]["id"] == "input_bias"
+    assert constants[0]["constant"] == {}
+    assert "input" not in constants[0]
+    assert "output" not in constants[0]
+    assert "internal" not in constants[0]
+
+
 def test_emit_bindings_from_catalog_validates_against_synthetic_workbook(
     tmp_path: Path,
 ) -> None:
@@ -854,7 +904,7 @@ def test_emit_bindings_from_catalog_validates_against_synthetic_workbook(
         validate=True,
     )
 
-    assert len(written) == 3
+    assert len(written) == 4
     assert validation is not None
     assert validation["report"]["ok"] is True
 
