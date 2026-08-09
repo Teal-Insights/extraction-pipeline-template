@@ -314,7 +314,10 @@ def test_legacy_three_tuple_series_resolution_cache_is_rebuilt(
 
     graph_result = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
     bindings = _load_bindings(synthetic_config)
-    cache_key = series_resolution_cache_key(graph_cache_key=graph_result.cache_key, bindings_path=synthetic_config.bindings_path)
+    cache_key = series_resolution_cache_key(
+        graph_cache_key=graph_result.cache_key,
+        bindings_path=synthetic_config.bindings_path,
+    )
     series_cache_dir.mkdir(parents=True, exist_ok=True)
     payload_path = series_cache_dir / f"{cache_key}.pkl.gz"
     with gzip.open(payload_path, "wb", compresslevel=1) as handle:
