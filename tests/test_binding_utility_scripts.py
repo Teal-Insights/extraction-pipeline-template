@@ -572,7 +572,6 @@ def test_committed_graph_cache_is_fresh_when_present(
         workbook_path=config.workbook_path,
         targets=config.targets,
         constraints=config.constraints,
-        bindings_path=config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -638,7 +637,7 @@ def test_internal_binding_burndown_groups_unbound_formula_cells(
     assert suggested_layout_for_row(grouped["Engine"][2]) == "row_series"
 
 
-def test_internal_binding_burndown_warns_when_cached_graph_is_stale(
+def test_internal_binding_burndown_does_not_warn_when_only_bindings_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -674,8 +673,45 @@ def test_internal_binding_burndown_warns_when_cached_graph_is_stale(
     load_graph(config)
     captured = capsys.readouterr()
 
+    assert "Warning: newest cached graph key does not match" not in captured.out
+
+
+def test_internal_binding_burndown_warns_when_cached_graph_is_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workbook_path = tmp_path / "workbook.xlsx"
+    write_synthetic_workbook(workbook_path)
+    bindings_path = tmp_path / "bindings"
+    bindings_path.mkdir()
+    fixture_bindings = Path(__file__).resolve().parent / "fixtures" / "synthetic"
+    for name in (
+        "inputs.bindings.yaml",
+        "outputs.bindings.yaml",
+        "internals.bindings.yaml",
+    ):
+        source = fixture_bindings / name
+        (bindings_path / name).write_text(source.read_text(encoding="utf-8"))
+
+    config = replace(
+        synthetic_pipeline_config(workbook_path=workbook_path),
+        bindings_path=bindings_path,
+    )
+    cache_dir = tmp_path / "dependency-graph"
+
+    _monkeypatch_temp_graph_cache(monkeypatch, cache_dir=cache_dir, config=config)
+    regenerate_graph_cache(force=True)
+
+    workbook_path.write_bytes(workbook_path.read_bytes() + b"changed")
+
+    load_graph(config)
+    captured = capsys.readouterr()
+
     assert "Warning: newest cached graph key does not match" in captured.out
     assert "regenerate_graph_cache" in captured.out
+    warning_line = captured.out.split("Warning:", 1)[1].split("\n", 1)[0]
+    assert "bindings" not in warning_line
 
 
 def test_load_graph_prefers_fingerprint_match_over_newer_stale_pickle(
@@ -694,7 +730,6 @@ def test_load_graph_prefers_fingerprint_match_over_newer_stale_pickle(
         workbook_path=config.workbook_path,
         targets=config.targets,
         constraints=config.constraints,
-        bindings_path=config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )

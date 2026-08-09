@@ -18,7 +18,7 @@ from excel_grapher.grapher import (
     create_dependency_graph,
 )
 
-GRAPH_CACHE_SCHEMA_VERSION = "1.0.0"
+GRAPH_CACHE_SCHEMA_VERSION = "1.1.0"
 DEFAULT_GRAPH_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / ".cache" / "dependency-graph"
 )
@@ -50,8 +50,8 @@ def bindings_fingerprint(bindings_path: Path) -> str:
     """Hash binding YAML files under ``bindings_path`` in stable sorted order.
 
     Missing directories and directories with no ``*.bindings.yaml`` files share a
-    stable empty digest so graph-cache keys stay well-defined during bootstrap
-    extract before bindings are authored.
+    stable empty digest so binding-sensitive cache keys stay well-defined during
+    bootstrap extract before bindings are authored.
     """
     resolved = bindings_path.resolve()
     if not resolved.exists():
@@ -75,14 +75,12 @@ def dependency_graph_cache_key(
     workbook_path: Path,
     targets: Sequence[str],
     constraints: Mapping[str, object],
-    bindings_path: Path,
     load_values: bool,
     capture_dependency_provenance: bool,
 ) -> str:
     payload = {
         "cache_schema_version": GRAPH_CACHE_SCHEMA_VERSION,
         "workbook_fingerprint": file_fingerprint(workbook_path),
-        "bindings_fingerprint": bindings_fingerprint(bindings_path),
         "targets": sorted(targets),
         "constraints": dict(constraints),
         "load_values": load_values,
@@ -179,7 +177,6 @@ def get_or_build_dependency_graph(
     workbook_path: Path,
     targets: Sequence[str],
     constraints: Mapping[str, object],
-    bindings_path: Path,
     dynamic_refs: DynamicRefConfig,
     load_values: bool = True,
     capture_dependency_provenance: bool = True,
@@ -193,7 +190,6 @@ def get_or_build_dependency_graph(
         workbook_path=workbook_path,
         targets=targets,
         constraints=constraints,
-        bindings_path=bindings_path,
         load_values=load_values,
         capture_dependency_provenance=capture_dependency_provenance,
     )

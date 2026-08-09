@@ -105,7 +105,6 @@ def _build_graph(config, *, cache_dir: Path, **kwargs):
         workbook_path=config.workbook_path,
         targets=config.targets,
         constraints=config.constraints,
-        bindings_path=config.bindings_path,
         dynamic_refs=dynamic_refs,
         cache_dir=cache_dir,
         **kwargs,
@@ -280,7 +279,6 @@ def test_dependency_graph_cache_key_changes_when_targets_change(
         workbook_path=synthetic_config.workbook_path,
         targets=synthetic_config.targets,
         constraints=synthetic_config.constraints,
-        bindings_path=synthetic_config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -289,7 +287,6 @@ def test_dependency_graph_cache_key_changes_when_targets_change(
         workbook_path=changed.workbook_path,
         targets=changed.targets,
         constraints=changed.constraints,
-        bindings_path=changed.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -303,7 +300,6 @@ def test_dependency_graph_cache_key_changes_when_constraints_change(
         workbook_path=synthetic_config.workbook_path,
         targets=synthetic_config.targets,
         constraints=synthetic_config.constraints,
-        bindings_path=synthetic_config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -313,7 +309,6 @@ def test_dependency_graph_cache_key_changes_when_constraints_change(
         workbook_path=synthetic_config.workbook_path,
         targets=synthetic_config.targets,
         constraints=changed_constraints,
-        bindings_path=synthetic_config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -328,7 +323,6 @@ def test_dependency_graph_cache_key_changes_when_workbook_changes(
         workbook_path=synthetic_config.workbook_path,
         targets=synthetic_config.targets,
         constraints=synthetic_config.constraints,
-        bindings_path=synthetic_config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -339,7 +333,6 @@ def test_dependency_graph_cache_key_changes_when_workbook_changes(
         workbook_path=other_workbook,
         targets=synthetic_config.targets,
         constraints=synthetic_config.constraints,
-        bindings_path=synthetic_config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -361,15 +354,15 @@ def test_bindings_fingerprint_stable_for_missing_bindings_dir(tmp_path: Path) ->
     assert digest == bindings_fingerprint(tmp_path / "also-missing")
 
 
-def test_dependency_graph_cache_key_changes_when_bindings_change(
+def test_dependency_graph_cache_key_stable_when_bindings_change(
     synthetic_config,
     tmp_path: Path,
 ) -> None:
+    """Bindings are not an input to graph construction (#272)."""
     base_key = dependency_graph_cache_key(
         workbook_path=synthetic_config.workbook_path,
         targets=synthetic_config.targets,
         constraints=synthetic_config.constraints,
-        bindings_path=synthetic_config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -381,15 +374,15 @@ def test_dependency_graph_cache_key_changes_when_bindings_change(
             content = content.replace("input_rate", "input_rate_alt")
         (alternate_bindings / binding_file.name).write_text(content, encoding="utf-8")
 
+    # Graph key ignores bindings_path; only workbook/targets/constraints matter.
     changed_key = dependency_graph_cache_key(
         workbook_path=synthetic_config.workbook_path,
         targets=synthetic_config.targets,
         constraints=synthetic_config.constraints,
-        bindings_path=alternate_bindings,
         load_values=True,
         capture_dependency_provenance=True,
     )
-    assert base_key != changed_key
+    assert base_key == changed_key
     assert bindings_fingerprint(synthetic_config.bindings_path) != bindings_fingerprint(
         alternate_bindings
     )
@@ -412,7 +405,7 @@ def test_dependency_graph_cache_miss_after_workbook_change(
     assert first.cache_key != second.cache_key
 
 
-def test_dependency_graph_cache_miss_after_bindings_change(
+def test_dependency_graph_cache_hit_after_bindings_change(
     synthetic_config,
     graph_cache_dir: Path,
     tmp_path: Path,
@@ -427,8 +420,8 @@ def test_dependency_graph_cache_miss_after_bindings_change(
     changed_config = replace(synthetic_config, bindings_path=alternate_bindings)
 
     second = _build_graph(changed_config, cache_dir=graph_cache_dir)
-    assert not second.cache_hit
-    assert first.cache_key != second.cache_key
+    assert second.cache_hit
+    assert first.cache_key == second.cache_key
 
 
 def test_corrupt_dependency_graph_cache_is_rebuilt(

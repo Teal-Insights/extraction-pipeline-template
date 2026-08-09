@@ -112,7 +112,6 @@ def regenerate_graph_cache(
             workbook_path=config.workbook_path,
             targets=targets,
             constraints=config.constraints,
-            bindings_path=config.bindings_path,
             dynamic_refs=dynamic_refs,
             load_values=True,
             capture_dependency_provenance=True,
@@ -141,6 +140,7 @@ def regenerate_graph_cache(
         bindings,
         workbook_path=config.workbook_path,
         graph_cache_key=default_graph_result.cache_key,
+        bindings_path=config.bindings_path,
         cache_dir=COMMITTED_BINDINGS_VALIDATION_CACHE_DIR,
         force_rebuild=force,
     )
@@ -152,7 +152,10 @@ def regenerate_graph_cache(
         f"cache_hit={validation_result.cache_hit}"
     )
     validation_keys = {
-        bindings_validation_cache_key(graph_cache_key=cache_key)
+        bindings_validation_cache_key(
+            graph_cache_key=cache_key,
+            bindings_path=config.bindings_path,
+        )
         for cache_key in current_keys
     }
     for filename in prune_stale_bindings_validation_cache_entries(
@@ -162,7 +165,10 @@ def regenerate_graph_cache(
         print(f"pruned stale bindings-validation cache entry: {filename}")
 
     series_keys = {
-        series_resolution_cache_key(graph_cache_key=cache_key)
+        series_resolution_cache_key(
+            graph_cache_key=cache_key,
+            bindings_path=config.bindings_path,
+        )
         for cache_key in current_keys
     }
     for filename in prune_stale_series_resolution_cache_entries(
@@ -174,6 +180,7 @@ def regenerate_graph_cache(
     derived_keys = {
         series_derived_cache_key(
             graph_cache_key=cache_key,
+            bindings_path=config.bindings_path,
             validation_mode=config.internal_binding_validation_mode,
             exempt_cells=config.internal_binding_exempt_cells,
         )
