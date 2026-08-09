@@ -10,8 +10,8 @@ Run: ``uv run python -m scripts.internal_binding_burndown``
 
 The graph build itself does not read the binding YAML. When present, this script
 prefers the fingerprint-matching cache entry; otherwise it falls back to the
-newest cached graph pickle (with a stale-key warning) even if the bindings
-fingerprint has changed since that pickle was written.
+newest cached graph pickle (with a stale-key warning) even if workbook or
+targets have changed since that pickle was written.
 """
 
 from __future__ import annotations
@@ -52,7 +52,6 @@ def _expected_graph_cache_key(config: PipelineConfig) -> str:
         workbook_path=config.workbook_path,
         targets=config.targets,
         constraints=config.constraints,
-        bindings_path=config.bindings_path,
         load_values=True,
         capture_dependency_provenance=True,
     )
@@ -63,8 +62,8 @@ def _warn_if_cached_graph_is_stale(config: PipelineConfig, cache_key: str) -> No
     if cache_key == expected_key:
         return
     print(
-        "Warning: newest cached graph key does not match the current workbook, "
-        "bindings, or targets fingerprint. Burndown results may be stale; run "
+        "Warning: newest cached graph key does not match the current workbook "
+        "or targets fingerprint. Burndown results may be stale; run "
         "uv run python -m scripts.regenerate_graph_cache to refresh."
     )
 
@@ -94,7 +93,6 @@ def load_graph(config: PipelineConfig) -> tuple[DependencyGraph, str | None]:
         workbook_path=config.workbook_path,
         targets=config.targets,
         constraints=config.constraints,
-        bindings_path=config.bindings_path,
         dynamic_refs=dynamic_ref_config,
         load_values=True,
         capture_dependency_provenance=True,

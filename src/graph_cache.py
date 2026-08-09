@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import pickle
@@ -16,9 +15,11 @@ from excel_grapher.grapher import (
     DependencyGraph,
     DynamicRefConfig,
     create_dependency_graph,
+    dump_graph,
+    load_graph,
 )
 
-GRAPH_CACHE_SCHEMA_VERSION = "1.0.0"
+GRAPH_CACHE_SCHEMA_VERSION = "1.1.0"
 DEFAULT_GRAPH_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / ".cache" / "dependency-graph"
 )
@@ -50,8 +51,8 @@ def bindings_fingerprint(bindings_path: Path) -> str:
     """Hash binding YAML files under ``bindings_path`` in stable sorted order.
 
     Missing directories and directories with no ``*.bindings.yaml`` files share a
-    stable empty digest so graph-cache keys stay well-defined during bootstrap
-    extract before bindings are authored.
+    stable empty digest so binding-sensitive cache keys stay well-defined during
+    bootstrap extract before bindings are authored.
     """
     resolved = bindings_path.resolve()
     if not resolved.exists():
@@ -75,14 +76,12 @@ def dependency_graph_cache_key(
     workbook_path: Path,
     targets: Sequence[str],
     constraints: Mapping[str, object],
-    bindings_path: Path,
     load_values: bool,
     capture_dependency_provenance: bool,
 ) -> str:
     payload = {
         "cache_schema_version": GRAPH_CACHE_SCHEMA_VERSION,
         "workbook_fingerprint": file_fingerprint(workbook_path),
-        "bindings_fingerprint": bindings_fingerprint(bindings_path),
         "targets": sorted(targets),
         "constraints": dict(constraints),
         "load_values": load_values,
@@ -131,8 +130,9 @@ def save_dependency_graph(
     resolved_cache_dir = _graph_cache_dir(cache_dir)
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
     payload_path, meta_path = _cache_paths(resolved_cache_dir, cache_key)
-    with gzip.open(payload_path, "wb", compresslevel=1) as handle:
-        pickle.dump(graph, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    # excel-grapher 5.1.5+ EGDG multipart format keeps unpickle peak near final
+    # resident size; prefer dump_graph over gzip+pickle.dump for warm caches.
+    dump_graph(graph, payload_path)
     _write_graph_meta(
         meta_path,
         cache_key=cache_key,
@@ -151,9 +151,10 @@ def load_dependency_graph(
     if not payload_path.is_file():
         return None
     try:
-        with gzip.open(payload_path, "rb") as handle:
-            graph = pickle.load(handle)
-    except (OSError, EOFError, pickle.UnpicklingError):
+        # load_graph reads EGDG payloads and falls back to legacy single-object
+        # gzip pickles from pre-5.1.5 cache entries.
+        graph = load_graph(payload_path)
+    except (OSError, EOFError, pickle.UnpicklingError, TypeError, ValueError):
         payload_path.unlink(missing_ok=True)
         return None
     if not isinstance(graph, DependencyGraph):
@@ -179,7 +180,6 @@ def get_or_build_dependency_graph(
     workbook_path: Path,
     targets: Sequence[str],
     constraints: Mapping[str, object],
-    bindings_path: Path,
     dynamic_refs: DynamicRefConfig,
     load_values: bool = True,
     capture_dependency_provenance: bool = True,
@@ -193,7 +193,6 @@ def get_or_build_dependency_graph(
         workbook_path=workbook_path,
         targets=targets,
         constraints=constraints,
-        bindings_path=bindings_path,
         load_values=load_values,
         capture_dependency_provenance=capture_dependency_provenance,
     )
