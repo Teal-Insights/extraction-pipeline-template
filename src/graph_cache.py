@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import pickle
@@ -16,6 +15,8 @@ from excel_grapher.grapher import (
     DependencyGraph,
     DynamicRefConfig,
     create_dependency_graph,
+    dump_graph,
+    load_graph,
 )
 
 GRAPH_CACHE_SCHEMA_VERSION = "1.1.0"
@@ -129,8 +130,9 @@ def save_dependency_graph(
     resolved_cache_dir = _graph_cache_dir(cache_dir)
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
     payload_path, meta_path = _cache_paths(resolved_cache_dir, cache_key)
-    with gzip.open(payload_path, "wb", compresslevel=1) as handle:
-        pickle.dump(graph, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    # excel-grapher 5.1.5+ EGDG multipart format keeps unpickle peak near final
+    # resident size; prefer dump_graph over gzip+pickle.dump for warm caches.
+    dump_graph(graph, payload_path)
     _write_graph_meta(
         meta_path,
         cache_key=cache_key,
@@ -149,9 +151,10 @@ def load_dependency_graph(
     if not payload_path.is_file():
         return None
     try:
-        with gzip.open(payload_path, "rb") as handle:
-            graph = pickle.load(handle)
-    except (OSError, EOFError, pickle.UnpicklingError):
+        # load_graph reads EGDG payloads and falls back to legacy single-object
+        # gzip pickles from pre-5.1.5 cache entries.
+        graph = load_graph(payload_path)
+    except (OSError, EOFError, pickle.UnpicklingError, TypeError, ValueError):
         payload_path.unlink(missing_ok=True)
         return None
     if not isinstance(graph, DependencyGraph):

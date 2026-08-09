@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
+import pickle
 from dataclasses import replace
 from importlib.metadata import version
 from pathlib import Path
@@ -12,7 +14,7 @@ import pytest
 from excel_grapher.core.cell_types import RealBetween
 from excel_grapher.exporter import CodeGenerator
 from excel_grapher.exporter.codegen import GraphLike
-from excel_grapher.grapher import DynamicRefConfig
+from excel_grapher.grapher import DependencyGraph, DynamicRefConfig
 
 from src.bindings_validation_cache import DEFAULT_BINDINGS_VALIDATION_CACHE_DIR
 from src.cluster_cache import DEFAULT_CLUSTER_CACHE_DIR
@@ -26,6 +28,7 @@ from src.graph_cache import (
     get_or_build_dependency_graph,
     load_dependency_graph,
     prune_cache_entries_for_other_excel_grapher_versions,
+    save_dependency_graph,
 )
 from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
 from src.projection_cache import (
@@ -437,6 +440,66 @@ def test_corrupt_dependency_graph_cache_is_rebuilt(
     second = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
     assert not second.cache_hit
     assert payload_path.is_file()
+
+
+def test_dependency_graph_cache_writes_egdg_multipart_payload(
+    synthetic_config,
+    graph_cache_dir: Path,
+) -> None:
+    """Warm-cache files must use excel-grapher's low-peak EGDG format."""
+    result = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    payload_path = graph_cache_dir / f"{result.cache_key}.pkl.gz"
+
+    with gzip.open(payload_path, "rb") as handle:
+        magic = handle.read(4)
+
+    assert magic == b"EGDG"
+
+
+def test_load_dependency_graph_reads_legacy_gzip_pickle(
+    synthetic_config,
+    graph_cache_dir: Path,
+) -> None:
+    """Pre-5.1.5 gzip+pickle payloads must still open after adopting dump_graph."""
+    first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
+    payload_path = graph_cache_dir / f"{first.cache_key}.pkl.gz"
+    with gzip.open(payload_path, "wb", compresslevel=1) as handle:
+        pickle.dump(first.graph, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    loaded = load_dependency_graph(first.cache_key, cache_dir=graph_cache_dir)
+
+    assert loaded is not None
+    assert isinstance(loaded, DependencyGraph)
+    assert len(loaded) == len(first.graph)
+    assert loaded.leaf_keys() == first.graph.leaf_keys()
+
+
+def test_save_dependency_graph_uses_dump_graph(
+    synthetic_config,
+    graph_cache_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    calls: list[Path] = []
+
+    def fake_dump_graph(graph: DependencyGraph, path: str | Path, **_kwargs) -> None:
+        dest = Path(path)
+        calls.append(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"egdg-stub")
+
+    monkeypatch.setattr("src.graph_cache.dump_graph", fake_dump_graph)
+    save_dependency_graph(
+        first.graph,
+        cache_key="spy-key",
+        workbook_path=synthetic_config.workbook_path,
+        targets=synthetic_config.targets,
+        cache_dir=graph_cache_dir,
+    )
+
+    assert calls == [graph_cache_dir / "spy-key.pkl.gz"]
+    assert (graph_cache_dir / "spy-key.pkl.gz").read_bytes() == b"egdg-stub"
 
 
 def test_projection_cache_roundtrip(
