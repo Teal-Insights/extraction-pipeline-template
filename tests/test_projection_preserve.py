@@ -9,6 +9,7 @@ def test_public_series_bindings_for_preserve_drops_internals() -> None:
     public = public_series_bindings_for_preserve(bindings)
 
     assert [entry["id"] for entry in public["series"]] == [
+        "input_bias",
         "input_rate",
         "result_a",
         "result_b",
@@ -16,6 +17,7 @@ def test_public_series_bindings_for_preserve_drops_internals() -> None:
     assert {entry["id"] for entry in bindings["series"]} >= {
         "engine_b2",
         "engine_c2",
+        "input_bias",
         "input_rate",
         "result_a",
         "result_b",

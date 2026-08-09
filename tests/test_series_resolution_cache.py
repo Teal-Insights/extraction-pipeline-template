@@ -122,7 +122,8 @@ def test_series_resolution_cache_roundtrip(
     assert first.constant_series == second.constant_series
     assert first.input_series
     assert first.output_series
-    assert list(first.constant_series) == []
+    assert list(first.constant_series)
+    assert first.constant_series[0]["id"] == "input_bias"
 
 
 def test_series_resolution_cache_matches_live_derive(

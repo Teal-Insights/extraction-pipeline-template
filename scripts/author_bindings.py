@@ -39,7 +39,7 @@ def main() -> None:
         "--catalog",
         type=Path,
         default=REPO_ROOT / "templates" / "binding-catalog.example.yaml",
-        help="Declarative catalog describing inputs/outputs/internals series.",
+        help="Declarative catalog describing inputs/outputs/internals/constants series.",
     )
     parser.add_argument(
         "--bindings-dir",
