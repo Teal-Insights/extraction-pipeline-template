@@ -53,9 +53,11 @@ DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")
 DIFFERENTIAL_GRAPH_REPORT_DIR_REL = Path("data/differential/graph")
 
-# Optional per-parent formula cells for LLM direct-dependency graph audits
-# (``pytest tests/test_extraction_graph_accuracy.py --run-skipped``). Loaded
-# through :func:`src.pipeline_config.load_pipeline_config` as
+# Optional per-parent formula cells that steer LLM direct-dependency graph audits
+# (``pytest tests/test_extraction_graph_accuracy.py --run-skipped``). Empty means
+# auto-select from the warm graph. Declared cases overlay discovery: ``required``
+# pins always run first; labels/focuses win for matching keys. Loaded through
+# :func:`src.pipeline_config.load_pipeline_config` as
 # ``PipelineConfig.graph_audit_cases``. Provider and model come from
 # ``LLM_GRAPH_AUDIT_MODEL`` (see ``.env.example``).
 GRAPH_AUDIT_CASES: tuple[GraphAuditCase, ...] = ()
