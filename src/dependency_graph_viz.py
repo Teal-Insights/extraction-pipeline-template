@@ -108,26 +108,6 @@ def _node_sheet(key: NodeKey, graph: DependencyGraph) -> str:
     return "Workbook"
 
 
-def build_dot_with_sheet_clusters(
-    graph: DependencyGraph,
-    *,
-    node_labels: Mapping[NodeKey, str] | None = None,
-    highlight: set[NodeKey] | None = None,
-    rankdir: str = "TB",
-    include_formula_on_nodes: bool = True,
-    max_formula_length: int | None = 120,
-) -> str:
-    """Extend ``to_graphviz`` output with one Graphviz cluster per worksheet."""
-    return build_dot_with_clusters(
-        graph,
-        node_labels=node_labels,
-        highlight=highlight,
-        rankdir=rankdir,
-        include_formula_on_nodes=include_formula_on_nodes,
-        max_formula_length=max_formula_length,
-    )
-
-
 def _node_line_with_label(node_line: str, label: str) -> str:
     return re.sub(
         r'label="(?:\\.|[^"\\])*"',

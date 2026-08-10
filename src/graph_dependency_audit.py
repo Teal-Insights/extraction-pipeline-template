@@ -26,7 +26,6 @@ from src.env_utils import env_int
 from src.llm_json import generate_validated_json, generate_validated_json_async
 from src.llm_providers import (
     ProviderConfig,
-    build_async_client,
     build_client,
     model_from_env,
 )
@@ -692,17 +691,6 @@ def build_graph_audit_client(
     """Build a provider client for graph dependency audits."""
     resolved_model = resolve_graph_audit_model(model)
     client, provider = build_client(resolved_model, api_key=api_key)
-    return client, provider, resolved_model
-
-
-def build_graph_audit_async_client(
-    model: str | None = None,
-    *,
-    api_key: str | None = None,
-) -> tuple[AsyncOpenAI, ProviderConfig, str]:
-    """Build an async provider client for graph dependency audits."""
-    resolved_model = resolve_graph_audit_model(model)
-    client, provider = build_async_client(resolved_model, api_key=api_key)
     return client, provider, resolved_model
 
 

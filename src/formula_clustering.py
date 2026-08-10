@@ -661,23 +661,6 @@ def formulas_are_parameterizable(
     )
 
 
-def _should_cluster(
-    left_formula: str,
-    right_formula: str,
-    *,
-    bound_address_keys: BoundAddressKeys,
-    workbook_path: Path | None,
-    key_cache: _ClusteringKeyCache | None,
-) -> bool:
-    return _formulas_are_parameterizable(
-        left_formula,
-        right_formula,
-        bound_address_keys=bound_address_keys,
-        workbook_path=workbook_path,
-        key_cache=key_cache,
-    )
-
-
 def _clustering_bucket_key(
     fingerprint: StructuralFingerprint | None,
     *,
@@ -785,78 +768,6 @@ def _split_signature_from_ref_keys(
             return None
         signature.append(keys_at_ref[concept])
     return tuple(signature)
-
-
-def _dominant_varying_concepts_at_ref(
-    members: tuple[str, ...],
-    formula_nodes: Mapping[str, str],
-    bound_address_keys: BoundAddressKeys,
-    ref_index: int,
-    *,
-    workbook_path: Path | None = None,
-    key_cache: _ClusteringKeyCache | None = None,
-) -> frozenset[str]:
-    member_matrices = {
-        member: _ref_position_key_values(
-            member,
-            formula_nodes[member],
-            bound_address_keys,
-            workbook_path=workbook_path,
-            key_cache=key_cache,
-        )
-        for member in members
-    }
-    return _varying_concepts_at_ref_from_matrix(member_matrices, members, ref_index)
-
-
-def _dominant_key_for_ref(
-    members: tuple[str, ...],
-    formula_nodes: Mapping[str, str],
-    bound_address_keys: BoundAddressKeys,
-    ref_index: int,
-    varying_concepts: frozenset[str],
-    *,
-    workbook_path: Path | None = None,
-    key_cache: _ClusteringKeyCache | None = None,
-) -> str | None:
-    member_matrices = {
-        member: _ref_position_key_values(
-            member,
-            formula_nodes[member],
-            bound_address_keys,
-            workbook_path=workbook_path,
-            key_cache=key_cache,
-        )
-        for member in members
-    }
-    return _dominant_key_at_ref_from_matrix(
-        member_matrices, members, ref_index, varying_concepts
-    )
-
-
-def _dominant_key_split_signature(
-    member: str,
-    formula_nodes: Mapping[str, str],
-    bound_address_keys: BoundAddressKeys,
-    ref_index: int,
-    dominant_key: str,
-    varying_concepts: frozenset[str],
-    *,
-    workbook_path: Path | None = None,
-    key_cache: _ClusteringKeyCache | None = None,
-) -> tuple[BindingKeyValue, ...] | None:
-    ref_values = _ref_position_key_values(
-        member,
-        formula_nodes[member],
-        bound_address_keys,
-        workbook_path=workbook_path,
-        key_cache=key_cache,
-    )
-    if ref_values is None or ref_index >= len(ref_values):
-        return None
-    return _split_signature_from_ref_keys(
-        ref_values[ref_index], dominant_key, varying_concepts
-    )
 
 
 def _split_cluster_by_dominant_keys(
