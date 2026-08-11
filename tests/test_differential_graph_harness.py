@@ -235,8 +235,15 @@ def test_parse_args_rejects_removed_warn_flag() -> None:
         harness.parse_args(["--warn-on-error-values"])
 
 
-def test_run_differential_test_requires_scenarios(tmp_path: Path) -> None:
+def test_run_differential_test_requires_scenarios(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate stays empty-hooks even when derived repos author a real matrix."""
     harness = _load_harness_module()
+    monkeypatch.setattr(harness, "build_axes", lambda: ())
+    monkeypatch.setattr(harness, "build_scenarios", lambda: ())
+    monkeypatch.setattr(harness, "output_cell_labels", lambda: ())
+    (tmp_path / "workbook.xlsx").write_bytes(b"stub")
     config = harness.GraphDifferentialConfig(
         repo_root=tmp_path,
         workbook_path=tmp_path / "workbook.xlsx",
