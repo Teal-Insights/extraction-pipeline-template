@@ -2,9 +2,16 @@
 
 Compare Microsoft Excel (golden master via ``xlwings``) against an in-memory
 ``excel-grapher`` dependency graph evaluated with ``FormulaEvaluator``. The
-graph is built from the same ``constraints`` and ``TARGETS`` declared in
-``workbook_config.py``, so this differential stays in lockstep with extraction
-as the pipeline evolves.
+graph is loaded through the same cache helpers as extract
+(``try_load_cached_dependency_graph`` / ``get_or_build_dependency_graph``),
+keyed by workbook + targets + constraints + flags + ``excel-grapher`` version,
+so this differential stays in lockstep with extraction as the pipeline evolves.
+
+Prefer a warm ``.cache/dependency-graph/`` entry from
+``uv run python -m src.extraction_pipeline --only-stage extract`` (or
+``scripts.regenerate_graph_cache``) before running; on miss the harness builds
+and saves via ``get_or_build_dependency_graph`` rather than a bare cold
+``create_dependency_graph`` with no cache write.
 
 Address keys: ``excel-grapher`` stores sheet-qualified addresses in canonical
 form (e.g. ``'Discrete Risks'!H2``). Human-authored scenario matrices and
@@ -39,10 +46,12 @@ from typing import Any, Literal
 
 from excel_grapher.core.address_keys import normalize_key, parse_address
 from excel_grapher.evaluator import FormulaEvaluator
-from excel_grapher.grapher import (
-    DependencyGraph,
-    DynamicRefConfig,
-    create_dependency_graph,
+from excel_grapher.grapher import DependencyGraph, DynamicRefConfig
+
+from src.graph_cache import (
+    COMMITTED_GRAPH_CACHE_DIR,
+    get_or_build_dependency_graph,
+    try_load_cached_dependency_graph,
 )
 
 from .comparison_utils import values_match
@@ -255,7 +264,16 @@ class GoldenDriver:
 
 
 class MvpGraphDriver:
-    """In-memory graph driver built from ``workbook_config`` constraints."""
+    """In-memory graph driver built from ``workbook_config`` constraints.
+
+    Loads the graph through the same cache helpers as extract
+    (``try_load_cached_dependency_graph`` / ``get_or_build_dependency_graph``),
+    keyed by workbook + targets + constraints + ``load_values`` + provenance +
+    ``excel-grapher`` version. Prefers a warm hit from
+    ``COMMITTED_GRAPH_CACHE_DIR`` (repo ``.cache/dependency-graph/``, even when
+    pytest redirects ``DEFAULT_GRAPH_CACHE_DIR``). On miss, builds and saves via
+    the writable default cache so a subsequent run does not cold-build again.
+    """
 
     def __init__(
         self,
@@ -265,12 +283,47 @@ class MvpGraphDriver:
         constraints: dict[str, object],
     ) -> None:
         config = DynamicRefConfig.from_constraints(constraints, {})
-        self._graph: DependencyGraph = create_dependency_graph(
-            workbook_path,
-            list(targets),
+        cached = try_load_cached_dependency_graph(
+            workbook_path=workbook_path,
+            targets=targets,
+            constraints=constraints,
             load_values=True,
-            dynamic_refs=config,
+            capture_dependency_provenance=True,
+            cache_dir=COMMITTED_GRAPH_CACHE_DIR,
         )
+        if cached is None:
+            cached = get_or_build_dependency_graph(
+                workbook_path=workbook_path,
+                targets=targets,
+                constraints=constraints,
+                dynamic_refs=config,
+                load_values=True,
+                capture_dependency_provenance=True,
+            )
+            if cached.cache_hit:
+                logger.info(
+                    "MVP graph loaded from default cache "
+                    "(key=%s, %.1fs); committed cache had no matching entry",
+                    cached.cache_key[:12],
+                    cached.elapsed_seconds,
+                )
+            else:
+                logger.info(
+                    "MVP graph cache miss; built via get_or_build_dependency_graph "
+                    "(key=%s, %.1fs). Prefer a warm extract "
+                    "(`uv run python -m src.extraction_pipeline --only-stage extract` "
+                    "or `uv run python -m scripts.regenerate_graph_cache`) before "
+                    "re-running the graph differential.",
+                    cached.cache_key[:12],
+                    cached.elapsed_seconds,
+                )
+        else:
+            logger.info(
+                "MVP graph loaded from committed cache (key=%s, %.1fs)",
+                cached.cache_key[:12],
+                cached.elapsed_seconds,
+            )
+        self._graph: DependencyGraph = cached.graph
         self._evaluator = FormulaEvaluator(self._graph)
         self._known_keys = frozenset(self._graph.leaf_keys()) | frozenset(
             self._graph.formula_keys()
