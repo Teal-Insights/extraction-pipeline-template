@@ -20,6 +20,7 @@ from src.bindings_validation_cache import DEFAULT_BINDINGS_VALIDATION_CACHE_DIR
 from src.cluster_cache import DEFAULT_CLUSTER_CACHE_DIR
 from src.codegen_cache import DEFAULT_CODEGEN_CACHE_DIR
 from src.graph_cache import (
+    COMMITTED_GRAPH_CACHE_DIR,
     DEFAULT_GRAPH_CACHE_DIR,
     bindings_fingerprint,
     clear_dependency_graph_cache,
@@ -29,6 +30,7 @@ from src.graph_cache import (
     load_dependency_graph,
     prune_cache_entries_for_other_excel_grapher_versions,
     save_dependency_graph,
+    try_load_cached_dependency_graph,
 )
 from src.internals_refactor import DEFAULT_INTERNALS_CACHE_DIR
 from src.projection_cache import (
@@ -83,6 +85,12 @@ def test_pytest_uses_isolated_pipeline_disk_cache() -> None:
     assert DEFAULT_CODEGEN_CACHE_DIR != REPO_CODEGEN_CACHE_DIR
     assert DEFAULT_CLUSTER_CACHE_DIR != REPO_CLUSTER_CACHE_DIR
     assert DEFAULT_INTERNALS_CACHE_DIR != REPO_INTERNALS_CACHE_DIR
+
+
+def test_committed_graph_cache_dir_stays_on_repo_path_under_pytest_redirect() -> None:
+    """Opt-in workbook audits must read the repo cache, not pytest's temp redirect."""
+    assert COMMITTED_GRAPH_CACHE_DIR == REPO_GRAPH_CACHE_DIR
+    assert COMMITTED_GRAPH_CACHE_DIR != DEFAULT_GRAPH_CACHE_DIR
 
 
 @pytest.fixture
@@ -440,6 +448,97 @@ def test_corrupt_dependency_graph_cache_is_rebuilt(
     second = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
     assert not second.cache_hit
     assert payload_path.is_file()
+
+
+def test_try_load_cached_dependency_graph_miss_does_not_build_or_write(
+    synthetic_config,
+    graph_cache_dir: Path,
+) -> None:
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
+    with (
+        patch("src.graph_cache.create_dependency_graph") as create,
+        patch("src.graph_cache.save_dependency_graph") as save,
+    ):
+        result = try_load_cached_dependency_graph(
+            workbook_path=synthetic_config.workbook_path,
+            targets=synthetic_config.targets,
+            constraints=synthetic_config.constraints,
+            cache_dir=graph_cache_dir,
+        )
+
+    assert result is None
+    create.assert_not_called()
+    save.assert_not_called()
+    assert list(graph_cache_dir.glob("*")) == []
+
+
+def test_try_load_cached_dependency_graph_hit_does_not_rewrite(
+    synthetic_config,
+    graph_cache_dir: Path,
+) -> None:
+    first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
+    payload_path = graph_cache_dir / f"{first.cache_key}.pkl.gz"
+    before = payload_path.read_bytes()
+    mtime_before = payload_path.stat().st_mtime_ns
+
+    with patch("src.graph_cache.save_dependency_graph") as save:
+        loaded = try_load_cached_dependency_graph(
+            workbook_path=synthetic_config.workbook_path,
+            targets=synthetic_config.targets,
+            constraints=synthetic_config.constraints,
+            cache_dir=graph_cache_dir,
+        )
+
+    assert loaded is not None
+    assert loaded.cache_hit
+    assert loaded.cache_key == first.cache_key
+    assert len(loaded.graph) == len(first.graph)
+    save.assert_not_called()
+    assert payload_path.read_bytes() == before
+    assert payload_path.stat().st_mtime_ns == mtime_before
+
+
+def test_try_load_cached_dependency_graph_leaves_corrupt_payload(
+    synthetic_config,
+    graph_cache_dir: Path,
+) -> None:
+    first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
+    payload_path = graph_cache_dir / f"{first.cache_key}.pkl.gz"
+    corrupt = b"not-a-valid-gzip-pickle"
+    payload_path.write_bytes(corrupt)
+
+    loaded = try_load_cached_dependency_graph(
+        workbook_path=synthetic_config.workbook_path,
+        targets=synthetic_config.targets,
+        constraints=synthetic_config.constraints,
+        cache_dir=graph_cache_dir,
+    )
+
+    assert loaded is None
+    assert payload_path.is_file()
+    assert payload_path.read_bytes() == corrupt
+
+
+def test_load_dependency_graph_unlink_corrupt_false_preserves_payload(
+    graph_cache_dir: Path,
+) -> None:
+    graph_cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_key = "corrupt-key"
+    payload_path = graph_cache_dir / f"{cache_key}.pkl.gz"
+    corrupt = b"not-a-valid-gzip-pickle"
+    payload_path.write_bytes(corrupt)
+
+    assert (
+        load_dependency_graph(
+            cache_key,
+            cache_dir=graph_cache_dir,
+            unlink_corrupt=False,
+        )
+        is None
+    )
+    assert payload_path.read_bytes() == corrupt
 
 
 def test_dependency_graph_cache_writes_egdg_multipart_payload(

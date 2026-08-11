@@ -148,6 +148,7 @@ def load_dependency_graph(
     cache_key: str,
     *,
     cache_dir: Path | None = None,
+    unlink_corrupt: bool = True,
 ) -> DependencyGraph | None:
     payload_path, _meta_path = _cache_paths(_graph_cache_dir(cache_dir), cache_key)
     if not payload_path.is_file():
@@ -162,10 +163,12 @@ def load_dependency_graph(
             return None
         graph = load_graph(payload_path)
     except (OSError, EOFError, pickle.UnpicklingError, TypeError, ValueError):
-        payload_path.unlink(missing_ok=True)
+        if unlink_corrupt:
+            payload_path.unlink(missing_ok=True)
         return None
     if not isinstance(graph, DependencyGraph):
-        payload_path.unlink(missing_ok=True)
+        if unlink_corrupt:
+            payload_path.unlink(missing_ok=True)
         return None
     return graph
 
@@ -176,6 +179,45 @@ class DependencyGraphCacheResult:
     cache_key: str
     cache_hit: bool
     elapsed_seconds: float
+
+
+def try_load_cached_dependency_graph(
+    *,
+    workbook_path: Path,
+    targets: Sequence[str],
+    constraints: Mapping[str, object],
+    load_values: bool = True,
+    capture_dependency_provenance: bool = True,
+    cache_dir: Path | None = None,
+) -> DependencyGraphCacheResult | None:
+    """Load a warm dependency-graph cache entry without building or writing.
+
+    Intended for read-only consumers (e.g. the opt-in workbook LLM audit under
+    pytest's redirected ``DEFAULT_GRAPH_CACHE_DIR``). Corrupt payloads are left
+    in place (``unlink_corrupt=False``).
+    """
+    resolved_cache_dir = _graph_cache_dir(cache_dir)
+    cache_key = dependency_graph_cache_key(
+        workbook_path=workbook_path,
+        targets=targets,
+        constraints=constraints,
+        load_values=load_values,
+        capture_dependency_provenance=capture_dependency_provenance,
+    )
+    started = time.perf_counter()
+    cached = load_dependency_graph(
+        cache_key,
+        cache_dir=resolved_cache_dir,
+        unlink_corrupt=False,
+    )
+    if cached is None:
+        return None
+    return DependencyGraphCacheResult(
+        graph=cached,
+        cache_key=cache_key,
+        cache_hit=True,
+        elapsed_seconds=time.perf_counter() - started,
+    )
 
 
 def _process_cache_slot(cache_dir: Path, cache_key: str) -> tuple[str, str]:

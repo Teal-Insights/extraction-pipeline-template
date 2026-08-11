@@ -34,8 +34,8 @@ LLM_GRAPH_AUDIT_MODEL_ENV = "LLM_GRAPH_AUDIT_MODEL"
 LLM_GRAPH_AUDIT_CASES_ENV = "LLM_GRAPH_AUDIT_CASES"
 LLM_GRAPH_AUDIT_SEED_ENV = "LLM_GRAPH_AUDIT_SEED"
 
-DEFAULT_MAX_CHILDREN = 40
-DEFAULT_MAX_FORMULA_LENGTH = 240
+DEFAULT_MAX_CHILDREN = 300
+DEFAULT_MAX_FORMULA_LENGTH = 8000
 DEFAULT_CASE_COUNT = 5
 DEFAULT_CASE_SEED = 0
 
@@ -276,6 +276,36 @@ def case_difficulty_score(
     return (len(dependencies), dynamic_or_guarded, len(cross_sheet))
 
 
+def discover_audit_case_candidates(
+    graph: DependencyGraph,
+    *,
+    max_children: int | None = None,
+) -> list[GraphAuditCase]:
+    """Rank formula parents eligible for direct-dependency LLM audits.
+
+    Parents whose fan-out exceeds ``max_children`` are excluded because
+    truncated evidence forces an ``inconclusive`` verdict.
+    """
+    child_limit = max_children if max_children is not None else DEFAULT_MAX_CHILDREN
+    candidates: list[GraphAuditCase] = []
+    for parent_key in graph.formula_keys():
+        dependency_count = len(graph.get_dependencies(parent_key))
+        if dependency_count > child_limit:
+            continue
+        candidates.append(
+            GraphAuditCase(
+                parent_key=parent_key,
+                label=f"auto:{parent_key}",
+                focus="auto-selected by difficulty and fan-out",
+            )
+        )
+    candidates.sort(
+        key=lambda case: case_difficulty_score(graph, case.parent_key),
+        reverse=True,
+    )
+    return candidates
+
+
 def validate_audit_cases(
     graph: DependencyGraph, cases: tuple[GraphAuditCase, ...]
 ) -> None:
@@ -301,7 +331,15 @@ def select_audit_cases(
     *,
     case_count: int | None = None,
     seed: int | None = None,
+    max_children: int | None = None,
 ) -> list[GraphAuditCase]:
+    """Select audit parents: required pins first, then difficulty-ranked sample.
+
+    Empty ``cases`` auto-discovers from ``graph.formula_keys()``. Non-empty
+    declarations act as an overlay: declared keys win (label/focus/required),
+    ``required=True`` pins are always included first, and discovery fills any
+    remaining slots.
+    """
     count = (
         case_count
         if case_count is not None
@@ -316,7 +354,14 @@ def select_audit_cases(
         raise ValueError("case_count must be positive")
 
     required = [case for case in cases if case.required]
-    optional = [case for case in cases if not case.required]
+    declared_optional = [case for case in cases if not case.required]
+    declared_keys = {normalize_key(case.parent_key) for case in cases}
+    discovered = [
+        case
+        for case in discover_audit_case_candidates(graph, max_children=max_children)
+        if normalize_key(case.parent_key) not in declared_keys
+    ]
+    optional = declared_optional + discovered
     optional.sort(
         key=lambda case: case_difficulty_score(graph, case.parent_key),
         reverse=True,
