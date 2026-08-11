@@ -255,6 +255,7 @@ Cluster parallel formula families, collapse internals with LLM-authored semantic
 #### Formula-cluster variation mode
 
 Set `VARIATION_MODE` in [workbook_config.py](workbook_config.py) to control how parallel formula cells are grouped before the LLM refactor step. This affects **export** and **refactor-bucket recording** only — not graph extraction (`--extract-graph` ignores it). Run `uv run python -m scripts.compare_cluster_variation_modes` before committing a mode on a new workbook.
+
 | Mode | Behavior |
 |---|---|
 | `independent` (default) | Keep one refactor cluster when formulas share the same AST shape and scalar literals, even if operand binding keys vary along multiple dimensions. |
