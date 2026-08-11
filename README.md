@@ -15,9 +15,10 @@ Follow this order when adapting the template to a new workbook. Each step has a 
 | 3. Configure | **Config author** | Declare extraction targets and dynamic-ref constraints (empty `series: []` binding placeholders are fine). See [Configure](#1-configure) below. |
 | 4. Extract | **Config author** | Run `uv run python -m src.extraction_pipeline --extract-graph`. Confirm the graph builds without `DynamicRefError` (bindings are not required yet). |
 | 5. Review graph | **Graph reviewer** | Inspect `artifacts/dependency-graph/` (see [artifacts/README.md](artifacts/README.md)). Confirm expected sheets, no spurious nodes, and complete shock/engine paths. Optionally run opt-in LLM dependency audits: `uv run pytest tests/test_extraction_graph_accuracy.py --run-skipped` (workbook audits auto-select parents from the warm committed `.cache/dependency-graph/` entry — run `--only-stage extract` or `scripts.regenerate_graph_cache` first; `GRAPH_AUDIT_CASES` is optional steering only. The synthetic smoke-test audit runs without extra configuration). Set the provider API key for `LLM_GRAPH_AUDIT_MODEL` (defaults to `gpt-5.5`). |
-| 6. Verify graph | **Parity owner** | Define a scenario matrix in `tests/differential/` and run graph-oracle differential parity before export (see [Verify graph](#3-verify-graph)). Do not proceed to export until graph-oracle parity passes. |
-| 7. Export and test | **Parity owner** | Run the full pipeline (`uv run python -m src.extraction_pipeline`). Run exported-library differential parity; on Windows with Excel, re-run from the exported project (see [Test](#5-test)). |
-| 8. Document and refactor | **Config author** | Generate docs, refactor internals behind parity gates, and update committed parity evidence under `data/differential/`. |
+| 6. Verify graph | **Parity owner** | Define a scenario matrix in `tests/differential/` and run graph-oracle differential parity before export (see [Verify graph](#3-verify-graph)). Prefer a warm `.cache/dependency-graph/` from extract first. Do not proceed to export until graph-oracle parity passes. |
+| 7. Cluster diagnostics | **Config author** | Before first export, compare clustering modes and remodel shredded bindings (see [Cluster diagnostics](#4-cluster-diagnostics)). Do not run the full pipeline until `VARIATION_MODE` is chosen and shredded families are addressed. |
+| 8. Export and test | **Parity owner** | Run the full pipeline (`uv run python -m src.extraction_pipeline`). Run exported-library differential parity; on Windows with Excel, re-run from the exported project (see [Test](#6-test)). |
+| 9. Document and refactor | **Config author** | Generate docs, refactor internals behind parity gates, and update committed parity evidence under `data/differential/`. |
 
 Copy the checkbox list in [Checklist for a new workbook](#checklist-for-a-new-workbook) into your extraction tracking issue and check items off as you go.
 
@@ -33,8 +34,8 @@ Before running the pipeline, populate this repository with workbook-specific inp
 | Constraints | `workbook_config.py` → `CONSTRAINTS` | Dynamic-ref resolution and leaf input/constant classification |
 | Series bindings | `bindings/inputs.bindings.yaml`, `bindings/outputs.bindings.yaml`, `bindings/internals.bindings.yaml`, `bindings/constants.bindings.yaml` | Records-shaped public API, internal formula-cell triangulation, and reader-only constant leaves |
 | Package metadata | `workbook_config.py` → `DIST_METADATA` | Generated `dist/` project name, docs URLs, README |
-| Variation mode | `workbook_config.py` → `VARIATION_MODE` | Formula-cluster splitting for internals refactor (see [Refactor](#7-refactor)) |
-| Clustering mode | `workbook_config.py` → `CLUSTERING_MODE` | Base formula-cluster grouping before variation splitting (see [Refactor](#7-refactor)) |
+| Variation mode | `workbook_config.py` → `VARIATION_MODE` | Formula-cluster splitting for internals refactor (see [Cluster diagnostics](#4-cluster-diagnostics) and [Refactor](#8-refactor)) |
+| Clustering mode | `workbook_config.py` → `CLUSTERING_MODE` | Base formula-cluster grouping before variation splitting (see [Refactor](#8-refactor)) |
 | Internal binding exemptions | `workbook_config.py` → `INTERNAL_BINDING_EXEMPT_CELLS` | Reviewed formula cells allowed to remain unbound |
 | Graph-cache target bundles | `workbook_config.py` → `GRAPH_CACHE_TARGET_BUNDLES` | Optional extra target sets for `scripts/regenerate_graph_cache.py` |
 | Scenario matrix | `tests/differential/*_scenario_matrix.py` (or hooks in `differential_test_graph.py`) | Representative input combinations for differential parity sweeps |
@@ -62,7 +63,8 @@ The end-to-end workflow follows the stage gates in [technical_standard.md](techn
 flowchart LR
   configure[Configure] --> extract[Extract]
   extract --> verifyGraph[Verify graph]
-  verifyGraph --> export[Export]
+  verifyGraph --> clusterDiag[Cluster diagnostics]
+  clusterDiag --> export[Export]
   export --> test[Test]
   export --> document[Document]
   export --> refactor[Refactor]
@@ -176,13 +178,13 @@ Use `warn` while iterating locally; treat pytest failures as the CI gate once ex
 
 #### Clustering / schedule diagnostics
 
-These CLIs inspect warm caches or recompute clustering without running export/refactor. They are for tuning `variation_mode` / bindings and debugging mechanical schedule failures—not part of the default configure → extract → export path.
+These CLIs inspect warm caches or recompute clustering without running the full export/refactor pipeline. **Before the first export**, run the compare utility (onboarding step 7); use diagnose/inspect when families shred or a mechanical refactor fails. See [Cluster diagnostics](#4-cluster-diagnostics).
 
 | Utility | Command | When to use |
 |---|---|---|
+| Compare variation modes | `uv run python -m scripts.compare_cluster_variation_modes` | **Required before first export:** side-by-side `independent` vs `dominant_key_only` series-fingerprint family counts (and bucket diffs). Quiet summary by default; `--include changes members fingerprints` for detail; `--clustering-mode` to override the configured mode. |
+| Schedule atomization | `uv run python -m scripts.diagnose_schedule_atomization` | Neighbor of compare: when fingerprint families shred into many schedule units, reports fan-out stats, worst families, peel samples, shredded series, and cyclical remodel recommendations (`--top-families`, `--peel-samples`, …). |
 | Inspect one cluster | `uv run python -m scripts.inspect_cluster --cluster-id N` | After a mechanical refactor failure: print member addresses/formulas for fingerprint-family `N`. Add `--schedule` for peels, `--sources` (optionally `--internals path`) for `cell_*` bodies. Honors `--variation-mode` / `--clustering-mode` / `--no-cache`. |
-| Schedule atomization | `uv run python -m scripts.diagnose_schedule_atomization` | When fingerprint families shred into many schedule units: fan-out stats, worst families, peel samples, shredded series, and cyclical remodel recommendations (`--top-families`, `--peel-samples`, …). |
-| Compare variation modes | `uv run python -m scripts.compare_cluster_variation_modes` | Side-by-side `independent` vs `dominant_key_only` bucket diffs before committing a `variation_mode`. Quiet summary by default; `--include changes members fingerprints` for detail. |
 
 Commit `.cache/dependency-graph/` only when your downstream pipeline vendors the cache for warm CI (override `.gitignore` for that directory). Run `uv run pytest tests/test_binding_utility_scripts.py` to exercise the synthetic fixture path end-to-end.
 
@@ -194,19 +196,46 @@ Commit `.cache/dependency-graph/` only when your downstream pipeline vendors the
 
 **How:**
 
+Prefer a warm `.cache/dependency-graph/` entry from extract (or
+`scripts.regenerate_graph_cache`) so the harness loads the graph via the same
+cache helpers as the pipeline instead of cold-building:
+
 ```bash
+uv run python -m src.extraction_pipeline --only-stage extract
 uv run python -m tests.differential.differential_test_graph
 ```
 
-Reports land under `data/differential/graph/`. Exit codes: **`0`** all comparisons pass, **`1`** any failure, **`2`** prerequisite missing or scenarios not configured. See [tests/differential/README.md](tests/differential/README.md) for harness hooks, address-key normalization, and workbook-exact label resolution.
+Reports land under `data/differential/graph/`. Exit codes: **`0`** all comparisons pass, **`1`** any failure, **`2`** prerequisite missing or scenarios not configured. See [tests/differential/README.md](tests/differential/README.md) for harness hooks, warm-cache policy, address-key normalization, and workbook-exact label resolution.
 
 **Gate:** Do not run the full pipeline until graph-oracle parity passes.
 
-### 4. Export
+### 4. Cluster diagnostics
 
-The pipeline applies `OptimalCompression` over the canonical graph, generates a records-shaped API (`make_context`, `set_*`, `compute_*`), writes `dist/<package>/`, and copies the validation bundle into `dist/tests/`.
+**Why:** Formula clustering and the refactor schedule depend on binding geometry and `VARIATION_MODE`. Exporting first locks in an expensive codegen/refactor path; shredded fingerprint families produce many tiny schedule units that the mechanical refactor cannot collapse. Comparing modes and remodeling bindings up front avoids re-exporting after the first mechanical failure.
 
-### 5. Test
+**What:** [`scripts/compare_cluster_variation_modes.py`](scripts/compare_cluster_variation_modes.py) builds clusters for `independent` vs `dominant_key_only` and prints series-fingerprint family counts (plus optional `--include changes|members|fingerprints` detail). Its neighbor [`scripts/diagnose_schedule_atomization.py`](scripts/diagnose_schedule_atomization.py) also reports fingerprint-family counts, but focuses on how those families fan out into schedule units (intact vs shredded), not on comparing clustering modes.
+
+**How:**
+
+```bash
+uv run python -m scripts.compare_cluster_variation_modes
+```
+
+Pass `--clustering-mode` to override the configured mode, or `--include changes members fingerprints` for per-bucket detail. When families shred, run:
+
+```bash
+uv run python -m scripts.diagnose_schedule_atomization
+```
+
+In general, fix shredded groups by converting row bindings to column bindings (or vice versa), or by consolidating multiple series bindings into a `layout: matrix` series. Then set `VARIATION_MODE` / `CLUSTERING_MODE` in [workbook_config.py](workbook_config.py) (see [Refactor](#8-refactor)).
+
+**Gate:** Do not run the full pipeline for the first export until compare has been run, `VARIATION_MODE` is chosen, and shredded families have been remodeled (or explicitly accepted).
+
+### 5. Export
+
+The pipeline applies `OptimalCompression` over the canonical graph, generates a records-shaped API (`make_context`, `set_*`, `compute_*`), writes `dist/<package>/`, and copies the validation bundle into `dist/tests/`. Cluster diagnostics (step 7 in the [onboarding checklist](#clone-and-configure-onboarding-checklist)) should already have chosen `VARIATION_MODE` and addressed shredded families.
+
+### 6. Test
 
 Run exported-library differential parity after export. Graph-oracle parity (step 6 in the [onboarding checklist](#clone-and-configure-onboarding-checklist)) should already have passed before you exported.
 
@@ -220,17 +249,17 @@ On Windows with Excel installed, re-run from the exported project:
 uv run --project dist --group validation python -m tests.differential.differential_test_exported_library --layout exported
 ```
 
-### 6. Document
+### 7. Document
 
 Great Docs generates the distributable website from the exported package. LLM rewrites guide sections into Python-first user-guide pages when cache misses require an API key.
 
-### 7. Refactor
+### 8. Refactor
 
-Cluster parallel formula families, collapse internals with LLM-authored semantic helpers behind a parity gate, and prune thin wrappers. Each refactor pass re-runs differential tests.
+Cluster parallel formula families, collapse internals with LLM-authored semantic helpers behind a parity gate, and prune thin wrappers. Each refactor pass re-runs differential tests. Choose `VARIATION_MODE` from [Cluster diagnostics](#4-cluster-diagnostics) before the first export/refactor.
 
 #### Formula-cluster variation mode
 
-Set `VARIATION_MODE` in [workbook_config.py](workbook_config.py) to control how parallel formula cells are grouped before the LLM refactor step. This affects **export** and **refactor-bucket recording** only — not graph extraction (`--extract-graph` ignores it).
+Set `VARIATION_MODE` in [workbook_config.py](workbook_config.py) to control how parallel formula cells are grouped before the LLM refactor step. This affects **export** and **refactor-bucket recording** only — not graph extraction (`--extract-graph` ignores it). Run `uv run python -m scripts.compare_cluster_variation_modes` before committing a mode on a new workbook.
 
 | Mode | Behavior |
 |---|---|
@@ -296,7 +325,7 @@ uv run python -m scripts.run_refactor_stage --report-synthesis artifacts/refacto
 
 ## Run the pipeline
 
-After graph-oracle parity passes (see [Verify graph](#3-verify-graph)), run the full export pipeline:
+After graph-oracle parity and cluster diagnostics pass (see [Verify graph](#3-verify-graph) and [Cluster diagnostics](#4-cluster-diagnostics)), run the full export pipeline:
 
 ```bash
 uv sync
@@ -410,8 +439,9 @@ Ordered to match the [onboarding checklist](#clone-and-configure-onboarding-chec
 - [ ] **Configure:** Internal binding exemptions reviewed (`INTERNAL_BINDING_EXEMPT_CELLS`)
 - [ ] **Configure:** `bindings/internals.bindings.yaml` covers internal formula cells
 - [ ] **Review graph:** Manual completeness review done; optional LLM dependency audit passed (`pytest --run-skipped`)
-- [ ] **Verify graph:** Scenario matrix defined in `tests/differential/`; graph-oracle parity passes (`uv run python -m tests.differential.differential_test_graph`)
+- [ ] **Verify graph:** Scenario matrix defined in `tests/differential/`; warm `.cache/dependency-graph/` from extract (or `scripts.regenerate_graph_cache`); graph-oracle parity passes (`uv run python -m tests.differential.differential_test_graph`)
 - [ ] **Configure:** Internal binding coverage passes (`uv run pytest tests/test_internal_binding_coverage.py`)
+- [ ] **Cluster diagnostics:** `uv run python -m scripts.compare_cluster_variation_modes` run; `VARIATION_MODE` chosen; shredded families remodeled via `diagnose_schedule_atomization` (row↔column series or consolidate to matrix) or explicitly accepted
 - [ ] **Export:** `dist/` package builds; semantic API scenario runs (bindings authored beyond empty placeholders)
 - [ ] **Export:** Validation bundle exported; exported-library differential parity passes (Windows Excel sweep when available)
 - [ ] **Document / refactor:** Public API uses domain language; docstrings present
