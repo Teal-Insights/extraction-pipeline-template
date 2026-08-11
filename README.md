@@ -174,6 +174,16 @@ Use `warn` while iterating locally; treat pytest failures as the CI gate once ex
 | Internal-binding burndown | `uv run python -m scripts.internal_binding_burndown` | After `--extract-graph` to see which formula rows still need `internals.bindings.yaml` entries. Supports `--per-sheet` and `--max-rows`. Reuses the newest cached graph even when bindings changed. |
 | Programmatic binding emission | `uv run python -m scripts.author_bindings` | Large, regular binding surfaces defined in a declarative catalog (`templates/binding-catalog.example.yaml`). Complements [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.txt). |
 
+#### Clustering / schedule diagnostics
+
+These CLIs inspect warm caches or recompute clustering without running export/refactor. They are for tuning `variation_mode` / bindings and debugging mechanical schedule failures—not part of the default configure → extract → export path.
+
+| Utility | Command | When to use |
+|---|---|---|
+| Inspect one cluster | `uv run python -m scripts.inspect_cluster --cluster-id N` | After a mechanical refactor failure: print member addresses/formulas for fingerprint-family `N`. Add `--schedule` for peels, `--sources` (optionally `--internals path`) for `cell_*` bodies. Honors `--variation-mode` / `--clustering-mode` / `--no-cache`. |
+| Schedule atomization | `uv run python -m scripts.diagnose_schedule_atomization` | When fingerprint families shred into many schedule units: fan-out stats, worst families, peel samples, shredded series, and cyclical remodel recommendations (`--top-families`, `--peel-samples`, …). |
+| Compare variation modes | `uv run python -m scripts.compare_cluster_variation_modes` | Side-by-side `independent` vs `dominant_key_only` bucket diffs before committing a `variation_mode`. Quiet summary by default; `--include changes members fingerprints` for detail. |
+
 Commit `.cache/dependency-graph/` only when your downstream pipeline vendors the cache for warm CI (override `.gitignore` for that directory). Run `uv run pytest tests/test_binding_utility_scripts.py` to exercise the synthetic fixture path end-to-end.
 
 ### 3. Verify graph
