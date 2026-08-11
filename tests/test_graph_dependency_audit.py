@@ -255,9 +255,7 @@ def test_select_audit_cases_required_overlay_plus_auto_fill() -> None:
 
 def test_select_audit_cases_declared_keys_win_over_discovered_labels() -> None:
     graph = _sample_graph()
-    declared = (
-        GraphAuditCase("Baseline!D11", "declared_baseline", "custom focus"),
-    )
+    declared = (GraphAuditCase("Baseline!D11", "declared_baseline", "custom focus"),)
     selected = select_audit_cases(graph, declared, case_count=2, seed=0)
     by_key = {case.parent_key: case for case in selected}
     assert "Baseline!D11" in by_key
