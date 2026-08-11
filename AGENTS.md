@@ -28,11 +28,11 @@ Five workflow scripts live under `scripts/`:
 - `uv run python -m scripts.author_bindings` — emit `inputs.bindings.yaml`, `outputs.bindings.yaml`, `internals.bindings.yaml`, and `constants.bindings.yaml` from a declarative catalog (default: `templates/binding-catalog.example.yaml`), then validate with `validate_bindings_workbook`. Specialize the catalog per derived repo rather than hard-coding sheet geometry in Python.
 - `uv run python -m scripts.run_semantic_naming --internals dist/<package>/internals.py` — run standalone Pass-2 semantic naming on a mechanical `internals.py` without graph, clustering, or parity-gate context. Discovers helpers still carrying the pending-naming placeholder docstring, asks the refactor model for docstring + local renames, and writes the module. Supports `--dry-run`, `--no-cache`, and `--list-only`; successful responses are written to `.cache/internals-refactors.json` as they arrive, so an interrupted run resumes without re-paying completed LLM calls. Its v1 prompts are thinner than in-pipeline Pass 2 (no fingerprint context), so naming quality may differ slightly.
 
-Clustering / schedule diagnostics (warm-cache inspection; not required for the default pipeline):
+Clustering / schedule diagnostics (warm-cache inspection; run compare before first export):
 
+- `uv run python -m scripts.compare_cluster_variation_modes` — **before first export**, compare `independent` vs `dominant_key_only` series-fingerprint family counts and choose `VARIATION_MODE` (`--include` for diffs; `--clustering-mode` to override).
+- `uv run python -m scripts.diagnose_schedule_atomization` — explain fingerprint-family → schedule-slice fan-out with peel evidence and remodel recommendations; when groups shred, convert row bindings to column (or vice versa) or consolidate multiple series into `layout: matrix`.
 - `uv run python -m scripts.inspect_cluster --cluster-id N` — print members/formulas for one fingerprint family after a mechanical failure; `--schedule` / `--sources` / `--internals` for peels and `cell_*` bodies.
-- `uv run python -m scripts.diagnose_schedule_atomization` — explain fingerprint-family → schedule-slice fan-out with peel evidence and remodel recommendations.
-- `uv run python -m scripts.compare_cluster_variation_modes` — compare `independent` vs `dominant_key_only` clustering before changing `variation_mode` (`--include` for diffs).
 
 Run `uv run pytest tests/test_binding_utility_scripts.py` after changing these utilities.
 

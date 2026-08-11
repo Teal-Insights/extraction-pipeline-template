@@ -123,6 +123,7 @@ Ordered to match the onboarding checklist in [README.md](README.md#clone-and-con
 [ ] Extract: graph extracts with provenance (--extract-graph)
 [ ] Review graph: manual completeness review done; optional LLM dependency audit passed
 [ ] Verify graph: scenario matrix defined in tests/differential/; graph-oracle parity passes (uv run python -m tests.differential.differential_test_graph)
+[ ] Cluster diagnostics: compare_cluster_variation_modes run; VARIATION_MODE chosen; shredded families remodeled (row↔column series or consolidate to matrix) or explicitly accepted
 [ ] Export: dist package builds; semantic API scenario runs
 [ ] Export: validation bundle exported; exported-library differential parity passes
 [ ] Document / refactor: public API uses domain language; docstrings present
