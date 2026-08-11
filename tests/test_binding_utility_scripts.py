@@ -15,7 +15,6 @@ from excel_grapher.grapher.graph import DependencyGraph
 from excel_grapher.series_bindings import load_series_bindings
 from excel_grapher.series_bindings.resolve import BindingDirection
 
-from scripts.internal_binding_burndown import load_graph
 from scripts.regenerate_graph_cache import (
     graph_cache_target_bundles,
     regenerate_graph_cache,
@@ -39,6 +38,7 @@ from src.cluster_cache import COMMITTED_CLUSTER_CACHE_DIR
 from src.graph_cache import (
     dependency_graph_cache_key,
     load_dependency_graph,
+    load_pipeline_dependency_graph,
     prune_stale_graph_cache_entries,
     save_dependency_graph,
 )
@@ -187,10 +187,6 @@ def _monkeypatch_temp_graph_cache(
         cluster_cache,
         "COMMITTED_CLUSTER_CACHE_DIR",
         resolved_cluster_cache_dir,
-    )
-    monkeypatch.setattr(
-        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
-        cache_dir,
     )
     monkeypatch.setattr(
         "scripts.regenerate_graph_cache.COMMITTED_GRAPH_CACHE_DIR",
@@ -618,7 +614,7 @@ def test_internal_binding_burndown_groups_unbound_formula_cells(
     _monkeypatch_temp_graph_cache(monkeypatch, cache_dir=cache_dir, config=config)
     regenerate_graph_cache(force=True)
 
-    graph, _cache_key = load_graph(config)
+    graph, _cache_key = load_pipeline_dependency_graph(config)
     bindings = load_series_bindings(config.bindings_path)
     unbound = find_unbound_internal_formula_cells_from_manifest(
         graph=graph,
@@ -670,7 +666,7 @@ def test_internal_binding_burndown_does_not_warn_when_only_bindings_change(
         encoding="utf-8",
     )
 
-    load_graph(config)
+    load_pipeline_dependency_graph(config)
     captured = capsys.readouterr()
 
     assert "Warning: newest cached graph key does not match" not in captured.out
@@ -705,7 +701,7 @@ def test_internal_binding_burndown_warns_when_cached_graph_is_stale(
 
     workbook_path.write_bytes(workbook_path.read_bytes() + b"changed")
 
-    load_graph(config)
+    load_pipeline_dependency_graph(config)
     captured = capsys.readouterr()
 
     assert "Warning: newest cached graph key does not match" in captured.out
@@ -714,7 +710,7 @@ def test_internal_binding_burndown_warns_when_cached_graph_is_stale(
     assert "bindings" not in warning_line
 
 
-def test_load_graph_prefers_fingerprint_match_over_newer_stale_pickle(
+def test_load_pipeline_dependency_graph_prefers_fingerprint_match_over_newer_stale_pickle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -749,7 +745,7 @@ def test_load_graph_prefers_fingerprint_match_over_newer_stale_pickle(
     newer_mtime = matched_payload.stat().st_mtime + 10
     os.utime(stale_payload, (newer_mtime, newer_mtime))
 
-    graph, cache_key = load_graph(config)
+    graph, cache_key = load_pipeline_dependency_graph(config)
     captured = capsys.readouterr()
 
     assert cache_key == expected_key
@@ -770,15 +766,11 @@ def test_internal_binding_burndown_reports_no_unbound_cells_for_synthetic(
 
     monkeypatch.setattr(graph_cache, "DEFAULT_GRAPH_CACHE_DIR", cache_dir)
     monkeypatch.setattr(
-        "scripts.internal_binding_burndown.DEFAULT_GRAPH_CACHE_DIR",
-        cache_dir,
-    )
-    monkeypatch.setattr(
         "scripts.internal_binding_burndown.load_pipeline_config",
         lambda: config,
     )
 
-    graph, _cache_key = load_graph(config)
+    graph, _cache_key = load_pipeline_dependency_graph(config)
     bindings = load_series_bindings(config.bindings_path)
     unbound = find_unbound_internal_formula_cells_from_manifest(
         graph=graph,
@@ -1080,7 +1072,7 @@ def test_audit_binding_resolutions_reuses_one_workbook_for_sparse_checks(
     import src.binding_resolution_audit as audit_mod
 
     fixture = _prepare_sparse_years_audit_fixture(tmp_path, monkeypatch)
-    graph, _ = load_graph(fixture.config)
+    graph, _ = load_pipeline_dependency_graph(fixture.config)
 
     sparse_workbook_handles: list[fastpyxl.Workbook | None] = []
     real_sparse = audit_mod.find_sparse_label_bind_issues
@@ -1120,7 +1112,7 @@ def test_find_sparse_label_bind_issues_without_fill(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _prepare_sparse_years_audit_fixture(tmp_path, monkeypatch)
-    graph, _ = load_graph(fixture.config)
+    graph, _ = load_pipeline_dependency_graph(fixture.config)
 
     sparse = find_sparse_label_bind_issues(
         graph,
@@ -1253,7 +1245,7 @@ def test_binding_resolution_audit_reports_duplicate_internal_cell_bindings(
     cache_dir = tmp_path / "dependency-graph"
     _monkeypatch_temp_graph_cache(monkeypatch, cache_dir=cache_dir, config=config)
     regenerate_graph_cache(force=True)
-    graph, _ = load_graph(config)
+    graph, _ = load_pipeline_dependency_graph(config)
     bindings = load_series_bindings(bindings_path)
 
     findings = find_duplicate_internal_formula_cell_bindings(
@@ -1289,7 +1281,7 @@ def test_binding_resolution_audit_clean_for_synthetic(
     cache_dir = tmp_path / "dependency-graph"
     _monkeypatch_temp_graph_cache(monkeypatch, cache_dir=cache_dir, config=config)
     regenerate_graph_cache(force=True)
-    graph, _ = load_graph(config)
+    graph, _ = load_pipeline_dependency_graph(config)
     bindings = load_series_bindings(config.bindings_path)
 
     report = audit_binding_resolutions(
