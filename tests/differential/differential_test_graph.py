@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import logging
 import shutil
 import sys
@@ -621,12 +622,10 @@ def run_differential_test(config: GraphDifferentialConfig) -> int:
     _validate_workbook_hooks()
     _verify_paths(config)
 
-    try:
-        import xlwings  # noqa: F401
-    except ImportError as exc:
+    if importlib.util.find_spec("xlwings") is None:
         raise FileNotFoundError(
             "xlwings is not installed; install it via `uv add --dev xlwings`"
-        ) from exc
+        )
 
     trials, missing_inputs_in_graph = run_sweep(config)
     config.report_dir.mkdir(parents=True, exist_ok=True)
