@@ -1523,46 +1523,42 @@ def test_collapse_bindings_for_dual_period_dimension_ids() -> None:
     )
 
 
-def test_helper_parameter_accepts_legacy_concept_only_payload() -> None:
-    parameter = HelperParameter.model_validate(
-        {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
-    )
-    assert parameter.dimension_id == "TIME_PERIOD"
-    assert parameter.concept == "TIME_PERIOD"
+def test_helper_parameter_rejects_legacy_concept_only_payload() -> None:
+    with pytest.raises(ValidationError):
+        HelperParameter.model_validate(
+            {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
+        )
 
 
-def test_member_key_entry_accepts_legacy_concept_only_payload() -> None:
-    entry = MemberKeyEntry.model_validate({"concept": "TIME_PERIOD", "value": 1})
-    assert entry.dimension_id == "TIME_PERIOD"
+def test_member_key_entry_rejects_legacy_concept_only_payload() -> None:
+    with pytest.raises(ValidationError):
+        MemberKeyEntry.model_validate({"concept": "TIME_PERIOD", "value": 1})
 
 
-def test_prepare_resolves_legacy_concept_payload_against_vocabulary() -> None:
-    response = ClusterRefactorResponse.model_validate(
-        {
-            "helper_name": "combined_input_passthrough",
-            "helper_docstring": CLUSTER_DOCSTRING,
-            "parameters": [
-                {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
-            ],
-            "helper_source": VALID_CLUSTER_SOURCE,
-            "member_keys": [
-                {
-                    "address": "Engine!C6",
-                    "function_name": "cell_engine_c6",
-                    "keys": [{"concept": "TIME_PERIOD", "value": 1}],
-                },
-                {
-                    "address": "Engine!D6",
-                    "function_name": "cell_engine_d6",
-                    "keys": [{"concept": "TIME_PERIOD", "value": 2}],
-                },
-            ],
-        }
-    )
-    prepared = _prepare_cluster_refactor_response(response, CLUSTER_CONTEXT)
-    assert prepared.parameters[0].dimension_id == "TIME_PERIOD"
-    assert prepared.parameters[0].concept == "TIME_PERIOD"
-    assert prepared.member_keys[0].keys[0].dimension_id == "TIME_PERIOD"
+def test_cluster_refactor_response_rejects_legacy_concept_only_payload() -> None:
+    with pytest.raises(ValidationError):
+        ClusterRefactorResponse.model_validate(
+            {
+                "helper_name": "combined_input_passthrough",
+                "helper_docstring": CLUSTER_DOCSTRING,
+                "parameters": [
+                    {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
+                ],
+                "helper_source": VALID_CLUSTER_SOURCE,
+                "member_keys": [
+                    {
+                        "address": "Engine!C6",
+                        "function_name": "cell_engine_c6",
+                        "keys": [{"concept": "TIME_PERIOD", "value": 1}],
+                    },
+                    {
+                        "address": "Engine!D6",
+                        "function_name": "cell_engine_d6",
+                        "keys": [{"concept": "TIME_PERIOD", "value": 2}],
+                    },
+                ],
+            }
+        )
 
 
 def test_prepare_rejects_concept_mismatch_for_dimension_id() -> None:
@@ -1580,7 +1576,7 @@ def test_prepare_rejects_concept_mismatch_for_dimension_id() -> None:
         _prepare_cluster_refactor_response(response, CLUSTER_CONTEXT)
 
 
-def test_prepare_rejects_ambiguous_shared_concept_without_dimension_id() -> None:
+def test_prepare_rejects_ambiguous_shared_concept_as_dimension_id() -> None:
     dual_vocab = (
         KeyConceptSpec(
             dimension_id="PROJECTION_PERIOD",
@@ -1618,19 +1614,23 @@ def test_prepare_rejects_ambiguous_shared_concept_without_dimension_id() -> None
             "helper_name": "combined_input_passthrough",
             "helper_docstring": CLUSTER_DOCSTRING,
             "parameters": [
-                {"name": "time_period", "concept": "TIME_PERIOD", "dtype": "int"}
+                {
+                    "name": "time_period",
+                    "dimension_id": "TIME_PERIOD",
+                    "dtype": "int",
+                }
             ],
             "helper_source": VALID_CLUSTER_SOURCE,
             "member_keys": [
                 {
                     "address": "Engine!C6",
                     "function_name": "cell_engine_c6",
-                    "keys": [{"concept": "TIME_PERIOD", "value": 1}],
+                    "keys": [{"dimension_id": "TIME_PERIOD", "value": 1}],
                 },
                 {
                     "address": "Engine!D6",
                     "function_name": "cell_engine_d6",
-                    "keys": [{"concept": "TIME_PERIOD", "value": 2}],
+                    "keys": [{"dimension_id": "TIME_PERIOD", "value": 2}],
                 },
             ],
         }
