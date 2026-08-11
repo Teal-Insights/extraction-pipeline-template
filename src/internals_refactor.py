@@ -718,16 +718,6 @@ class HelperParameter(BaseModel):
         ),
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_concept_as_dimension_id(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        payload = dict(data)
-        if payload.get("dimension_id") is None and payload.get("concept") is not None:
-            payload["dimension_id"] = payload["concept"]
-        return payload
-
 
 class MemberKeyEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -740,17 +730,6 @@ class MemberKeyEntry(BaseModel):
     value: str | int | float | bool = Field(
         description="Literal binding key value for this dimension."
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_concept_as_dimension_id(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        payload = dict(data)
-        if payload.get("dimension_id") is None and payload.get("concept") is not None:
-            payload["dimension_id"] = payload["concept"]
-        payload.pop("concept", None)
-        return payload
 
 
 class MemberKeys(BaseModel):

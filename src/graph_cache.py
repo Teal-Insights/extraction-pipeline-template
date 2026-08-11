@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import pickle
@@ -24,6 +25,7 @@ DEFAULT_GRAPH_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / ".cache" / "dependency-graph"
 )
 COMMITTED_GRAPH_CACHE_DIR = DEFAULT_GRAPH_CACHE_DIR
+_EGDG_MAGIC = b"EGDG"
 
 # Same-process reuse of loaded graphs keyed by (cache_dir, cache_key). Callers
 # that mutate the returned DependencyGraph (e.g. projection) share those
@@ -151,8 +153,13 @@ def load_dependency_graph(
     if not payload_path.is_file():
         return None
     try:
-        # load_graph reads EGDG payloads and falls back to legacy single-object
-        # gzip pickles from pre-5.1.5 cache entries.
+        # Require excel-grapher 5.1.5+ EGDG multipart payloads. Reject pre-5.1.5
+        # single-object gzip pickles even though load_graph still opens them.
+        with gzip.open(payload_path, "rb") as handle:
+            magic = handle.read(len(_EGDG_MAGIC))
+        if magic != _EGDG_MAGIC:
+            payload_path.unlink(missing_ok=True)
+            return None
         graph = load_graph(payload_path)
     except (OSError, EOFError, pickle.UnpicklingError, TypeError, ValueError):
         payload_path.unlink(missing_ok=True)

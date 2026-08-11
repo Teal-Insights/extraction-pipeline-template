@@ -456,23 +456,24 @@ def test_dependency_graph_cache_writes_egdg_multipart_payload(
     assert magic == b"EGDG"
 
 
-def test_load_dependency_graph_reads_legacy_gzip_pickle(
+def test_load_dependency_graph_rejects_legacy_gzip_pickle(
     synthetic_config,
     graph_cache_dir: Path,
 ) -> None:
-    """Pre-5.1.5 gzip+pickle payloads must still open after adopting dump_graph."""
+    """Pre-5.1.5 single-object gzip pickles are not loadable; rebuild from scratch."""
     first = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
     clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
     payload_path = graph_cache_dir / f"{first.cache_key}.pkl.gz"
     with gzip.open(payload_path, "wb", compresslevel=1) as handle:
         pickle.dump(first.graph, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    loaded = load_dependency_graph(first.cache_key, cache_dir=graph_cache_dir)
+    assert load_dependency_graph(first.cache_key, cache_dir=graph_cache_dir) is None
+    assert not payload_path.is_file()
 
-    assert loaded is not None
-    assert isinstance(loaded, DependencyGraph)
-    assert len(loaded) == len(first.graph)
-    assert loaded.leaf_keys() == first.graph.leaf_keys()
+    rebuilt = _build_graph(synthetic_config, cache_dir=graph_cache_dir)
+    assert not rebuilt.cache_hit
+    with gzip.open(graph_cache_dir / f"{rebuilt.cache_key}.pkl.gz", "rb") as handle:
+        assert handle.read(4) == b"EGDG"
 
 
 def test_save_dependency_graph_uses_dump_graph(
