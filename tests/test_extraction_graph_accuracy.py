@@ -165,9 +165,9 @@ def test_workbook_audit_skips_on_committed_cache_miss() -> None:
         ) as try_load,
         patch("src.graph_cache.create_dependency_graph") as create,
         patch("src.graph_cache.save_dependency_graph") as save,
+        pytest.raises(pytest.skip.Exception, match="warm committed"),
     ):
-        with pytest.raises(pytest.skip.Exception, match="warm committed"):
-            _load_workbook_graph_for_audit(config)
+        _load_workbook_graph_for_audit(config)
 
     try_load.assert_called_once()
     create.assert_not_called()
