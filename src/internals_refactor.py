@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from dotenv import load_dotenv
 from excel_grapher.exporter import ProjectionResult
@@ -796,14 +796,21 @@ class RefactorDeclaredError(RuntimeError):
         super().__init__(reason)
 
 
-def _validate_llm_response_error_or_success[T: BaseModel](
+class _LlmErrorCapable(Protocol):
+    """LLM response models that expose the shared error / error_reason fields."""
+
+    error: bool | None
+    error_reason: str | None
+
+
+def _validate_llm_response_error_or_success[T: _LlmErrorCapable](
     response: T,
     *,
     success_fields: tuple[str, ...],
     optional_ignored_fields: tuple[str, ...] = (),
 ) -> T:
-    error = getattr(response, "error")  # noqa: B009
-    error_reason = getattr(response, "error_reason")  # noqa: B009
+    error = response.error
+    error_reason = response.error_reason
     if error is True:
         reason = error_reason.strip() if isinstance(error_reason, str) else ""
         if not reason:
@@ -843,15 +850,15 @@ def _validate_llm_response_error_or_success[T: BaseModel](
 
 
 def raise_if_llm_declared_error(
-    response: BaseModel,
+    response: _LlmErrorCapable,
     *,
     kind: Literal["singleton", "cluster"],
     target: str,
 ) -> None:
     """Abort immediately when the LLM sets ``error`` to true."""
-    if getattr(response, "error") is not True:  # noqa: B009
+    if response.error is not True:
         return
-    error_reason = getattr(response, "error_reason")  # noqa: B009
+    error_reason = response.error_reason
     reason = error_reason.strip() if isinstance(error_reason, str) else ""
     if not reason:
         raise ValueError("error_reason must be a non-empty string when error is true")

@@ -32,6 +32,18 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-v -p no:faulthandler -p no:cacheprovider"
 
+[tool.ruff.lint]
+# Ruff 0.16+ expanded defaults (413 rules): see
+# https://docs.astral.sh/ruff/default-rules/
+# Keep those defaults; do not blanket-ignore BLE001 / S102 / DTZ001 / B010.
+# Intentional targeted `# noqa`s remain for:
+# - BLE001: blind except around diagnostic I/O and differential sweep capture
+# - S102: exec of generated / parity / test modules
+# - DTZ001: naive Excel epoch datetime
+# - B010: setattr marker on a patched function (ty rejects direct assignment)
+# Prefer fixing the code over adding noqa when cheap (e.g. typed attribute
+# access instead of getattr(..., "const")).
+
 [tool.ruff.format]
 # Keep formatted Python on LF so Windows checkouts cannot reintroduce the CRLF
 # bytes that `git diff --check` flags as trailing whitespace.
