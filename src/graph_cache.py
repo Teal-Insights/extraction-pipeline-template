@@ -20,6 +20,8 @@ from excel_grapher.grapher import (
     load_graph,
 )
 
+from src.pipeline_config import PipelineConfig
+
 GRAPH_CACHE_SCHEMA_VERSION = "1.1.0"
 DEFAULT_GRAPH_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / ".cache" / "dependency-graph"
@@ -429,3 +431,68 @@ def prune_cache_entries_for_other_excel_grapher_versions(
                 path.unlink()
                 pruned.append(path.name)
     return pruned
+
+
+def _pipeline_dependency_graph_cache_key(config: PipelineConfig) -> str:
+    return dependency_graph_cache_key(
+        workbook_path=config.workbook_path,
+        targets=config.targets,
+        constraints=config.constraints,
+        load_values=True,
+        capture_dependency_provenance=True,
+    )
+
+
+def _warn_if_cached_graph_is_stale(config: PipelineConfig, cache_key: str) -> None:
+    expected_key = _pipeline_dependency_graph_cache_key(config)
+    if cache_key == expected_key:
+        return
+    print(
+        "Warning: newest cached graph key does not match the current workbook "
+        "or targets fingerprint. Results may be stale; run "
+        "uv run python -m scripts.regenerate_graph_cache to refresh."
+    )
+
+
+def load_pipeline_dependency_graph(
+    config: PipelineConfig,
+    *,
+    cache_dir: Path | None = None,
+) -> tuple[DependencyGraph, str | None]:
+    """Load a dependency graph for binding utility CLIs.
+
+    Prefers the fingerprint-matching cache entry when present; otherwise falls
+    back to the newest cached pickle (with a stale-key warning), then builds.
+    """
+    resolved_cache_dir = _graph_cache_dir(cache_dir)
+    expected_key = _pipeline_dependency_graph_cache_key(config)
+    matched = load_dependency_graph(expected_key, cache_dir=resolved_cache_dir)
+    if matched is not None:
+        print(
+            f"Loaded cached graph key={expected_key[:12]} "
+            f"from {resolved_cache_dir} ({len(matched)} nodes)"
+        )
+        return matched, expected_key
+
+    cached = load_newest_cached_dependency_graph(cache_dir=resolved_cache_dir)
+    if cached is not None:
+        graph, cache_key = cached
+        print(
+            f"Loaded cached graph key={cache_key[:12]} "
+            f"from {resolved_cache_dir} ({len(graph)} nodes)"
+        )
+        _warn_if_cached_graph_is_stale(config, cache_key)
+        return graph, cache_key
+
+    dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints, {})
+    result = get_or_build_dependency_graph(
+        workbook_path=config.workbook_path,
+        targets=config.targets,
+        constraints=config.constraints,
+        dynamic_refs=dynamic_ref_config,
+        load_values=True,
+        capture_dependency_provenance=True,
+        cache_dir=resolved_cache_dir,
+    )
+    print(f"Built graph key={result.cache_key[:12]} ({len(result.graph)} nodes)")
+    return result.graph, result.cache_key
