@@ -68,6 +68,7 @@ def _nodekey_leaf_map(values: Mapping[str, object]) -> dict[str, object]:
             flattened[format_cell_key(sheet, get_column_letter(col), row)] = value
     return flattened
 
+
 if TYPE_CHECKING:
     from src.internals_refactor import (
         ClusterRefactorContext,
