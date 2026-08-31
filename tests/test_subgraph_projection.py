@@ -38,7 +38,7 @@ def test_refactor_projection_inlines_singleton_engine_into_outputs(
     assert "Engine!C2" not in projection
     outputs_b1 = projection.get_node("Outputs!B1")
     assert outputs_b1 is not None
-    assert outputs_b1.normalized_formula == "=(Inputs!A1+Inputs!B1+1)"
+    assert outputs_b1.normalized_formula == "=Inputs!A1+Inputs!B1+1"
 
 
 def test_build_refactor_projection_forwards_cache_dir(
