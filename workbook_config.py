@@ -21,9 +21,17 @@ BINDINGS_PATH = REPO_ROOT / "bindings"
 # Named ranges or sheet-qualified addresses for target-driven graph extraction.
 TARGETS: list[str] = []
 
+# Sheet-qualified A1 rectangles of structurally empty cells that formulas name
+# but users never fill (INDEX/MATCH padding, NPV/SUM year-window overflow,
+# unused ladder copies, separator rows). Passed unchanged to graph build,
+# FormulaEvaluator, and CodeGenerator. Do not put user-fillable slots here.
+# Single cells are 1×1 rectangles. Never a bare string.
+BLANK_RANGES: tuple[str, ...] = ()
+
 # Cell address -> constraint for dynamic-ref resolution and leaf classification.
 # Use Literal[...] for fixed lookup values and Annotated[..., Between/RealBetween]
-# for user-editable inputs. Every graph leaf must appear here.
+# for user-editable inputs. Every remaining graph leaf (not omitted by
+# BLANK_RANGES) must appear here.
 CONSTRAINTS: dict[str, object] = {}
 
 # Optional: exact dropdown label literals for enum public inputs, keyed by the
