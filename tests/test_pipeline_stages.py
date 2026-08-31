@@ -179,11 +179,12 @@ def test_run_export_stage_forwards_blank_ranges_to_generate_modules(
             return_value="series_docs",
         ),
         patch("src.extraction_pipeline.CodeGenerator") as generator_cls,
+        patch("src.extraction_pipeline.materialize_package"),
         patch("src.package_materialize.seed_validation_harness"),
     ):
         generator = generator_cls.return_value.__enter__.return_value
         generator.generate_modules.return_value = {"internals.py": "pass\n"}
-        run_export_stage(config)
+        run_export_stage(config, no_cache=True)
 
     generator.generate_modules.assert_called()
     assert generator.generate_modules.call_args.kwargs["blank_ranges"] == blank_ranges

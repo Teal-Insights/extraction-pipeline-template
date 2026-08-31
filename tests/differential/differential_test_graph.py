@@ -82,6 +82,7 @@ class GraphDifferentialConfig:
     atol: float = ATOL
     rtol: float = RTOL
     allow_matched_errors: bool = False
+    blank_ranges: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,7 @@ def resolve_config(
         targets=pipeline.targets,
         constraints=pipeline.constraints,
         library_name=pipeline.dist_metadata.library_name,
+        blank_ranges=pipeline.blank_ranges,
     )
 
     return GraphDifferentialConfig(
@@ -199,6 +201,7 @@ def resolve_config(
         atol=ATOL,
         rtol=RTOL,
         allow_matched_errors=allow_matched_errors,
+        blank_ranges=defaults.blank_ranges,
     )
 
 

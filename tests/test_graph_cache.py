@@ -399,7 +399,9 @@ def test_get_or_build_dependency_graph_forwards_blank_ranges(
     fake_graph = MagicMock()
     clear_process_dependency_graph_cache(cache_dir=graph_cache_dir)
     with (
-        patch("src.graph_cache.create_dependency_graph", return_value=fake_graph) as create,
+        patch(
+            "src.graph_cache.create_dependency_graph", return_value=fake_graph
+        ) as create,
         patch("src.graph_cache.save_dependency_graph"),
     ):
         get_or_build_dependency_graph(
