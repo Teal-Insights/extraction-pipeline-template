@@ -420,7 +420,7 @@ def test_cluster_graph_formulas_groups_parallel_outputs_on_synthetic_projection(
         if set(cluster.members) == {"Outputs!B1", "Outputs!C1"}
     )
     assert outputs_cluster.row == 1
-    assert outputs_cluster.canonical_template == "=(Inputs!A1+Inputs!B1+1)"
+    assert outputs_cluster.canonical_template == "=Inputs!A1+Inputs!B1+1"
 
 
 def test_cluster_graph_formulas_groups_trade_balance_with_binding_keys() -> None:
