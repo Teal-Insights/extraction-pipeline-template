@@ -46,9 +46,11 @@ series:
 
 **Leaf classification vs constant bindings.** `CONSTRAINTS` with a single-value
 `Literal[...]` classifies a leaf as `constant` for codegen `CONSTANTS` vs
-`DEFAULT_INPUTS`. That is necessary but not sufficient for a semantic reader:
-add a `constant: {}` series when formulas should call `read_*` instead of
-`xl_cell`. Mutable leaves still need `input` / `set_*` in `inputs.bindings.yaml`.
+`DEFAULT_INPUTS`. Fail closed: every `constant` leaf must appear in
+`constants.bindings.yaml`, and every mutable `input` leaf in
+`inputs.bindings.yaml`. The configure tests assert an empty unbound list even
+when a workbook has no constant leaves (do not skip-if-empty). A `constant: {}`
+series also emits a semantic `read_*` so formulas do not keep bare `xl_cell`.
 
 **Structural blanks are not constants.** Padding inside `INDEX`/`MATCH` arrays,
 far-right `NPV`/`SUM` overflow, unused ladder copies, and separator rows belong

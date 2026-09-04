@@ -85,6 +85,7 @@ Validation checks:
 - `validate_series_bindings(...)` reports `ok`
 - `derive_input_series` / `derive_output_series` / `derive_internal_series` / `derive_constant_series` resolve every binding
 - No unbound mutable input leaves
+- No unbound constant leaves
 - Run the pre-extraction workbook audit and review blocking automation before graph work:
 
 ```bash
@@ -440,7 +441,7 @@ Ordered to match the [onboarding checklist](#clone-and-configure-onboarding-chec
 - [ ] **Configure:** Empty leaves reviewed; structural blank rectangles declared in `BLANK_RANGES` rather than constraining each cell `Literal[None]`
 - [ ] **Configure:** Remaining graph leaves constrained and classified; mutable leaves bound
 - [ ] **Configure:** `bindings/inputs.bindings.yaml` + `outputs.bindings.yaml` authored and validated
-- [ ] **Configure:** Fixed leaves that need semantic `read_*` bound in `bindings/constants.bindings.yaml` (`constant: {}`)
+- [ ] **Configure:** Every `constant` leaf bound in `bindings/constants.bindings.yaml` (`constant: {}`); every mutable `input` leaf bound in `inputs.bindings.yaml`
 - [ ] **Configure:** Internal binding exemptions reviewed (`INTERNAL_BINDING_EXEMPT_CELLS`)
 - [ ] **Configure:** `bindings/internals.bindings.yaml` covers internal formula cells
 - [ ] **Review graph:** Manual completeness review done; optional LLM dependency audit passed (`pytest --run-skipped`)
