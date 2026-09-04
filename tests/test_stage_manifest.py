@@ -47,27 +47,15 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
             description="Example library.",
             documentation_url="https://example.com/",
         ),
-        docstring_callback_name="series_docs",
-        canonical_api_example_path=repo_root / "templates" / "canonical-api-usage.md",
         binding_authoring_prompt_path=repo_root
         / "templates"
         / "binding-authoring-prompt.txt",
-        section_rewrite_introduction_focus_path=(
-            repo_root / "templates" / "section-rewrite-introduction-focus.txt"
-        ),
-        section_rewrite_functional_overview_focus_path=(
-            repo_root / "templates" / "section-rewrite-functional-overview-focus.txt"
-        ),
-        section_rewrite_illustrative_example_focus_path=(
-            repo_root / "templates" / "section-rewrite-illustrative-example-focus.txt"
-        ),
+        user_guide_agent_prompt_path=repo_root / "templates" / "user-guide-agent.txt",
         differential_workbook_rel=Path("data/workbook.xlsx"),
         differential_report_dir_rel=Path("data/differential/exported_library"),
         differential_graph_report_dir_rel=Path("data/differential/graph"),
         graph_output_dir=repo_root / "artifacts" / "dependency-graph",
         graph_audit_cases=(),
-        variation_mode="independent",
-        clustering_mode="series_ast",
     )
 
 
@@ -91,8 +79,6 @@ def test_compute_input_fingerprints_labels(tmp_path: Path) -> None:
         fingerprints["targets"]
         == hashlib.sha256(stable_json(sorted(config.targets)).encode()).hexdigest()
     )
-    assert fingerprints["variation_mode"] == "independent"
-    assert fingerprints["clustering_mode"] == "series_ast"
     assert "excel_grapher_version" in fingerprints
     assert (
         fingerprints["guide"]
@@ -212,8 +198,12 @@ def test_assert_manifest_fresh_rejects_manifest_missing_a_newer_fingerprint(
     """
     config = _sample_config(tmp_path)
     full = compute_input_fingerprints(config)
-    assert "variation_mode" in full
-    older = {name: value for name, value in full.items() if name != "variation_mode"}
+    assert "internal_binding_validation_mode" in full
+    older = {
+        name: value
+        for name, value in full.items()
+        if name != "internal_binding_validation_mode"
+    }
     manifest = write_stage_manifest(
         config,
         stage="extract",
@@ -222,7 +212,9 @@ def test_assert_manifest_fresh_rejects_manifest_missing_a_newer_fingerprint(
         fingerprints=older,
     )
 
-    with pytest.raises(StageManifestDriftError, match="variation_mode"):
+    with pytest.raises(
+        StageManifestDriftError, match="internal_binding_validation_mode"
+    ):
         assert_manifest_fresh(manifest, config)
 
 

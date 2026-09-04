@@ -122,7 +122,7 @@ After manual review (onboarding step 5), run graph-oracle differential parity (s
 
 #### Internal series bindings
 
-After bindings are validated (export / bindings-ready path), the pipeline derives **internal series** for formula cells declared with `internal: {}` in `bindings/internals.bindings.yaml`. Each resolved cell carries `{address, key, record}` triangulation data used by the graph explorer and internals refactor. Effective dimension ids live in binding manifests and derived series records, not on graph node metadata.
+After bindings are validated (export / bindings-ready path), the pipeline derives **internal series** for formula cells declared with `internal: {}` in `bindings/internals.bindings.yaml`. Each resolved cell carries `{address, key, record}` triangulation data used by the graph explorer. Effective dimension ids live in binding manifests and derived series records, not on graph node metadata.
 
 #### Authoring internals
 
@@ -131,8 +131,8 @@ Author `internals.bindings.yaml` after `--extract-graph`, when you can see which
 - **One series per logical group** — a single lookup/anchor cell or one formula row/range (e.g. `Engine!C10:G10`), not one entry per cell.
 - **Same YAML shape as public bindings** — use `internal: {}` instead of `input` / `output`. Scalar examples are in [tests/fixtures/synthetic/internals.bindings.yaml](tests/fixtures/synthetic/internals.bindings.yaml).
 - **Scalars vs row series** — lookup and anchor formulas usually use `layout: scalar` with `key: []`. Parallel time-series rows use `layout: row_series` with a key dimension (often concept `TIME_PERIOD`) bound from the **header row that labels that row**; different tables often use different header rows.
-- **Give every dimension an explicit `id`** — `id` names the dimension itself and is the effective key used in records, cell keys, graph labels, and refactor parameters. `concept` is the SDMX-style meaning category. They match unless two dimensions in one series share a concept (e.g. projection axis and reference period both on `TIME_PERIOD`), in which case give each a distinct id such as `PROJECTION_PERIOD` / `REFERENCE_PERIOD`. Parameter names come from the effective id (`projection_period`). Concept-only keys remain valid only when the concept uniquely identifies one dimension.
-- **Reuse public concepts** — prefer concept IDs already in your bindings / `concept_scheme` (`TIME_PERIOD`, `INDICATOR`, `PARAMETER`, etc.) so refactor prompts get meaningful semantic hints even when dimension ids differ.
+- **Give every dimension an explicit `id`** — `id` names the dimension itself and is the effective key used in records, cell keys, graph labels, and helper parameters. `concept` is the SDMX-style meaning category. They match unless two dimensions in one series share a concept (e.g. projection axis and reference period both on `TIME_PERIOD`), in which case give each a distinct id such as `PROJECTION_PERIOD` / `REFERENCE_PERIOD`. Parameter names come from the effective id (`projection_period`). Concept-only keys remain valid only when the concept uniquely identifies one dimension.
+- **Reuse public concepts** — prefer concept IDs already in your bindings / `concept_scheme` (`TIME_PERIOD`, `INDICATOR`, `PARAMETER`, etc.) so helper names stay meaningful even when dimension ids differ.
 - **Validate** — `validate_series_bindings(...)`, then `derive_internal_series(...)`. Run `uv run pytest tests/test_internal_binding_coverage.py` once `INTERNAL_BINDING_VALIDATION_MODE` is enabled.
 - **Review** — re-run `--extract-graph` and confirm bound formula nodes show `keys:` / `record:` labels in the graph explorer.
 
@@ -173,19 +173,9 @@ Use `warn` while iterating locally; treat pytest failures as the CI gate once ex
 
 | Utility | Command | When to use |
 |---|---|---|
-| Graph-cache regeneration | `uv run python -m scripts.regenerate_graph_cache` | After changing the workbook, bindings, targets/constraints/`BLANK_RANGES`, or excel-grapher. Add `--force` to rebuild even when entries exist; `--force` also clears and prunes `.cache/series-resolution/`, `.cache/series-derived/`, and `.cache/bindings-validation/`, and clears `.cache/clusters/` and `.cache/internals/`. Optional extra bundles: `GRAPH_CACHE_TARGET_BUNDLES` in `workbook_config.py`. |
+| Graph-cache regeneration | `uv run python -m scripts.regenerate_graph_cache` | After changing the workbook, bindings, targets/constraints/`BLANK_RANGES`, or excel-grapher. Add `--force` to rebuild even when entries exist; `--force` also clears and prunes `.cache/series-resolution/`, `.cache/series-derived/`, and `.cache/bindings-validation/`. Optional extra bundles: `GRAPH_CACHE_TARGET_BUNDLES` in `workbook_config.py`. |
 | Internal-binding burndown | `uv run python -m scripts.internal_binding_burndown` | After `--extract-graph` to see which formula rows still need `internals.bindings.yaml` entries. Supports `--per-sheet` and `--max-rows`. Reuses the newest cached graph even when bindings changed. |
 | Programmatic binding emission | `uv run python -m scripts.author_bindings` | Large, regular binding surfaces defined in a declarative catalog (`templates/binding-catalog.example.yaml`). Complements [templates/binding-authoring-prompt.txt](templates/binding-authoring-prompt.txt). |
-
-#### Clustering / schedule diagnostics (leftover)
-
-These CLIs inspect warm caches or recompute clustering for leftover refactor scripts. They are **not** a live onboarding gate. See [Leftover clustering and refactor](#leftover-clustering-and-refactor).
-
-| Utility | Command | When to use |
-|---|---|---|
-| Compare variation modes | `uv run python -m scripts.compare_cluster_variation_modes` | Leftover: side-by-side `independent` vs `dominant_key_only` series-fingerprint family counts. Quiet summary by default; `--include changes members fingerprints` for detail; `--clustering-mode` to override the configured mode. |
-| Schedule atomization | `uv run python -m scripts.diagnose_schedule_atomization` | Neighbor of compare: when fingerprint families shred into many schedule units, reports fan-out stats, worst families, peel samples, shredded series, and cyclical remodel recommendations (`--top-families`, `--peel-samples`, …). |
-| Inspect one cluster | `uv run python -m scripts.inspect_cluster --cluster-id N` | After a mechanical refactor failure: print member addresses/formulas for fingerprint-family `N`. Add `--schedule` for peels, `--sources` (optionally `--internals path`) for `cell_*` bodies. Honors `--variation-mode` / `--clustering-mode` / `--no-cache`. |
 
 Commit `.cache/dependency-graph/` only when your downstream pipeline vendors the cache for warm CI (override `.gitignore` for that directory). Run `uv run pytest tests/test_binding_utility_scripts.py` to exercise the synthetic fixture path end-to-end.
 
@@ -212,8 +202,8 @@ Reports land under `data/differential/graph/`. Exit codes: **`0`** all compariso
 
 ### 4. Export
 
-Export calls `CodeGenerator.generate_modules(..., paradigm="inverted_tree")` with
-`series_docstring_callback="none"`. The package is keyword-only `compute_*`
+Export calls `CodeGenerator.generate_modules(..., paradigm="inverted_tree")`.
+The package is keyword-only `compute_*`
 functions: scalars stay scalars, series are 1-D sequences in canonical key
 order, and each helper returns `tuple[float, ...]`. There is no `make_context`,
 no `set_*`, and no records-shaped setters. Helpers are named from output
@@ -269,36 +259,6 @@ require an API key. Runnable `{python}` cells must not call `make_context()` or
 [templates/canonical-api-usage.md](templates/canonical-api-usage.md) is the
 canonical interaction model for those rewrites.
 
-## Leftover clustering and refactor
-
-Clustering diagnostics and internals refactor still live on disk for leftover
-scripts (`scripts/compare_cluster_variation_modes`, `scripts/run_refactor_stage`,
-`src.record_refactor_buckets`) until a dedicated deletion issue removes them.
-The live orchestrator does **not** call them. `VARIATION_MODE` / `CLUSTERING_MODE`
-in [workbook_config.py](workbook_config.py) apply only to those leftover paths.
-
-### Formula-cluster variation mode
-
-| Mode | Behavior |
-|---|---|
-| `independent` (default) | Keep one refactor cluster when formulas share the same AST shape and scalar literals, even if operand binding keys vary along multiple dimensions. |
-| `dominant_key_only` | After AST clustering, split clusters where operand keys vary along more than one dimension, keeping only the dimension with the widest value spread as a refactor parameter. |
-
-### Formula-cluster base mode
-
-| Mode | Behavior |
-|---|---|
-| `series_ast` (default) | AST-cluster parallel formula families, partition each cluster by owning series id, then apply `VARIATION_MODE` within each series partition. |
-| `series` | One refactor unit per partition series id (`VARIATION_MODE` does not apply). |
-| `ast` | Series-blind AST clustering only (legacy behavior). |
-
-Override per leftover-script run:
-
-```bash
-uv run python -m src.record_refactor_buckets --clustering-mode series_ast --variation-mode dominant_key_only
-uv run python -m scripts.run_refactor_stage --dump-prompts artifacts/refactor-lab-prompts
-```
-
 ## Run the pipeline
 
 After graph-oracle (Excel vs graph) parity passes (see [Verify graph](#3-verify-graph)), run the full pipeline:
@@ -326,7 +286,7 @@ The pipeline is ordered as `extract → export → annotate → validate → doc
 
 When the default full run reaches `document` after a non-zero FormulaEvaluator canary exit, the document stage is skipped so parity diagnosis is not gated on guide rewrite. Pass `--force-document` to rewrite guides anyway. Document-stage failures (timeouts, validation exhaustion, LLM errors) raise loudly after logging that export/differential artifacts under `dist/` are preserved.
 
-Guide-rewrite LLM calls use `SECTION_REWRITE_REQUEST_TIMEOUT` (default 300s per request) and `SECTION_REWRITE_DEADLINE` (default timeout × 4 attempts) so a stuck rewrite cannot block the pipeline indefinitely. Set `PIPELINE_STALL_SECONDS` for heartbeat stack dumps during the document stage.
+The document stage launches a Cursor SDK agent against `dist/` (`CURSOR_API_KEY`, `DOCUMENT_AGENT_MODEL`, default deadline 1800s via `DOCUMENT_AGENT_DEADLINE`). Authored trees cache under `.cache/user-guide/`. Set `PIPELINE_STALL_SECONDS` for heartbeat stack dumps during the document stage.
 
 ```bash
 uv run python -m src.extraction_pipeline --stop-after-stage export
@@ -336,7 +296,7 @@ uv run python -m src.extraction_pipeline --only-stage validate
 
 ### Prerequisites
 
-LLM steps (annotate docstrings, guide rewrites) cache results under `.cache/`. Dependency graph extraction caches under `.cache/dependency-graph/` as excel-grapher EGDG multipart payloads, keyed by workbook bytes, targets, constraints, load/provenance flags, and `excel-grapher` version — **not** bindings. `derive_*_series` resolution, `validate_series_bindings`, derived leaf/binding objects, projection, and codegen module texts cache gzipped pickle payloads under `.cache/series-resolution/`, `.cache/bindings-validation/`, `.cache/series-derived/`, `.cache/projection/`, and `.cache/codegen/`. Series-resolution, series-derived, and bindings-validation keys fold a `bindings_fingerprint`; projection keys fold the graph cache key, preserve-scope flag, strategy, and `excel-grapher` version; codegen keys also fold `paradigm="inverted_tree"` plus remaining docstring-key fields. Annotate caches LLM docstrings in `.cache/inverted-tree-docstrings.json`. Leftover clustering/refactor scripts still use `.cache/clusters/` and `.cache/internals/`. `dist/` is a disposable projection of those caches: `materialize_package` rebuilds it from the codegen cache key recorded in `dist/.pipeline-cache-keys.json`, then annotate re-applies cached docstrings. Stage entry/exit records keys plus fingerprints under `artifacts/stages/*.json`. Pass `--no-cache` to bypass graph, projection, series-resolution, series-derived, bindings-validation, codegen, and annotate caches for a single run; pass `--force-rebuild` to rewrite warm cache entries. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
+LLM steps (annotate docstrings, document-stage Cursor agent) cache results under `.cache/`. Dependency graph extraction caches under `.cache/dependency-graph/` as excel-grapher EGDG multipart payloads, keyed by workbook bytes, targets, constraints, load/provenance flags, and `excel-grapher` version — **not** bindings. `derive_*_series` resolution, `validate_series_bindings`, derived leaf/binding objects, projection, and codegen module texts cache gzipped pickle payloads under `.cache/series-resolution/`, `.cache/bindings-validation/`, `.cache/series-derived/`, `.cache/projection/`, and `.cache/codegen/`. Series-resolution, series-derived, and bindings-validation keys fold a `bindings_fingerprint`; projection keys fold the graph cache key, preserve-scope flag, strategy, and `excel-grapher` version; codegen keys fold `paradigm="inverted_tree"`. Annotate caches LLM docstrings in `.cache/inverted-tree-docstrings.json`. Authored user-guide trees cache under `.cache/user-guide/`. `dist/` is a disposable projection of those caches: `materialize_package` rebuilds it from the codegen cache key recorded in `dist/.pipeline-cache-keys.json`, then annotate re-applies cached docstrings. Stage entry/exit records keys plus fingerprints under `artifacts/stages/*.json`. Pass `--no-cache` to bypass graph, projection, series-resolution, series-derived, bindings-validation, codegen, and annotate caches for a single run; pass `--force-rebuild` to rewrite warm cache entries. A clean run reproduces committed output without an API key unless inputs change. For uncached steps, set provider API keys and per-stage model names in a `.env` file at the repository root:
 
 ```bash
 # .env — logging verbosity for pipeline entry points (default: INFO)
@@ -349,10 +309,9 @@ DEEPSEEK_API_KEY=...
 
 # Per-stage model selection (optional; default gpt-5.5 when unset)
 # Name prefix selects the provider: gpt-*, glm-*, deepseek-*
+CURSOR_API_KEY=...
 DOCSTRING_MODEL=gpt-5.5
-# Leftover clustering/refactor scripts still read REFACTOR_MODEL.
-# REFACTOR_MODEL=gpt-5.5
-SECTION_REWRITE_MODEL=gpt-5.5
+DOCUMENT_AGENT_MODEL=gpt-5.6-luna
 LLM_GRAPH_AUDIT_MODEL=gpt-5.5
 ```
 

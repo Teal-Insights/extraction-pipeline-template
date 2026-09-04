@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from src.export_validation_assets import (
+    _render_tests_readme,
     export_reference_reports,
     export_validation_assets,
     seed_validation_harness,
@@ -34,20 +35,10 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
             description="Example library.",
             documentation_url="https://example.com/",
         ),
-        docstring_callback_name="series_docs",
-        canonical_api_example_path=repo_root / "templates" / "canonical-api-usage.md",
         binding_authoring_prompt_path=repo_root
         / "templates"
         / "binding-authoring-prompt.txt",
-        section_rewrite_introduction_focus_path=(
-            repo_root / "templates" / "section-rewrite-introduction-focus.txt"
-        ),
-        section_rewrite_functional_overview_focus_path=(
-            repo_root / "templates" / "section-rewrite-functional-overview-focus.txt"
-        ),
-        section_rewrite_illustrative_example_focus_path=(
-            repo_root / "templates" / "section-rewrite-illustrative-example-focus.txt"
-        ),
+        user_guide_agent_prompt_path=repo_root / "templates" / "user-guide-agent.txt",
         differential_workbook_rel=Path("data/workbook.xlsx"),
         differential_report_dir_rel=Path("data/differential/exported_library"),
         differential_graph_report_dir_rel=Path("data/differential/graph"),
@@ -70,6 +61,9 @@ def _write_differential_package(repo_root: Path) -> None:
     )
     (differential_root / "comparison_utils.py").write_text(
         "# comparison\n", encoding="utf-8"
+    )
+    (differential_root / "differential_scenario_inputs.py").write_text(
+        "# scenario inputs\n", encoding="utf-8"
     )
     (differential_root / "differential_test_exported_library.py").write_text(
         "# harness\n",
@@ -134,11 +128,29 @@ def test_seed_validation_harness_copies_harness_and_workbook_without_reports(
     assert (differential_root / "comparison_utils.py").read_text(
         encoding="utf-8"
     ) == "# comparison\n"
+    assert (differential_root / "differential_scenario_inputs.py").read_text(
+        encoding="utf-8"
+    ) == "# scenario inputs\n"
     assert (tests_root / "fixtures" / "workbook.xlsx").read_bytes() == b"workbook"
     assert (tests_root / "results" / "local").is_dir()
     assert (tests_root / "results" / "reference").is_dir()
     assert not (tests_root / "results" / "reference" / "parity_report.csv").exists()
     assert (tests_root / "README.md").exists()
+    readme = (tests_root / "README.md").read_text(encoding="utf-8")
+    assert "FormulaEvaluator" in readme
+    assert "compute_*" in readme
+    assert "set_*" not in readme
+    assert "vs Excel" not in readme
+    assert not (tests_root / "differential_test_exported_library.py").exists()
+
+
+def test_dist_tests_readme_names_formula_evaluator_vs_compute() -> None:
+    text = _render_tests_readme(package_name="my_model", library_name="My Model")
+    assert "FormulaEvaluator" in text
+    assert "compute_*" in text
+    assert "set_*" not in text
+    assert "vs Excel" not in text
+    assert "xlwings" not in text
 
 
 def test_export_reference_reports_copies_parity_reports(tmp_path: Path) -> None:
