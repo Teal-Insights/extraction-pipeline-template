@@ -71,15 +71,33 @@ Configure checklist (workbook-neutral):
 | Criterion | Pass condition |
 |---|---|
 | **Leaf classification attached** | Before codegen, every graph leaf is classified `input` or `constant` and attached to the graph. |
-| **Records-shaped public API** | Codegen emits `make_context()`, `set_*` input setters, and `compute_*` output functions from series bindings—not raw cell writers. |
-| **Inputs validated at runtime** | Setters validate record shape and key matching; domain/units prose belongs in docstrings, not implied runtime validation beyond what codegen emits. |
-| **Domain-language identifiers** | Public functions **and** internal functions use macrofinance vocabulary (`growth_baseline`, `output_delta`), not workbook coordinates (`U24`, `OFFSET_RANGE_3`). |
-| **Concise/readable code** | Internal formula cell groups are collapsed to functions, rewritten with macrofinance semantics, parameterized by binding dimension ids (with concept as semantic metadata), and reused to reduce code duplication. |
-| **Pandas/Polars compatible** | Public functions can accept (and ideally return) pandas or polars `DataFrame`s as inputs as well as scalars, sequences, and `Records` lists. |
-| **Docstrings on public API** | Every `set_*` and `compute_*` has a docstring: deterministic fields from the binding contract, LLM-authored prose from a registered docstring callback grounded in the human guide. |
-| **Distributable package** | Export writes `dist/<package>/` with `api.py`, runtime modules, `pyproject.toml`, and README; package imports without the extraction repo on `PYTHONPATH`. |
-| **Validation bundle shipped** | Differential harness, workbook fixture, and reference parity reports (with 100% passing scores) are exported under `dist/tests/`. |
-| **Documentation website published** | `dist/website/` contains a polished website with detailed macrofinance explanations and usage instructions and examples. |
+| **Inverted-tree public API** | Codegen emits keyword-only `compute_*` from series bindings (`paradigm="inverted_tree"`). Scalars stay scalars; series are 1-D sequences in canonical key order; returns are `tuple[float, ...]`. There is no `make_context()`, no `set_*`, and no records-shaped setters. |
+| **Inputs validated at runtime** | Keyword arguments match the binding contract; domain/units prose belongs in docstrings, not implied runtime validation beyond what codegen emits. |
+| **Domain-language identifiers** | Public `compute_*` names use macrofinance vocabulary (`compute_output_baseline`), not workbook coordinates (`U24`, `OFFSET_RANGE_3`). Internals helpers are named from `series_id`. |
+| **Pandas/Polars compatible** | Callers can tabulate `compute_*` tuples with pandas or polars. Native DataFrame in/out is a known gap. |
+| **Distributable package** | Export writes `dist/<package>/` with `api.py`, `internals.py`, `runtime.py`, `data.py`, `pyproject.toml`, and README; package imports without the extraction repo on `PYTHONPATH`. Placeholder docstrings are filled in annotate. |
+| **Validation bundle shipped** | Differential harness, workbook fixture, and reference parity reports are exported under `dist/tests/`. |
+
+#### 4. Annotate
+
+| Criterion | Pass condition |
+|---|---|
+| **Docstrings on public API** | Every `compute_*` (and internals helper) has a Google-style docstring from the annotate stage (`src/inverted_tree_docstrings.py`), grounded in the human guide. Export uses `series_docstring_callback="none"`; docstrings are not a codegen callback. |
+| **Signature fidelity** | Annotate fails closed if the model returns argument names that do not match the function signature. |
+
+#### 5. Validate
+
+| Criterion | Pass condition |
+|---|---|
+| **Graph-vs-Excel** | Authored scenario matrix in `tests/differential/` passes `FormulaEvaluator` vs Microsoft Excel (`differential_test_graph.py`) before treating extraction as faithful. |
+| **Library-vs-graph** | Keyword-only `compute_*` matches `FormulaEvaluator` on the same scenarios. Pipeline `validate` is a default-path FormulaEvaluator canary configured in `workbook_config.INVERTED_TREE_VALIDATE_CASES`; empty addresses fail closed. |
+| **No library-vs-Excel COM path** | Inverted-tree export has no `set_*` to drive Excel from the public API. Library ≈ Excel follows by transitivity on the same scenarios. |
+
+#### 6. Document
+
+| Criterion | Pass condition |
+|---|---|
+| **Documentation website published** | `dist/website/` contains a polished website with detailed macrofinance explanations and usage instructions and examples. Runnable cells call keyword-only `compute_*`, not `make_context()` / `set_*`. |
 
 ---
 

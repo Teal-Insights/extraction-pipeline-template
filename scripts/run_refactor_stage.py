@@ -1,9 +1,9 @@
-"""Run only the internals refactor stage against an isolated codegen root.
+"""Run leftover internals refactor against a warm export package.
 
-Thin wrapper over ``python -m src.extraction_pipeline --only-stage refactor``
-with lab-specific flags. Rebuilds from the warm export stage manifest (or runs
-export first when entering via a full pipeline start). By default writes into
-``artifacts/refactor-lab/`` so ``dist/`` stays untouched unless ``--in-place``.
+The live orchestrator no longer includes a refactor stage. This script still
+clusters and rewrites ``internals.py`` from a warm ``export.json`` manifest.
+By default writes into ``artifacts/refactor-lab/`` so ``dist/`` stays
+untouched unless ``--in-place``.
 
 Usage:
     uv run python -m scripts.run_refactor_stage [--dump-prompts DIR]
@@ -19,7 +19,11 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from src.extraction_pipeline import RefactorLabOptions, run_pipeline
+from src.extraction_pipeline import (
+    RefactorLabOptions,
+    export_stage_state_from_manifest,
+    run_refactor_stage,
+)
 from src.internals_refactor import (
     ClusterRefactorContext,
     SingletonRefactorContext,
@@ -33,6 +37,7 @@ from src.mechanical_body import (
     synthesize_cluster_body,
     synthesize_singleton_body,
 )
+from src.package_materialize import materialize_package
 from src.pipeline_config import (
     add_clustering_mode_argument,
     add_variation_mode_argument,
@@ -41,6 +46,7 @@ from src.pipeline_config import (
     load_pipeline_config,
     validate_pipeline_config,
 )
+from src.stage_manifest import require_upstream_manifest
 
 DEFAULT_OUTPUT_ROOT = Path("artifacts/refactor-lab")
 
@@ -204,9 +210,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         singleton_context_observer=singleton_observer,
     )
     try:
-        run_pipeline(
+        export_manifest = require_upstream_manifest(config, start_from_stage="annotate")
+        export_state = export_stage_state_from_manifest(config, export_manifest)
+        materialize_package(
             config,
-            only_stage="refactor",
+            codegen_key=export_state.codegen_cache_key,
+            apply_rewrites=False,
+        )
+        run_refactor_stage(
+            export_state,
             no_cache=args.no_cache,
             force_rebuild=args.force_rebuild,
             lab_options=lab_options,
