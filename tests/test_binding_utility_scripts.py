@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass, replace
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
@@ -889,6 +890,29 @@ def test_binding_guidance_documents_constant_direction() -> None:
         "derive_constant_series" in pipeline_readme
         or "derive_constant_series" in prompt
     )
+
+
+def test_excel_grapher_floor_is_12_7_1() -> None:
+    """Lockfile and pyproject must agree on excel-grapher>=12.7.1."""
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    lockfile = (root / "uv.lock").read_text(encoding="utf-8")
+    installed = tuple(int(part) for part in version("excel-grapher").split(".")[:3])
+
+    assert 'excel-grapher>=12.7.1' in pyproject
+    assert '{ name = "excel-grapher", specifier = ">=12.7.1" }' in lockfile
+    assert installed >= (12, 7, 1)
+
+
+def test_binding_resolution_audit_uses_public_apply_series_excludes() -> None:
+    """Audit must call the public exclude API, not the private helper."""
+    from excel_grapher.series_bindings.ranges import apply_series_excludes
+
+    import src.binding_resolution_audit as audit_module
+
+    source = Path(audit_module.__file__).read_text(encoding="utf-8")
+    assert apply_series_excludes is audit_module.apply_series_excludes
+    assert "_apply_exclude_rows" not in source
 
 
 def test_binding_resolution_audit_directions_include_constant() -> None:
