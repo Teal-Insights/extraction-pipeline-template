@@ -42,6 +42,7 @@ from src.graph_cache import (
     save_dependency_graph,
 )
 from src.internal_binding_coverage import (
+    collapse_unbound_cells_to_ranges,
     contiguous_column_ranges,
     find_unbound_internal_formula_cells_from_manifest,
     format_row_column_spans,
@@ -276,6 +277,27 @@ def test_group_unbound_cells_by_sheet_row() -> None:
     assert grouped == {"Engine": {2: [2, 3]}, "Outputs": {1: [2]}}
 
 
+def test_group_unbound_cells_by_sheet_row_strips_quoted_sheet_names() -> None:
+    grouped = group_unbound_cells_by_sheet_row(("'Climate Database'!B26",))
+    assert grouped == {"Climate Database": {26: [2]}}
+
+
+def test_collapse_unbound_cells_to_ranges_joins_consecutive_rows() -> None:
+    cells = ("Engine!B2", "Engine!C2", "Engine!B3", "Engine!C3", "Outputs!B1")
+    assert collapse_unbound_cells_to_ranges(cells) == (
+        "Engine!B2:C3",
+        "Outputs!B1",
+    )
+
+
+def test_collapse_unbound_cells_to_ranges_splits_column_gaps() -> None:
+    cells = ("Store!B2", "Store!D2", "Store!B3", "Store!D3")
+    assert collapse_unbound_cells_to_ranges(cells) == (
+        "Store!B2:B3",
+        "Store!D2:D3",
+    )
+
+
 def test_format_row_column_spans() -> None:
     assert (
         format_row_column_spans(sheet="Engine", row=2, columns=[2, 3, 4])
@@ -497,6 +519,7 @@ def test_internal_binding_burndown_groups_unbound_formula_cells(
         == "Engine!B2:C2"
     )
     assert suggested_layout_for_row(grouped["Engine"][2]) == "row_series"
+    assert collapse_unbound_cells_to_ranges(unbound) == ("Engine!B2:C2",)
 
 
 def test_internal_binding_burndown_does_not_warn_when_only_bindings_change(
@@ -1041,6 +1064,58 @@ def test_find_sparse_label_bind_issues_without_fill(
     rendered = "\n".join(format_audit_findings(report.findings))
     assert "engine_sparse_years" in rendered
     assert "sparse_label_without_fill" in rendered
+
+
+def test_duplicate_internal_audit_expands_list_data_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hole-split ``data_range`` lists must still participate in ownership."""
+    import src.binding_resolution_audit as audit_module
+
+    class _FakeNode:
+        is_leaf = False
+        normalized_formula = "=1"
+
+    class _FakeGraph:
+        def get_node(self, _address: str) -> _FakeNode:
+            return _FakeNode()
+
+    monkeypatch.setattr(
+        audit_module,
+        "expand_data_range_for_graph",
+        lambda _graph, data_range, workbook=None: (
+            ("Engine!B2",)
+            if data_range == "Engine!B2"
+            else (("Engine!C2",) if data_range == "Engine!C2" else ())
+        ),
+    )
+    bindings = cast(
+        Any,
+        {
+            "series": [
+                {
+                    "id": "left_span",
+                    "data_range": ["Engine!B2", "Engine!C2"],
+                    "internal": {},
+                },
+                {
+                    "id": "right_cell",
+                    "data_range": "Engine!B2",
+                    "internal": {},
+                },
+            ]
+        },
+    )
+    findings = find_duplicate_internal_formula_cell_bindings(
+        cast(DependencyGraph, _FakeGraph()),
+        bindings,
+        workbook_path=Path("unused.xlsx"),
+    )
+    assert findings
+    assert findings[0].code == "duplicate_internal_cell_binding"
+    assert findings[0].address == "Engine!B2"
+    assert "left_span" in findings[0].message
+    assert "right_cell" in findings[0].message
 
 
 def test_duplicate_internal_audit_respects_exclude_rows(
