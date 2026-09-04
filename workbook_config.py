@@ -10,7 +10,11 @@ from pathlib import Path
 
 from src.graph_dependency_audit import GraphAuditCase
 from src.internal_binding_coverage import InternalBindingValidationMode
-from src.pipeline_config import DistProjectMetadata
+from src.pipeline_config import (
+    DistProjectMetadata,
+    InvertedTreeValidateCase,
+    RunnableCellRule,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -80,12 +84,31 @@ INTERNAL_BINDING_VALIDATION_MODE: InternalBindingValidationMode = "warn"
 # Sheet-qualified formula addresses reviewed and intentionally allowed to remain unbound.
 INTERNAL_BINDING_EXEMPT_CELLS: frozenset[str] = frozenset()
 
-# Formula-cluster variation mode for internals refactor (independent or dominant_key_only).
-# Override per run with ``--variation-mode`` on ``src.extraction_pipeline``.
+RUNNABLE_CELL_RULES: tuple[RunnableCellRule, ...] = (
+    RunnableCellRule(
+        pattern=r"\bmake_context\s*\(",
+        message=(
+            "inverted-tree runnable cells must call keyword-only compute_* "
+            "helpers, not make_context()"
+        ),
+    ),
+    RunnableCellRule(
+        pattern=r"\bset_[A-Za-z_][A-Za-z0-9_]*\s*\(",
+        message="inverted-tree runnable cells must not call set_* setters",
+    ),
+)
+
+# Default-path FormulaEvaluator canary for pipeline validate. Empty fails closed
+# (same pattern as empty graph differential hooks). Derived repos must fill
+# compute_* names, output addresses, and data.py default kwargs.
+INVERTED_TREE_VALIDATE_CASES: tuple[InvertedTreeValidateCase, ...] = ()
+
+# Formula-cluster variation mode for leftover internals-refactor scripts
+# (independent or dominant_key_only). Not used by the live orchestrator.
 VARIATION_MODE = "independent"
 
-# Formula-cluster base mode for internals refactor (series, series_ast, or ast).
-# Override per run with ``--clustering-mode`` on ``src.extraction_pipeline``.
+# Formula-cluster base mode for leftover internals-refactor scripts
+# (series, series_ast, or ast). Not used by the live orchestrator.
 CLUSTERING_MODE = "series_ast"
 
 # Optional hooks for ``uv run python -m src.workbook_audit`` (pre-extraction audit).
