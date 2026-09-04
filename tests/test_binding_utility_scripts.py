@@ -899,7 +899,7 @@ def test_excel_grapher_floor_is_12_7_1() -> None:
     lockfile = (root / "uv.lock").read_text(encoding="utf-8")
     installed = tuple(int(part) for part in version("excel-grapher").split(".")[:3])
 
-    assert 'excel-grapher>=12.7.1' in pyproject
+    assert "excel-grapher>=12.7.1" in pyproject
     assert '{ name = "excel-grapher", specifier = ">=12.7.1" }' in lockfile
     assert installed >= (12, 7, 1)
 
