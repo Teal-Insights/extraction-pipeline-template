@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast, get_args, get_origin
+from typing import Any, Literal, TypeAliasType, cast, get_args, get_origin
 
 from excel_grapher.core.cell_types import normalize_cell_type_env_key
 from excel_grapher.exporter import CodeGenerator, ProjectionResult
@@ -20,26 +20,21 @@ from excel_grapher.series_bindings import load_series_bindings
 from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
 from src.bindings_validation_cache import get_or_build_bindings_validation
-from src.codegen_cache import (
-    get_or_build_codegen_modules,
-    guide_fingerprint,
-)
+from src.codegen_cache import get_or_build_codegen_modules
 from src.dependency_graph_viz import (
     constant_keys_from_leaf_classification,
     series_cell_keys,
     write_dependency_graph_site,
 )
-from src.graph_cache import get_or_build_dependency_graph, load_dependency_graph
+from src.graph_cache import get_or_build_dependency_graph
 from src.internal_binding_coverage import InternalBindingCoverageReport
 from src.internal_bindings import (
+    BindingKeyValue,
     InternalBindingIndex,
     binding_node_labels,
 )
 from src.logging_config import configure_logging
-from src.package_materialize import (
-    materialize_package,
-    try_materialize_refactored_package_from_cache,
-)
+from src.package_materialize import materialize_package
 from src.pipeline_config import (
     PipelineConfig,
     load_pipeline_config,
@@ -51,16 +46,9 @@ from src.pipeline_monitor import (
     profile_if_enabled,
     resolve_stall_log_path,
 )
-from src.projection_cache import (
-    load_projection_payload,
-    projection_cache_key,
-    rehydrate_projection_result,
-)
-from src.refactor_bindings import BindingKeyValue
-from src.refactor_types import unwrap_annotation
+from src.projection_cache import projection_cache_key
 from src.series_derived_cache import (
     get_or_build_series_derived,
-    load_series_derived_payload,
     series_derived_cache_key,
 )
 from src.series_resolution_cache import get_or_build_series_resolution
@@ -73,7 +61,6 @@ from src.stage_manifest import (
 )
 from src.stage_timings import (
     PipelineTimings,
-    record_cache_outcome,
     record_cache_result,
     stage_span,
     stage_timings_path,
@@ -170,54 +157,6 @@ class AnnotateStageState:
 
     config: PipelineConfig
     codegen_cache_key: str
-
-
-@dataclass(frozen=True)
-class RefactorStageState:
-    """Cache-key references produced by refactor for validation / document."""
-
-    config: PipelineConfig
-    codegen_cache_key: str
-    internals_cache_key: str | None
-    clusters_cache_key: str | None = None
-
-
-@dataclass(frozen=True)
-class ExportStageArtifacts:
-    """Live objects resolved from export-stage cache keys."""
-
-    graph: DependencyGraph
-    refactor_projection: Any
-    internal_binding_index: InternalBindingIndex
-    bound_address_keys: dict[str, dict[str, BindingKeyValue]]
-    address_to_series_id: dict[str, str]
-
-
-@dataclass(frozen=True)
-class RefactorLabOptions:
-    """Optional lab controls for isolated refactor iteration."""
-
-    dry_run: bool = False
-    parity_gate: bool = True
-    prompt_observer: Any | None = None
-    cluster_context_observer: Any | None = None
-    singleton_context_observer: Any | None = None
-
-    def requires_refactor_run(self) -> bool:
-        """True when these options only take effect if Pass 1 / Pass 2 actually run.
-
-        Every warm-cache short-circuit in :func:`run_refactor_stage` returns
-        before ``refactor_internals_all_clusters``, so answering a lab run from
-        cache would silently drop the observers and make ``--dry-run`` /
-        ``--no-parity-gate`` no-ops.
-        """
-        return (
-            self.dry_run
-            or not self.parity_gate
-            or self.prompt_observer is not None
-            or self.cluster_context_observer is not None
-            or self.singleton_context_observer is not None
-        )
 
 
 class StageCacheMissingError(StageManifestError):
@@ -415,48 +354,6 @@ def extract_dependency_graph(
         )
 
 
-def load_export_stage_artifacts(state: ExportStageState) -> ExportStageArtifacts:
-    """Resolve live export artifacts from cache keys; fail if any payload is missing."""
-    graph = load_dependency_graph(state.graph_cache_key)
-    if graph is None:
-        raise StageCacheMissingError(
-            f"missing dependency-graph cache payload for key "
-            f"{state.graph_cache_key[:12]}"
-        )
-    derived = load_series_derived_payload(state.series_derived_cache_key)
-    if derived is None:
-        raise StageCacheMissingError(
-            f"missing series-derived cache payload for key "
-            f"{state.series_derived_cache_key[:12]}"
-        )
-    (
-        _leaf_classification,
-        internal_binding_index,
-        bound_address_keys,
-        address_to_series_id,
-        _coverage_report,
-    ) = derived
-    projection_payload = load_projection_payload(state.projection_cache_key)
-    if projection_payload is None:
-        raise StageCacheMissingError(
-            f"missing projection cache payload for key "
-            f"{state.projection_cache_key[:12]}"
-        )
-    projected_graph, manifest = projection_payload
-    refactor_projection = rehydrate_projection_result(
-        original_graph=graph,
-        projected_graph=projected_graph,
-        manifest=manifest,
-    )
-    return ExportStageArtifacts(
-        graph=graph,
-        refactor_projection=refactor_projection,
-        internal_binding_index=internal_binding_index,
-        bound_address_keys=dict(bound_address_keys),
-        address_to_series_id=dict(address_to_series_id),
-    )
-
-
 def export_stage_state_from_manifest(
     config: PipelineConfig,
     manifest: StageManifest,
@@ -484,60 +381,16 @@ def export_stage_state_from_manifest(
     )
 
 
-def refactor_stage_state_from_manifest(
-    config: PipelineConfig,
-    manifest: StageManifest,
-) -> RefactorStageState:
-    """Build ``RefactorStageState`` from a refactor-stage (or compatible) manifest."""
-    keys = manifest.cache_keys
-    codegen_key = keys.get("codegen_cache_key")
-    if not codegen_key:
-        raise StageManifestError(
-            f"manifest for {manifest.stage!r} missing codegen_cache_key"
-        )
-    return RefactorStageState(
-        config=config,
-        codegen_cache_key=codegen_key,
-        internals_cache_key=keys.get("internals_cache_key"),
-        clusters_cache_key=keys.get("clusters_cache_key"),
-    )
+def unwrap_annotation(annotation: object) -> object:
+    """Resolve PEP 695 ``type`` aliases to their evaluated ``__value__``.
 
-
-def _materialize_from_refactor_keys(
-    config: PipelineConfig,
-    *,
-    codegen_key: str,
-    internals_key: str | None,
-) -> None:
-    """Rehydrate ``dist/`` for validate/document entry.
-
-    When ``internals_key`` is absent (non-cacheable lab / ungated refactor), leave
-    the on-disk package alone so rematerialization cannot overwrite lab output
-    with pristine codegen.
-
-    The manifest pins the exact content key, so adoption of a committed ``dist/``
-    is gated on that key rather than on provenance. Adoption is tried first
-    because ``materialize_package`` needs a warm codegen cache, which a fresh
-    clone does not have.
+    ``typing.get_args`` / ``get_origin`` do not evaluate ``TypeAliasType``, so
+    callers that introspect ``Literal`` (or other) aliases at runtime must
+    unwrap first.
     """
-    if internals_key is None:
-        print(
-            "materialize: skipping package rebuild "
-            "(no internals_cache_key; preserving on-disk dist/)",
-            flush=True,
-        )
-        return
-    if try_materialize_refactored_package_from_cache(
-        config,
-        codegen_key=codegen_key,
-        expected_internals_key=internals_key,
-    ):
-        return
-    materialize_package(
-        config,
-        codegen_key=codegen_key,
-        internals_key=internals_key,
-    )
+    while isinstance(annotation, TypeAliasType):
+        annotation = annotation.__value__
+    return annotation
 
 
 def is_constant_constraint(constraint: object) -> bool:
@@ -854,10 +707,6 @@ def _generate_export_package(
     codegen_result = get_or_build_codegen_modules(
         projection_cache_key=proj_cache_key,
         targets=targets,
-        unpack_return=True,
-        docstring_renderer="google",
-        series_docstring_callback="none",
-        guide_sha256=guide_fingerprint(config.guide_path),
         paradigm="inverted_tree",
         build_modules=_build_modules,
         no_cache=no_cache,
@@ -868,9 +717,7 @@ def _generate_export_package(
 
     package_started = time.perf_counter()
     package_root = config.package_root
-    materialize_package(
-        config, codegen_key=codegen_result.cache_key, apply_rewrites=False
-    )
+    materialize_package(config, codegen_key=codegen_result.cache_key)
     timer.record("write_export_package", time.perf_counter() - package_started)
     print(
         f"codegen: {len(codegen_result.modules)} modules "
@@ -958,284 +805,6 @@ def annotate_stage_state_from_manifest(
     return AnnotateStageState(config=config, codegen_cache_key=codegen_key)
 
 
-def _write_refactor_manifest(
-    config: PipelineConfig,
-    *,
-    export_state: ExportStageState,
-    clusters_cache_key: str | None,
-    internals_cache_key: str | None,
-) -> None:
-    cache_keys = {
-        "graph_cache_key": export_state.graph_cache_key,
-        "projection_cache_key": export_state.projection_cache_key,
-        "series_derived_cache_key": export_state.series_derived_cache_key,
-        "codegen_cache_key": export_state.codegen_cache_key,
-    }
-    if clusters_cache_key is not None:
-        cache_keys["clusters_cache_key"] = clusters_cache_key
-    if internals_cache_key is not None:
-        cache_keys["internals_cache_key"] = internals_cache_key
-    write_stage_manifest(
-        config,
-        stage="refactor",
-        cache_keys=cache_keys,
-        upstream_keys={
-            "graph_cache_key": export_state.graph_cache_key,
-            "projection_cache_key": export_state.projection_cache_key,
-            "series_derived_cache_key": export_state.series_derived_cache_key,
-            "codegen_cache_key": export_state.codegen_cache_key,
-        },
-        fingerprints=compute_input_fingerprints(config),
-    )
-
-
-def run_refactor_stage(
-    state: ExportStageState,
-    *,
-    no_cache: bool = False,
-    force_rebuild: bool = False,
-    timings: PipelineTimings | None = None,
-    lab_options: RefactorLabOptions | None = None,
-) -> RefactorStageState:
-    """Cluster formulas and rewrite internals behind the parity gate."""
-    from excel_grapher.series_bindings import load_series_bindings
-
-    from src.cluster_cache import get_or_build_clusters_and_schedule
-    from src.internals_cache import (
-        consumed_refactors_digest,
-        internals_cache_key,
-        load_refactored_internals_payload,
-        save_refactored_internals_payload,
-    )
-    from src.internals_refactor import (
-        refactor_internals_all_clusters,
-        set_cluster_context_observer,
-        set_refactor_prompt_observer,
-        set_singleton_context_observer,
-    )
-    from src.package_materialize import current_internals_inputs
-    from src.refactor_bindings import key_concept_vocabulary_from_bindings
-
-    config = state.config
-    lab = lab_options or RefactorLabOptions()
-    # A lab run that asked for observers, a dry run, or an ungated pass must
-    # reach refactor_internals_all_clusters; answering it from cache would
-    # silently do nothing at all.
-    use_internals_cache = (
-        not no_cache and not force_rebuild and not lab.requires_refactor_run()
-    )
-    with (
-        profile_if_enabled(config.graph_output_dir, basename="refactor"),
-        stage_span(timings, "refactor") as timer,
-    ):
-        # Fresh-clone / committed-dist path: trust sidecar keys (#238), but only
-        # once the recorded provenance shows the module was built the way this
-        # run would build it. Clustering has not run yet, so the full content key
-        # is not available to compare against here.
-        adopt_started = time.perf_counter()
-        if use_internals_cache and try_materialize_refactored_package_from_cache(
-            config,
-            codegen_key=state.codegen_cache_key,
-            expected_internals_inputs=current_internals_inputs(),
-        ):
-            from src.package_materialize import read_package_cache_keys
-
-            package_keys = read_package_cache_keys(config.dist_root)
-            internals_key = None if package_keys is None else package_keys.internals_key
-            print(
-                "internals_refactor: skipped "
-                f"(adopted dist/ cache keys for codegen={state.codegen_cache_key[:12]})",
-                flush=True,
-            )
-            if internals_key is not None:
-                record_cache_outcome(
-                    timings,
-                    "internals",
-                    cache_hit=True,
-                    elapsed_seconds=time.perf_counter() - adopt_started,
-                    cache_key=internals_key,
-                )
-            result = RefactorStageState(
-                config=config,
-                codegen_cache_key=state.codegen_cache_key,
-                internals_cache_key=internals_key,
-            )
-            _write_refactor_manifest(
-                config,
-                export_state=state,
-                clusters_cache_key=None,
-                internals_cache_key=internals_key,
-            )
-            return result
-
-        bindings_started = time.perf_counter()
-        artifacts = load_export_stage_artifacts(state)
-        bound_address_keys = artifacts.bound_address_keys
-        address_to_series_id = artifacts.address_to_series_id
-        key_vocabulary = key_concept_vocabulary_from_bindings(
-            load_series_bindings(config.bindings_path)
-        )
-        timer.record("build_refactor_bindings", time.perf_counter() - bindings_started)
-        print("clustering: partitioning formulas...", flush=True)
-        clustering_started = time.perf_counter()
-        cluster_result = get_or_build_clusters_and_schedule(
-            artifacts.refactor_projection,
-            bound_address_keys=bound_address_keys,
-            address_to_series_id=address_to_series_id,
-            workbook_path=config.workbook_path,
-            bindings_path=config.bindings_path,
-            projection_cache_key=state.projection_cache_key,
-            variation_mode=config.variation_mode,
-            clustering_mode=config.clustering_mode,
-            no_cache=no_cache,
-            force_rebuild=force_rebuild,
-        )
-        formula_clusters = cluster_result.clusters
-        clustering_seconds = time.perf_counter() - clustering_started
-        timer.record("cluster_graph_formulas", clustering_seconds)
-        record_cache_result(timings, "clusters", cluster_result)
-        formula_count = sum(len(cluster.members) for cluster in formula_clusters)
-        print(
-            f"clustering: {formula_count} formulas -> {len(formula_clusters)} clusters "
-            f"({clustering_seconds:.1f}s)",
-            flush=True,
-        )
-
-        # Content-keyed warm hit (#239): materialize and skip Pass 1 / gate / Pass 2.
-        refactor_digest = consumed_refactors_digest()
-        internals_key = internals_cache_key(
-            codegen_cache_key=state.codegen_cache_key,
-            clusters_cache_key=cluster_result.cache_key,
-            consumed_refactors_digest=refactor_digest,
-        )
-        if use_internals_cache:
-            internals_started = time.perf_counter()
-            cached_source = load_refactored_internals_payload(internals_key)
-            if cached_source is not None:
-                materialize_package(
-                    config,
-                    codegen_key=state.codegen_cache_key,
-                    internals_key=internals_key,
-                )
-                record_cache_outcome(
-                    timings,
-                    "internals",
-                    cache_hit=True,
-                    elapsed_seconds=time.perf_counter() - internals_started,
-                    cache_key=internals_key,
-                )
-                print(
-                    "internals: cache hit "
-                    f"(key={internals_key[:12]}); skipped Pass 1 / parity / Pass 2",
-                    flush=True,
-                )
-                result = RefactorStageState(
-                    config=config,
-                    codegen_cache_key=state.codegen_cache_key,
-                    internals_cache_key=internals_key,
-                    clusters_cache_key=cluster_result.cache_key,
-                )
-                _write_refactor_manifest(
-                    config,
-                    export_state=state,
-                    clusters_cache_key=cluster_result.cache_key,
-                    internals_cache_key=internals_key,
-                )
-                return result
-
-        print(
-            f"internals_refactor: rewriting {len(formula_clusters)} clusters...",
-            flush=True,
-        )
-        if lab.prompt_observer is not None:
-            set_refactor_prompt_observer(lab.prompt_observer)
-        if lab.cluster_context_observer is not None:
-            set_cluster_context_observer(lab.cluster_context_observer)
-        if lab.singleton_context_observer is not None:
-            set_singleton_context_observer(lab.singleton_context_observer)
-        refactor_started = time.perf_counter()
-        try:
-            run_result = refactor_internals_all_clusters(
-                artifacts.refactor_projection,
-                formula_clusters,
-                internals_path=state.package_root / "internals.py",
-                source_graph=artifacts.graph,
-                internal_binding_index=artifacts.internal_binding_index,
-                bound_address_keys=bound_address_keys,
-                key_vocabulary=key_vocabulary,
-                bindings_path=config.bindings_path,
-                workbook_path=config.workbook_path,
-                address_to_series_id=address_to_series_id,
-                constraints=config.constraints,
-                refactor_schedule=cluster_result.schedule,
-                timer=timer,
-                codegen_cache_key=state.codegen_cache_key,
-                dry_run=lab.dry_run,
-                parity_gate=lab.parity_gate,
-            )
-        finally:
-            set_refactor_prompt_observer(None)
-            set_cluster_context_observer(None)
-            set_singleton_context_observer(None)
-        refactor_seconds = time.perf_counter() - refactor_started
-        # Do not record an ``internals_refactor`` rollup span: Pass 1 leaf spans
-        # and parity/pass2/phase_c already partition that work on the same timer.
-        print(
-            f"internals_refactor: done ({refactor_seconds:.1f}s)",
-            flush=True,
-        )
-
-        # Recompute the key after the run so newly written LLM cache entries
-        # participate in the digest (first-run → second-run warm hit).
-        cacheable = getattr(run_result, "cacheable", False)
-        final_source = getattr(run_result, "final_source", None)
-        resolved_internals_key: str | None = None
-        if not no_cache and cacheable and isinstance(final_source, str):
-            post_digest = consumed_refactors_digest()
-            post_key = internals_cache_key(
-                codegen_cache_key=state.codegen_cache_key,
-                clusters_cache_key=cluster_result.cache_key,
-                consumed_refactors_digest=post_digest,
-            )
-            save_refactored_internals_payload(
-                final_source,
-                cache_key=post_key,
-                codegen_cache_key=state.codegen_cache_key,
-                clusters_cache_key=cluster_result.cache_key,
-                consumed_refactors_digest=post_digest,
-            )
-            materialize_package(
-                config,
-                codegen_key=state.codegen_cache_key,
-                internals_key=post_key,
-            )
-            resolved_internals_key = post_key
-            record_cache_outcome(
-                timings,
-                "internals",
-                cache_hit=False,
-                elapsed_seconds=refactor_seconds,
-                cache_key=post_key,
-            )
-            print(
-                f"internals: cache store (key={post_key[:12]})",
-                flush=True,
-            )
-        result = RefactorStageState(
-            config=config,
-            codegen_cache_key=state.codegen_cache_key,
-            internals_cache_key=resolved_internals_key,
-            clusters_cache_key=cluster_result.cache_key,
-        )
-        _write_refactor_manifest(
-            config,
-            export_state=state,
-            clusters_cache_key=cluster_result.cache_key,
-            internals_cache_key=resolved_internals_key,
-        )
-        return result
-
-
 def _write_downstream_manifest(
     config: PipelineConfig,
     *,
@@ -1292,6 +861,8 @@ def run_document_stage(
     *,
     timings: PipelineTimings | None = None,
     annotate_state: AnnotateStageState | None = None,
+    no_cache: bool = False,
+    force_rebuild: bool = False,
 ) -> None:
     """Rewrite the user guide against the exported package.
 
@@ -1306,7 +877,11 @@ def run_document_stage(
         stage_span(timings, "document"),
     ):
         try:
-            run_documentation_pipeline(config)
+            run_documentation_pipeline(
+                config,
+                no_cache=no_cache,
+                force_rebuild=force_rebuild,
+            )
         except Exception as error:
             logger.exception(
                 "Document stage failed after export/differential artifacts were written"
@@ -1418,14 +993,12 @@ def _run_pipeline_stages(
             materialize_package(
                 config,
                 codegen_key=export_state.codegen_cache_key,
-                apply_rewrites=False,
             )
         elif start_from_stage in ("validate", "document"):
             annotate_state = annotate_stage_state_from_manifest(config, upstream)
             materialize_package(
                 config,
                 codegen_key=annotate_state.codegen_cache_key,
-                apply_rewrites=False,
             )
             from src.inverted_tree_docstrings import annotate_exported_package
 
@@ -1522,6 +1095,8 @@ def _run_pipeline_stages(
             config,
             timings=timings,
             annotate_state=annotate_state,
+            no_cache=no_cache,
+            force_rebuild=force_rebuild,
         )
 
 

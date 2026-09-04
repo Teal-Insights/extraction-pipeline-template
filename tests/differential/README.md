@@ -1,41 +1,34 @@
 # Differential testing
 
 **Differential testing** feeds identical inputs to two oracles and compares outputs.
-Here the golden-master oracle is Microsoft Excel (via `xlwings`), and the system
-under test is either the in-memory dependency graph or the exported standalone
-library.
 
 | Term | Meaning |
 |---|---|
-| **Golden master** | Trusted Excel workbook recalculated through COM automation |
-| **MVP oracle** | Python reimplementation (graph evaluator or exported package) |
+| **Graph golden master** | Trusted Excel workbook recalculated through COM automation (`xlwings`) |
+| **Library golden master** | Extraction graph evaluated with `FormulaEvaluator` |
+| **MVP / SUT** | Graph evaluator (vs Excel) or exported `compute_*` (vs the graph) |
 | **Hybrid tolerance (`atol` / `rtol`)** | Pass iff `abs_diff <= 1e-6` **or** `rel_diff <= 1e-12` (golden-anchored); see `technical_standard.md` §1.1 |
 
 ## Two harnesses
 
-Run the **graph** differential before export to validate extraction fidelity.
-Run the **exported-library** differential after export to validate the artifact
-callers consume.
+Run the **graph** differential before export to validate extraction fidelity
+against Excel. Run the **exported-library** differential after export to
+validate codegen against that graph.
 
-| Harness | SUT | When |
-|---|---|---|
-| [`differential_test_graph.py`](differential_test_graph.py) | In-memory `FormulaEvaluator` over the extracted graph | Before / alongside extraction review |
-| [`differential_test_exported_library.py`](differential_test_exported_library.py) | Generated standalone package public API | After `uv run python -m src.extraction_pipeline` |
+| Harness | Oracle | SUT | When |
+|---|---|---|---|
+| [`differential_test_graph.py`](differential_test_graph.py) | Microsoft Excel (`xlwings`) | In-memory `FormulaEvaluator` | Before / alongside extraction review |
+| [`differential_test_exported_library.py`](differential_test_exported_library.py) | `FormulaEvaluator` on the extracted graph | Generated package `compute_*` | After `uv run python -m src.extraction_pipeline` |
 
 Both harnesses import shared scenario types from
 [`differential_types.py`](differential_types.py) (`Scenario`, optional `Axis` /
 `AxisPoint`, `ATOL`, and `RTOL`). Numeric comparison is shared via
 [`comparison_utils.py`](comparison_utils.py). Golden-master cell reads go through
-[`differential_excel.py`](differential_excel.py) (`err_to_str=True`); the exported
-harness additionally uses `read_cells_batched()` for one COM span-read per
-`(sheet, row)`.
-
-**Graph-only:** input isolation helpers in
-[`differential_scenario_inputs.py`](differential_scenario_inputs.py) collect the
-union of scenario write addresses so the graph harness can restore workbook
-baselines between scenarios. The exported harness does **not** use that module —
-it opens a fresh Excel instance per scenario and relies on
-[input symmetry](#input-symmetry) between `inputs_for_excel` and public setters.
+[`differential_excel.py`](differential_excel.py) (`err_to_str=True`) for the
+graph-vs-Excel harness. Both harnesses use
+[`differential_scenario_inputs.py`](differential_scenario_inputs.py) to collect
+the union of scenario write addresses so each scenario restores workbook
+baselines before applying overrides.
 
 Workbook-specific hooks live at the bottom of each harness module (or in a
 workbook matrix module that those hooks import).
@@ -102,35 +95,41 @@ itself a differential signal about extraction coverage.
 
 ### Exported-library harness hooks
 
-Exactly five hooks:
-
 1. **`build_scenarios()`** — representative input combinations.
 2. **`output_cell_labels()`** — `(label, address)` pairs, one per bound output
    cell. Prefer generating from derived output series (see [Full-API
    coverage](#full-api-coverage)).
-3. **`inputs_for_excel(scenario)`** — map each scenario to Excel cell writes.
-4. **`apply_inputs_to_mvp(api, ctx, scenario)`** — map each scenario to
-   Records-shaped `set_*` calls.
-5. **`mvp_outputs_for_scenario(api, scenario)`** — compute every public
-   endpoint once and return `{label: OBS_VALUE-or-None}`; missing or ambiguous
-   records resolve to `None` (see [Full-API coverage](#full-api-coverage)).
+3. **`inputs_for_excel(scenario)`** — map each scenario to graph cell writes
+   (Excel addresses). The graph driver sets nodes by those addresses; keep the
+   hook name.
+4. **`mvp_outputs_for_scenario(api, scenario)`** — call keyword-only `compute_*`
+   and return `{label: value}`.
 
-Optional sixth hook:
+Optional fifth hook:
 
-- **`expressible_input_cells() -> frozenset[str] | None`** — cells reachable via
-  public setters. Return `None` (template default) to skip the symmetry
+- **`expressible_input_cells() -> frozenset[str] | None`** — cells reachable as
+  `compute_*` arguments. Return `None` (template default) to skip the symmetry
   preflight until the workbook matrix is authored.
 
+Keep graph (and library) hooks **empty** in this template. Derived repos must
+fill them before claiming Excel ≈ graph ≈ library. Do not treat empty hooks as
+extraction proof.
+
 Commit reference reports under `data/differential/graph/` and
-`data/differential/exported_library/` after passing Windows sweeps. The export
-step copies the exported-library harness, workbook fixture, and reports into
+`data/differential/exported_library/` after passing sweeps. The export step
+copies the exported-library harness, workbook fixture, and reports into
 `dist/tests/`.
+
+**Why both matter:** a passing graph differential proves the *extraction* is
+faithful; a passing exported-library differential proves the *code generation*
+on top of it is faithful too. Transitivity then gives library ≈ Excel on the
+same scenarios without driving Excel from the library harness.
 
 ### Input symmetry
 
 For the exported harness, every address written by `inputs_for_excel` must also
-be expressible through a public `set_*` in `apply_inputs_to_mvp`. Otherwise the
-two oracles receive different inputs and comparison is unsatisfiable.
+be expressible as a `compute_*` argument. Otherwise the two oracles receive
+different inputs and comparison is unsatisfiable.
 
 When `expressible_input_cells()` returns a frozenset, `_verify_input_symmetry`
 fails the run (exit **2**) if any scenario write falls outside that set. Leave
@@ -143,22 +142,19 @@ Prefer building output specs from derived output series
 [`output_specs.py`](output_specs.py):
 
 - `specs_from_output_series(...)` → one `OutputCellSpec` per bound cell
-- `outputs_from_records(specs, records_by_compute)` → `{label: value}`
 
-Excel outputs are keyed by **address**; MVP outputs by **label**. Specs whose
-`(compute, keys)` pair is shared by more than one series are inherently
-ambiguous (bindings/codegen collision); every spec in that group resolves to
-`None` so the cell fails deterministically instead of silently cross-matching.
+Graph outputs are keyed by **address**; MVP outputs by **label**. Map
+`compute_*` tuple results onto those labels in `mvp_outputs_for_scenario()`.
 
 ### Crash attribution and reports
 
 Oracles run in separate try/except blocks. When one side crashes,
 `crash_comparisons` records the exception repr only on the crashed side and
-keeps the surviving oracle's values (MVP crash after Excel succeeded preserves
-`excel_value`). The TXT report includes:
+keeps the surviving oracle's values (MVP crash after the graph succeeded
+preserves `graph_value`). The TXT report includes:
 
 - `Workbook SHA-256`
-- `ENVIRONMENT` (Python, OS, xlwings, Excel)
+- `ENVIRONMENT` (Python, OS, excel-grapher)
 - `FAILING COMPARISONS (n)` listing every failure
 - hybrid `atol` / `rtol` tolerance line
 
@@ -168,7 +164,9 @@ When an exported layout ships a workbook fixture under
 
 ## Run
 
-Microsoft Excel must be installed locally — `xlwings` drives it through COM automation.
+The **graph** harness requires Microsoft Excel locally — `xlwings` drives it
+through COM automation. The **exported-library** harness does **not** require
+Excel: it compares `compute_*` to `FormulaEvaluator`.
 
 **Graph harness prerequisite:** load a warm dependency-graph cache first so the
 MVP oracle does not cold-build. Run extract (or regenerate) for the current
@@ -193,11 +191,11 @@ uv run python -m tests.differential.differential_test_graph
 # Triage run: matched error cells listed but not treated as failures
 uv run python -m tests.differential.differential_test_graph --allow-matched-errors
 
-# Exported library (extraction repo, after export)
+# Exported library (extraction repo, after export; FormulaEvaluator oracle)
 uv run python -m tests.differential.differential_test_exported_library
 
-# Exported dist project (Windows + Excel)
-uv run --project dist --group validation python -m tests.differential.differential_test_exported_library --layout exported
+# Exported dist project (graph cache + excel-grapher)
+uv run python -m tests.differential.differential_test_exported_library --layout exported
 ```
 
 Comparisons where both oracles return the same Excel error code are always
@@ -217,9 +215,8 @@ exported-library harness helpers (`compare_cell`, `crash_comparisons`,
 `write_csv_report`, `write_txt_summary`) to that standard on every PR — no Excel
 required.
 
-CSV columns use `excel_value` / `mvp_value` as aliases for the standard's
-`golden_value` / `sut_value` terminology (the graph harness CSV uses
-`golden` / `mvp`).
+CSV columns use `graph_value` / `mvp_value` as aliases for the standard's
+`golden_value` / `sut_value` terminology.
 
 ## Output locations
 

@@ -1,7 +1,7 @@
 """Workbook-specific configuration for this extraction project.
 
-Edit every value below before running the pipeline. See README.md for the
-iterative configure → extract → export workflow.
+Edit values here before running the pipeline. See README.md for the
+extract → export → annotate → validate → document workflow.
 """
 
 from __future__ import annotations
@@ -59,8 +59,6 @@ DIST_METADATA = DistProjectMetadata(
     # attribution="Created by Example Corp.\n\n![Logo](README_files/logo.png)",
 )
 
-DOCSTRING_CALLBACK_NAME = "series_docs"
-
 DIFFERENTIAL_WORKBOOK_REL = Path("data/workbook.xlsx")
 DIFFERENTIAL_REPORT_DIR_REL = Path("data/differential/exported_library")
 DIFFERENTIAL_GRAPH_REPORT_DIR_REL = Path("data/differential/graph")
@@ -102,14 +100,6 @@ RUNNABLE_CELL_RULES: tuple[RunnableCellRule, ...] = (
 # (same pattern as empty graph differential hooks). Derived repos must fill
 # compute_* names, output addresses, and data.py default kwargs.
 INVERTED_TREE_VALIDATE_CASES: tuple[InvertedTreeValidateCase, ...] = ()
-
-# Formula-cluster variation mode for leftover internals-refactor scripts
-# (independent or dominant_key_only). Not used by the live orchestrator.
-VARIATION_MODE = "independent"
-
-# Formula-cluster base mode for leftover internals-refactor scripts
-# (series, series_ast, or ast). Not used by the live orchestrator.
-CLUSTERING_MODE = "series_ast"
 
 # Optional hooks for ``uv run python -m src.workbook_audit`` (pre-extraction audit).
 AUDIT_TITLE = "Workbook Audit"

@@ -82,7 +82,7 @@ Configure checklist (workbook-neutral):
 
 | Criterion | Pass condition |
 |---|---|
-| **Docstrings on public API** | Every `compute_*` (and internals helper) has a Google-style docstring from the annotate stage (`src/inverted_tree_docstrings.py`), grounded in the human guide. Export uses `series_docstring_callback="none"`; docstrings are not a codegen callback. |
+| **Docstrings on public API** | Every `compute_*` (and internals helper) has a Google-style docstring from the annotate stage (`src/inverted_tree_docstrings.py`), grounded in the human guide. Docstrings are not a codegen callback. |
 | **Signature fidelity** | Annotate fails closed if the model returns argument names that do not match the function signature. |
 
 #### 5. Validate
@@ -143,11 +143,11 @@ Ordered to match the onboarding checklist in [README.md](README.md#clone-and-con
 [ ] Extract: graph extracts with provenance (--extract-graph)
 [ ] Review graph: manual completeness review done; optional LLM dependency audit passed
 [ ] Verify graph: scenario matrix defined in tests/differential/; graph-oracle parity passes (uv run python -m tests.differential.differential_test_graph)
-[ ] Cluster diagnostics: compare_cluster_variation_modes run; VARIATION_MODE chosen; shredded families remodeled (row↔column series or consolidate to matrix) or explicitly accepted
-[ ] Export: dist package builds; semantic API scenario runs
-[ ] Export: validation bundle exported; exported-library differential parity passes
-[ ] Document / refactor: public API uses domain language; docstrings present
-[ ] Document / refactor: internals refactored; parity re-confirmed
+[ ] Export: dist package builds; keyword-only `compute_*` scenario runs
+[ ] Export: validation bundle exported; library-vs-graph FormulaEvaluator parity passes
+[ ] Annotate: public API uses domain language; Google-style docstrings present
+[ ] Validate: default-path FormulaEvaluator canary configured and passing
+[ ] Document: Cursor agent user-guide authored against `compute_*`
 
 Generated graph artifacts under `artifacts/dependency-graph/` are gitignored; workbook audit reports may be committed optionally. See [artifacts/README.md](artifacts/README.md).
 

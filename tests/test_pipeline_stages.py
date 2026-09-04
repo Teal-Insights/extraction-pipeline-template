@@ -11,14 +11,11 @@ from src.extraction_pipeline import (
     PIPELINE_STAGES,
     AnnotateStageState,
     ExportStageState,
-    RefactorLabOptions,
     main,
     run_export_stage,
     run_pipeline,
-    run_refactor_stage,
     run_validate_stage,
 )
-from src.formula_clustering import FormulaCluster
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
 from src.stage_timings import PipelineTimings, stage_timings_path
 
@@ -67,20 +64,10 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
             description="Example library.",
             documentation_url="https://example.com/",
         ),
-        docstring_callback_name="series_docs",
-        canonical_api_example_path=repo_root / "templates" / "canonical-api-usage.md",
         binding_authoring_prompt_path=repo_root
         / "templates"
         / "binding-authoring-prompt.txt",
-        section_rewrite_introduction_focus_path=(
-            repo_root / "templates" / "section-rewrite-introduction-focus.txt"
-        ),
-        section_rewrite_functional_overview_focus_path=(
-            repo_root / "templates" / "section-rewrite-functional-overview-focus.txt"
-        ),
-        section_rewrite_illustrative_example_focus_path=(
-            repo_root / "templates" / "section-rewrite-illustrative-example-focus.txt"
-        ),
+        user_guide_agent_prompt_path=repo_root / "templates" / "user-guide-agent.txt",
         differential_workbook_rel=Path("data/workbook.xlsx"),
         differential_report_dir_rel=Path("data/differential/exported_library"),
         differential_graph_report_dir_rel=Path("data/differential/graph"),
@@ -413,7 +400,11 @@ def test_run_pipeline_default_runs_through_document(
         run_pipeline(synthetic_pipeline_config_fixture)
 
     validate.assert_called_once_with(annotate_state, no_cache=False, timings=ANY)
-    document.assert_called_once_with(synthetic_pipeline_config_fixture)
+    document.assert_called_once_with(
+        synthetic_pipeline_config_fixture,
+        no_cache=False,
+        force_rebuild=False,
+    )
 
 
 def test_run_pipeline_passes_no_cache_to_validate_stage(
@@ -571,7 +562,11 @@ def test_run_pipeline_force_document_runs_docs_after_differential_failure(
             force_document=True,
         )
 
-    document.assert_called_once_with(synthetic_pipeline_config_fixture)
+    document.assert_called_once_with(
+        synthetic_pipeline_config_fixture,
+        no_cache=False,
+        force_rebuild=False,
+    )
 
 
 def test_run_pipeline_document_failure_raises_document_stage_error(
@@ -889,9 +884,7 @@ def test_run_pipeline_start_from_annotate_skips_export(
         )
 
     export.assert_not_called()
-    materialize.assert_called_once_with(
-        config, codegen_key="c" * 64, apply_rewrites=False
-    )
+    materialize.assert_called_once_with(config, codegen_key="c" * 64)
     annotate.assert_called_once()
     validate.assert_not_called()
     document.assert_not_called()
@@ -933,9 +926,7 @@ def test_run_pipeline_only_stage_validate_materializes_from_manifest(
 
     export.assert_not_called()
     annotate.assert_not_called()
-    materialize.assert_called_once_with(
-        config, codegen_key="c" * 64, apply_rewrites=False
-    )
+    materialize.assert_called_once_with(config, codegen_key="c" * 64)
     validate.assert_called_once()
     document.assert_not_called()
 
@@ -968,203 +959,3 @@ def test_run_pipeline_start_from_annotate_aborts_on_workbook_drift(
             start_from_stage="annotate",
             stop_after_stage="annotate",
         )
-
-
-def test_run_refactor_stage_prints_clustering_and_refactor_boundaries(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    config = _sample_config(tmp_path)
-    package_root = tmp_path / "dist" / "my_model"
-    package_root.mkdir(parents=True)
-    (package_root / "internals.py").write_text("pass\n", encoding="utf-8")
-    clusters = (
-        FormulaCluster(
-            cluster_id=0,
-            members=("Sheet!A1", "Sheet!B1"),
-            canonical_template="=1",
-            row=1,
-        ),
-        FormulaCluster(
-            cluster_id=1,
-            members=("Sheet!C1",),
-            canonical_template="=2",
-            row=1,
-        ),
-    )
-    state = ExportStageState(
-        config=config,
-        graph_cache_key="cache-key",
-        projection_cache_key="proj-key",
-        series_derived_cache_key="derived-key",
-        codegen_cache_key="codegen-key",
-        package_root=package_root,
-    )
-    from src.cluster_cache import ClusterCacheResult
-    from src.extraction_pipeline import ExportStageArtifacts
-
-    cluster_result = ClusterCacheResult(
-        clusters=clusters,
-        schedule=(),
-        cache_key="cluster-key",
-        cache_hit=False,
-        elapsed_seconds=0.01,
-    )
-    artifacts = ExportStageArtifacts(
-        graph=MagicMock(),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-    )
-
-    with (
-        patch(
-            "excel_grapher.series_bindings.load_series_bindings",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
-            return_value=(),
-        ),
-        patch(
-            "src.extraction_pipeline.load_export_stage_artifacts",
-            return_value=artifacts,
-        ),
-        patch(
-            "src.cluster_cache.get_or_build_clusters_and_schedule",
-            return_value=cluster_result,
-        ),
-        patch("src.internals_refactor.refactor_internals_all_clusters"),
-    ):
-        run_refactor_stage(state)
-
-    captured = capsys.readouterr().out
-    assert "clustering: partitioning formulas..." in captured
-    assert "clustering: 3 formulas -> 2 clusters" in captured
-    assert "internals_refactor: rewriting 2 clusters..." in captured
-    assert "internals_refactor: done (" in captured
-
-
-def test_run_refactor_stage_records_spans_and_profiles(tmp_path: Path) -> None:
-    config = _sample_config(tmp_path)
-    package_root = tmp_path / "dist" / "my_model"
-    package_root.mkdir(parents=True)
-    (package_root / "internals.py").write_text("pass\n", encoding="utf-8")
-    state = ExportStageState(
-        config=config,
-        graph_cache_key="cache-key",
-        projection_cache_key="proj-key",
-        series_derived_cache_key="derived-key",
-        codegen_cache_key="codegen-key",
-        package_root=package_root,
-    )
-    timings = PipelineTimings()
-    from src.cluster_cache import ClusterCacheResult
-    from src.extraction_pipeline import ExportStageArtifacts
-
-    cluster_result = ClusterCacheResult(
-        clusters=(),
-        schedule=(),
-        cache_key="cluster-key",
-        cache_hit=False,
-        elapsed_seconds=0.01,
-    )
-    artifacts = ExportStageArtifacts(
-        graph=MagicMock(),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-    )
-
-    with (
-        patch(
-            "excel_grapher.series_bindings.load_series_bindings",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
-            return_value=(),
-        ),
-        patch(
-            "src.extraction_pipeline.load_export_stage_artifacts",
-            return_value=artifacts,
-        ),
-        patch(
-            "src.cluster_cache.get_or_build_clusters_and_schedule",
-            return_value=cluster_result,
-        ),
-        patch("src.internals_refactor.refactor_internals_all_clusters"),
-        patch("src.extraction_pipeline.profile_if_enabled") as profile,
-    ):
-        run_refactor_stage(state, timings=timings)
-
-    assert profile.call_args.kwargs["basename"] == "refactor"
-    record = timings.stages[0]
-    assert record.name == "refactor"
-    assert "build_refactor_bindings" in record.spans
-    assert "cluster_graph_formulas" in record.spans
-    assert "internals_refactor" not in record.spans
-
-
-def test_run_refactor_stage_forwards_the_stage_timer_to_the_refactor(
-    tmp_path: Path,
-) -> None:
-    config = _sample_config(tmp_path)
-    package_root = tmp_path / "dist" / "my_model"
-    package_root.mkdir(parents=True)
-    state = ExportStageState(
-        config=config,
-        graph_cache_key="cache-key",
-        projection_cache_key="proj-key",
-        series_derived_cache_key="derived-key",
-        codegen_cache_key="codegen-key",
-        package_root=package_root,
-    )
-    from src.cluster_cache import ClusterCacheResult
-    from src.extraction_pipeline import ExportStageArtifacts
-
-    cluster_result = ClusterCacheResult(
-        clusters=(),
-        schedule=(),
-        cache_key="cluster-key",
-        cache_hit=False,
-        elapsed_seconds=0.01,
-    )
-    artifacts = ExportStageArtifacts(
-        graph=MagicMock(),
-        refactor_projection=MagicMock(),
-        internal_binding_index={},
-        bound_address_keys={},
-        address_to_series_id={},
-    )
-
-    with (
-        patch(
-            "excel_grapher.series_bindings.load_series_bindings",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "src.refactor_bindings.key_concept_vocabulary_from_bindings",
-            return_value=(),
-        ),
-        patch(
-            "src.extraction_pipeline.load_export_stage_artifacts",
-            return_value=artifacts,
-        ),
-        patch(
-            "src.cluster_cache.get_or_build_clusters_and_schedule",
-            return_value=cluster_result,
-        ),
-        patch("src.internals_refactor.refactor_internals_all_clusters") as refactor,
-    ):
-        run_refactor_stage(state, timings=PipelineTimings())
-
-    assert refactor.call_args.kwargs["timer"] is not None
-    assert refactor.call_args.kwargs["refactor_schedule"] == ()
-    assert refactor.call_args.kwargs["codegen_cache_key"] == "codegen-key"
-
-
-def test_refactor_lab_options_requires_refactor_run_is_false_by_default() -> None:
-    assert RefactorLabOptions().requires_refactor_run() is False

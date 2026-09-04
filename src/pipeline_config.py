@@ -2,25 +2,14 @@
 
 from __future__ import annotations
 
-import argparse
 import importlib
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from src.graph_dependency_audit import GraphAuditCase
 from src.internal_binding_coverage import InternalBindingValidationMode
-from src.refactor_types import (
-    CLUSTERING_MODE_CLI_HELP,
-    VARIATION_MODE_CLI_HELP,
-    ClusteringMode,
-    VariationMode,
-    clustering_mode_choices,
-    parse_clustering_mode,
-    parse_variation_mode,
-    variation_mode_choices,
-)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,12 +89,8 @@ class PipelineConfig:
     targets: tuple[str, ...]
     constraints: dict[str, object]
     dist_metadata: DistProjectMetadata
-    docstring_callback_name: str
-    canonical_api_example_path: Path
     binding_authoring_prompt_path: Path
-    section_rewrite_introduction_focus_path: Path
-    section_rewrite_functional_overview_focus_path: Path
-    section_rewrite_illustrative_example_focus_path: Path
+    user_guide_agent_prompt_path: Path
     differential_workbook_rel: Path
     differential_report_dir_rel: Path
     differential_graph_report_dir_rel: Path
@@ -115,8 +100,6 @@ class PipelineConfig:
     blank_ranges: tuple[str, ...] = ()
     internal_binding_validation_mode: InternalBindingValidationMode = "warn"
     internal_binding_exempt_cells: frozenset[str] = frozenset()
-    variation_mode: VariationMode = "independent"
-    clustering_mode: ClusteringMode = "series_ast"
     runnable_cell_rules: tuple[RunnableCellRule, ...] = ()
     inverted_tree_validate_cases: tuple[InvertedTreeValidateCase, ...] = ()
 
@@ -288,40 +271,6 @@ def _load_blank_ranges(value: object) -> tuple[str, ...]:
     return tuple(ranges)
 
 
-def add_variation_mode_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--variation-mode",
-        choices=variation_mode_choices(),
-        help=VARIATION_MODE_CLI_HELP,
-    )
-
-
-def add_clustering_mode_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--clustering-mode",
-        choices=clustering_mode_choices(),
-        help=CLUSTERING_MODE_CLI_HELP,
-    )
-
-
-def apply_variation_mode_cli_override(
-    config: PipelineConfig,
-    variation_mode: str | None,
-) -> PipelineConfig:
-    if variation_mode is None:
-        return config
-    return replace(config, variation_mode=cast(VariationMode, variation_mode))
-
-
-def apply_clustering_mode_cli_override(
-    config: PipelineConfig,
-    clustering_mode: str | None,
-) -> PipelineConfig:
-    if clustering_mode is None:
-        return config
-    return replace(config, clustering_mode=cast(ClusteringMode, clustering_mode))
-
-
 def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
     """Load workbook-specific settings from the repository ``workbook_config`` module."""
     root = repo_root or _REPO_ROOT
@@ -335,30 +284,14 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
     constraints = dict(user_config.CONSTRAINTS)
     blank_ranges = _load_blank_ranges(getattr(user_config, "BLANK_RANGES", ()))
     dist_metadata = user_config.DIST_METADATA
-    docstring_callback_name = str(user_config.DOCSTRING_CALLBACK_NAME)
 
     templates_root = root / "templates"
-    canonical_api_example_path = templates_root / "canonical-api-usage.md"
     binding_authoring_prompt_path = templates_root / "binding-authoring-prompt.txt"
-    section_rewrite_introduction_focus_path = Path(
+    user_guide_agent_prompt_path = Path(
         getattr(
             user_config,
-            "SECTION_REWRITE_INTRODUCTION_FOCUS_PATH",
-            templates_root / "section-rewrite-introduction-focus.txt",
-        )
-    )
-    section_rewrite_functional_overview_focus_path = Path(
-        getattr(
-            user_config,
-            "SECTION_REWRITE_FUNCTIONAL_OVERVIEW_FOCUS_PATH",
-            templates_root / "section-rewrite-functional-overview-focus.txt",
-        )
-    )
-    section_rewrite_illustrative_example_focus_path = Path(
-        getattr(
-            user_config,
-            "SECTION_REWRITE_ILLUSTRATIVE_EXAMPLE_FOCUS_PATH",
-            templates_root / "section-rewrite-illustrative-example-focus.txt",
+            "USER_GUIDE_AGENT_PROMPT_PATH",
+            templates_root / "user-guide-agent.txt",
         )
     )
     differential_workbook_rel = Path(
@@ -389,12 +322,6 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
     internal_binding_exempt_cells = _load_internal_binding_exempt_cells(
         getattr(user_config, "INTERNAL_BINDING_EXEMPT_CELLS", frozenset())
     )
-    variation_mode = parse_variation_mode(
-        getattr(user_config, "VARIATION_MODE", "independent")
-    )
-    clustering_mode = parse_clustering_mode(
-        getattr(user_config, "CLUSTERING_MODE", "series_ast")
-    )
     runnable_cell_rules = _load_runnable_cell_rules(
         getattr(user_config, "RUNNABLE_CELL_RULES", ())
     )
@@ -414,16 +341,8 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
         targets=targets,
         constraints=constraints,
         dist_metadata=dist_metadata,
-        docstring_callback_name=docstring_callback_name,
-        canonical_api_example_path=canonical_api_example_path,
         binding_authoring_prompt_path=binding_authoring_prompt_path,
-        section_rewrite_introduction_focus_path=section_rewrite_introduction_focus_path,
-        section_rewrite_functional_overview_focus_path=(
-            section_rewrite_functional_overview_focus_path
-        ),
-        section_rewrite_illustrative_example_focus_path=(
-            section_rewrite_illustrative_example_focus_path
-        ),
+        user_guide_agent_prompt_path=user_guide_agent_prompt_path,
         differential_workbook_rel=differential_workbook_rel,
         differential_report_dir_rel=differential_report_dir_rel,
         differential_graph_report_dir_rel=differential_graph_report_dir_rel,
@@ -433,8 +352,6 @@ def load_pipeline_config(*, repo_root: Path | None = None) -> PipelineConfig:
         blank_ranges=blank_ranges,
         internal_binding_validation_mode=internal_binding_validation_mode,
         internal_binding_exempt_cells=internal_binding_exempt_cells,
-        variation_mode=variation_mode,
-        clustering_mode=clustering_mode,
         runnable_cell_rules=runnable_cell_rules,
         inverted_tree_validate_cases=inverted_tree_validate_cases,
     )

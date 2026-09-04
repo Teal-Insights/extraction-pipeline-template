@@ -22,7 +22,7 @@ The dependency-graph directory is listed in `.gitignore` because graph payloads 
 | Export | `--stop-after-stage export` | `stages/export.json` |
 | Annotate | `--start-from-stage annotate` / full run | `stages/annotate.json` |
 | Validate | FormulaEvaluator canary | `stages/validate.json` |
-| Document | Great Docs / section rewrite | `stages/document.json` |
+| Document | Cursor agent user-guide authoring | `stages/document.json` |
 
 Serve the graph explorer locally (do not commit generated files):
 

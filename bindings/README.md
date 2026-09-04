@@ -10,10 +10,10 @@ Use schema version `1.13.0` and the prompt in [templates/binding-authoring-promp
 ## Constant bindings (reader-only leaves)
 
 Use `constant: {}` for graph **leaves** that formulas read as fixed parameters,
-scenario knobs, or lookup seeds, but that should **not** appear as user-editable
-Records inputs (`set_*`) or published outputs (`compute_*`). Without a constant
-binding, those leaves stay as bare `xl_cell(ctx, 'Sheet!A1')` in generated
-formula bodies even when the domain model already names them.
+scenario knobs, or lookup seeds, but that should **not** appear as required
+keyword-only `compute_*` arguments or published outputs. Without a constant
+binding, those leaves stay as unnamed cell reads in generated formula bodies even
+when the domain model already names them.
 
 Put constant series in `constants.bindings.yaml` (or any mergeable
 `*.bindings.yaml` shard). Same YAML shape as public bindings; declare
@@ -40,8 +40,8 @@ series:
 |---|---|
 | Leaf-only | `data_range` must intersect graph **leaves** (inverse of `internal`, which requires formula nodes). Non-leaf overlap → `non_leaf_constant_overlap`; no leaf overlap → `no_leaf_constant_targets`. |
 | Exclusive | Mutually exclusive with `input`, `output`, and `internal` on the same series. |
-| Codegen | Emits `read_*` (optional `constant.reader.name`, else `read_<series_id>`), leaf index, `list_readers`, and Phase 2 body rewrite. **No** `set_*` / `compute_*`. |
-| Mutability | Values still live in export `CONSTANTS` / `ctx.inputs` like other constant leaves; there is no public Records write surface. |
+| Codegen | Names the leaf for inverted-tree export: values land in `data.py` and as defaulted `compute_*` kwargs. Optional `constant.reader.name` still exists in the schema; inverted-tree does not emit public readers or extra `compute_*` for constants. |
+| Mutability | Values still live in `data.py` and as defaulted `compute_*` kwargs; there is no public write surface. |
 | Validate | `validate_series_bindings(...)`, then `derive_constant_series(...)`. Include `constant` when running `scripts.binding_resolution_audit`. |
 
 **Leaf classification vs constant bindings.** `CONSTRAINTS` with a single-value
@@ -130,7 +130,12 @@ but fail at output/input codegen:
    | Choice | When | Effect |
    |---|---|---|
    | **Share** the same name across shards | Shards are complementary slices of one logical public series (e.g. Gap columns for 2050 / 2075 that should become one `compute_gap_milestones`) | Export merges shards into one public function |
-   | **Uniquify** per shard | Each shard is a distinct scenario / engine path (e.g. Paris vs Moderate expenditure rows on separate sheets) | Each path keeps its own `compute_*` / `set_*` |
+   | **Uniquify** per shard | Each shard is a distinct scenario / engine path (e.g. Paris vs Moderate expenditure rows on separate sheets) | Each path keeps its own `output.compute.name` / input series id |
+
+   YAML still uses `input.setter.name` as the schema field that uniquifies an
+   input series. The generated inverted-tree API has no setters; those names
+   identify the series for codegen, and callers pass keyword-only `compute_*`
+   arguments.
 
    Sharing a name across distinct engine paths is the failure mode: export
    merges the colliding definitions, so most scenario paths become
@@ -154,7 +159,7 @@ for per-scenario engine shards.
 | Field | Role |
 |---|---|
 | `concept` | SDMX-style meaning category (e.g. `TIME_PERIOD`) |
-| `id` | Dimension identity used in records, cell keys, and refactor parameters |
+| `id` | Dimension identity used in records, cell keys, and generated helper parameter names |
 
 Give every dimension an explicit `id`. When `id` is omitted, the effective id falls back to `concept`. If two dimensions share a concept, they must have distinct ids:
 
@@ -181,18 +186,3 @@ key: [PROJECTION_PERIOD, REFERENCE_PERIOD]
 ```
 
 Effective ids drive parameter names (`projection_period`, `reference_period`). Concepts remain semantic metadata for documentation and concept-scheme dtype inheritance.
-
-## Cluster refactor contracts
-
-The LLM cluster-refactor step selects one of two contracts from each cluster's shape (`src/refactor_contracts.py`):
-
-| Contract | Applies when | Prompt fixture |
-|---|---|---|
-| A — member sweep | Every formula operand is derivable from the member cells' own sweep keys, including constant lags/offsets like `t - 1` (the default; always the case under `variation_mode: dominant_key_only`) | `tests/fixtures/cluster_refactor_prompt.md` |
-| B — dimension aware | Some formula operands instead route through counterpart dimension ids that share a concept with a member key (e.g. `REF_AREA` + `COUNTERPART_REF_AREA`) | `tests/fixtures/cluster_refactor_prompt_dimension_aware.md` |
-
-Selection checks each operand reference position: its binding key value must equal a member-cell key (plus one shared constant offset for numeric keys) for some member dimension id sharing the concept. Positions derivable from the member's own key stay on Contract A; positions needing a counterpart dimension id select Contract B.
-
-Under Contract A, helper parameters are exactly the varying member sweep keys; derivable lags stay in the helper body, and validation rejects invented counterpart parameters. Under Contract B, parameters and `member_keys` are keyed by effective dimension id, so two parameters may share one concept; validation rejects responses that collapse distinct dimension ids onto a single concept parameter.
-
-When any operand position cannot be routed this way — for example three independently varying `REF_AREA` operand roles with only two declared dimension ids — the cluster is skipped as `operand_level_variation_unsupported`. To make such a cluster refactorable, declare one counterpart dimension (distinct `id`, shared `concept`) per independently varying operand role on the internal series that binds the member cells. `variation_mode` only controls whether such clusters are formed at all: `dominant_key_only` splits them away during clustering, while `independent` keeps them together for Contract B.
