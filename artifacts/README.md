@@ -21,7 +21,7 @@ The dependency-graph directory is listed in `.gitignore` because graph payloads 
 | Extract | Full pipeline, or `uv run python -m src.extraction_pipeline --extract-graph` | `dependency-graph/…`, `stages/extract.json` |
 | Export | `--stop-after-stage export` | `stages/export.json` |
 | Annotate | `--start-from-stage annotate` / full run | `stages/annotate.json` |
-| Validate | FormulaEvaluator canary | `stages/validate.json` |
+| Validate | Exported-library FormulaEvaluator sweep | `stages/validate.json` |
 | Document | Cursor agent user-guide authoring | `stages/document.json` |
 
 Serve the graph explorer locally (do not commit generated files):

@@ -75,6 +75,22 @@ def test_env_example_drops_refactor_model() -> None:
     assert "SECTION_REWRITE_MODEL" not in text
 
 
+def test_validate_docs_describe_full_sweep_not_default_path_canary() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    playbook = (REPO_ROOT / "docs" / "inverted-tree-migration.md").read_text(
+        encoding="utf-8"
+    )
+    for text in (readme, playbook):
+        assert "INVERTED_TREE_VALIDATE_CASES" not in text
+        assert "default-path" not in text
+        assert "canary" not in text.lower()
+        assert "differential_test_exported_library" in text
+
+
+def test_inverted_tree_validate_module_is_removed() -> None:
+    assert not (REPO_ROOT / "src" / "inverted_tree_validate.py").is_file()
+
+
 def test_inverted_tree_migration_names_live_path_and_grapher_floor() -> None:
     text = (REPO_ROOT / "docs" / "inverted-tree-migration.md").read_text(
         encoding="utf-8"

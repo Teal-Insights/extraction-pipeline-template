@@ -90,7 +90,7 @@ Configure checklist (workbook-neutral):
 | Criterion | Pass condition |
 |---|---|
 | **Graph-vs-Excel** | Authored scenario matrix in `tests/differential/` passes `FormulaEvaluator` vs Microsoft Excel (`differential_test_graph.py`) before treating extraction as faithful. |
-| **Library-vs-graph** | Keyword-only `compute_*` matches `FormulaEvaluator` on the same scenarios. Pipeline `validate` is a default-path FormulaEvaluator canary configured in `workbook_config.INVERTED_TREE_VALIDATE_CASES`; empty addresses fail closed. |
+| **Library-vs-graph** | Keyword-only `compute_*` matches `FormulaEvaluator` on the same scenarios. Pipeline `validate` runs the authored exported-library sweep; empty `build_scenarios()` / `output_cell_labels()` fail closed. |
 | **No library-vs-Excel COM path** | Inverted-tree export has no `set_*` to drive Excel from the public API. Library ≈ Excel follows by transitivity on the same scenarios. |
 
 #### 6. Document
@@ -146,7 +146,7 @@ Ordered to match the onboarding checklist in [README.md](README.md#clone-and-con
 [ ] Export: dist package builds; keyword-only `compute_*` scenario runs
 [ ] Export: validation bundle exported; library-vs-graph FormulaEvaluator parity passes
 [ ] Annotate: public API uses domain language; Google-style docstrings present
-[ ] Validate: default-path FormulaEvaluator canary configured and passing
+[ ] Validate: authored exported-library FormulaEvaluator sweep passing
 [ ] Document: Cursor agent user-guide authored against `compute_*`
 
 Generated graph artifacts under `artifacts/dependency-graph/` are gitignored; workbook audit reports may be committed optionally. See [artifacts/README.md](artifacts/README.md).

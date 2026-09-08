@@ -605,34 +605,104 @@ def test_run_pipeline_document_failure_raises_document_stage_error(
     validate.assert_called_once()
 
 
-def test_run_validate_stage_records_spans_and_profiles(tmp_path: Path) -> None:
+def _write_exported_library_reports(repo_root: Path) -> Path:
+    report_dir = repo_root / "data" / "differential" / "exported_library"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "parity_report.csv").write_text(
+        "scenario,passed,failed\n", encoding="utf-8"
+    )
+    (report_dir / "parity_report.txt").write_text("Result: PASS\n", encoding="utf-8")
+    return report_dir
+
+
+def test_run_validate_stage_records_exported_library_differential_span(
+    tmp_path: Path,
+) -> None:
+    config = _sample_config(tmp_path)
     state = AnnotateStageState(
-        config=_sample_config(tmp_path),
+        config=config,
         codegen_cache_key="c" * 64,
     )
     timings = PipelineTimings()
 
     with (
         patch(
-            "src.inverted_tree_validate.write_formula_evaluator_parity_reports",
+            "src.differential_validation.run_post_refactor_differential",
             return_value=0,
-        ) as write_reports,
+        ) as sweep,
         patch("src.extraction_pipeline.profile_if_enabled") as profile,
     ):
-        exit_code = run_validate_stage(state, timings=timings)
+        exit_code = run_validate_stage(state, timings=timings, no_cache=True)
 
     assert exit_code == 0
     assert profile.call_args.kwargs["basename"] == "validate"
+    sweep.assert_called_once_with(config=config, no_cache=True)
     record = timings.stages[0]
     assert record.name == "validate"
-    assert set(record.spans) == {"formula_evaluator_parity"}
-    canary_dir = tmp_path / "dist" / "tests" / "results" / "reference"
-    write_reports.assert_called_once()
-    assert write_reports.call_args.kwargs["report_dir"] == canary_dir
-    assert write_reports.call_args.args[0].differential_report_dir_rel == Path(
-        "data/differential/exported_library"
+    assert set(record.spans) == {"exported_library_differential"}
+
+
+def test_run_validate_stage_copies_exported_library_reports_when_present(
+    tmp_path: Path,
+) -> None:
+    config = _sample_config(tmp_path)
+    state = AnnotateStageState(config=config, codegen_cache_key="c" * 64)
+    _write_exported_library_reports(tmp_path)
+    graph_dir = tmp_path / "data" / "differential" / "graph"
+    graph_dir.mkdir(parents=True)
+    (graph_dir / "parity_report.txt").write_text("GRAPH GOLDEN\n", encoding="utf-8")
+
+    with patch(
+        "src.differential_validation.run_post_refactor_differential",
+        return_value=0,
+    ):
+        exit_code = run_validate_stage(state)
+
+    assert exit_code == 0
+    reference = tmp_path / "dist" / "tests" / "results" / "reference"
+    assert (reference / "parity_report.csv").read_text(encoding="utf-8") == (
+        "scenario,passed,failed\n"
     )
-    assert canary_dir != tmp_path / "data" / "differential" / "exported_library"
+    assert (reference / "parity_report.txt").read_text(encoding="utf-8") == (
+        "Result: PASS\n"
+    )
+    assert (graph_dir / "parity_report.txt").read_text(encoding="utf-8") == (
+        "GRAPH GOLDEN\n"
+    )
+
+
+def test_run_validate_stage_skips_copy_when_reports_missing(tmp_path: Path) -> None:
+    state = AnnotateStageState(
+        config=_sample_config(tmp_path),
+        codegen_cache_key="c" * 64,
+    )
+
+    with patch(
+        "src.differential_validation.run_post_refactor_differential",
+        return_value=0,
+    ):
+        exit_code = run_validate_stage(state)
+
+    assert exit_code == 0
+    reference = tmp_path / "dist" / "tests" / "results" / "reference"
+    assert not (reference / "parity_report.csv").is_file()
+    assert not (reference / "parity_report.txt").is_file()
+
+
+def test_run_validate_stage_propagates_harness_exceptions(tmp_path: Path) -> None:
+    state = AnnotateStageState(
+        config=_sample_config(tmp_path),
+        codegen_cache_key="c" * 64,
+    )
+
+    with (
+        patch(
+            "src.differential_validation.run_post_refactor_differential",
+            side_effect=RuntimeError("No differential scenarios configured"),
+        ),
+        pytest.raises(RuntimeError, match="No differential scenarios"),
+    ):
+        run_validate_stage(state)
 
 
 def test_run_pipeline_writes_stage_timings_artifact(
