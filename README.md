@@ -233,22 +233,21 @@ Two oracles, two questions:
 | Did we extract the workbook faithfully? | Excel (`xlwings`) | `FormulaEvaluator` on the graph ([Verify graph](#3-verify-graph)) |
 | Did we code-generate that graph faithfully? | Graph (`FormulaEvaluator`) | keyword-only `compute_*` |
 
-The pipeline `validate` stage ([src/inverted_tree_validate.py](src/inverted_tree_validate.py))
-is a narrow default-path FormulaEvaluator canary (no Excel). Configure cases in
-`workbook_config.INVERTED_TREE_VALIDATE_CASES` (compute names, output addresses,
-and `data.py` default kwargs). Empty cases or empty addresses fail closed — the
-same pattern as empty graph differential hooks. The canary writes
-`dist/tests/results/reference/` only; it does not overwrite committed Excel
-goldens under `data/differential/`.
+The pipeline `validate` stage runs the authored exported-library FormulaEvaluator
+sweep (`tests.differential.differential_test_exported_library` via
+`src.differential_validation.run_post_refactor_differential`). It compares
+keyword-only `compute_*` to `FormulaEvaluator` on the extraction graph across
+`build_scenarios()`. Empty `build_scenarios()` / `output_cell_labels()` fail
+closed — fill those hooks in a derived repo before claiming library ≈ graph.
+Microsoft Excel is not required.
 
-The authored library-vs-graph sweep is:
+Reports land under `data/differential/exported_library/`. When present, validate
+copies them into `dist/tests/results/reference/`. It does not overwrite Excel
+goldens under `data/differential/graph/`.
 
 ```bash
 uv run python -m tests.differential.differential_test_exported_library
 ```
-
-Reports land under `data/differential/exported_library/`. Microsoft Excel is
-not required for this harness.
 
 ### 7. Document
 
@@ -277,14 +276,14 @@ The pipeline is ordered as `extract → export → annotate → validate → doc
 | `--stop-after-stage extract` (or `--extract-graph`) | Run extract only (graph review artifacts) | Bindings / constraint iteration |
 | `--stop-after-stage export` | Run through export | Inspect generated `compute_*` before docstrings |
 | `--start-from-stage annotate` | Resume at annotate from warm `export.json` | Re-run LLM docstrings after export is stable |
-| `--only-stage validate` | Run validate only (rehydrates `dist/` from manifest keys) | FormulaEvaluator canary without export/annotate |
+| `--only-stage validate` | Run validate only (rehydrates `dist/` from manifest keys) | Exported-library FormulaEvaluator sweep without export/annotate |
 | `--only-stage document` | Run document only | Guide rewrite against an existing package |
 | `--stop-after-stage document` (default) | Full pipeline from the start | Release / complete run |
 | `--force-rebuild` | Rebuild warm on-disk caches even when keys match | Invalidate stale cache payloads |
 
 `--start-from-stage` and `--only-stage` are mutually exclusive. `--only-stage` cannot be combined with `--stop-after-stage`. Loading a stage manifest recomputes workbook / bindings / constraints / mode fingerprints and **fails loudly** (naming the drifted input) when they disagree — it never silently falls back to a full run. Entering at `validate` or `document` rebuilds `dist/` via `materialize_package` from the manifest's codegen key, then re-applies cached annotate docstrings.
 
-When the default full run reaches `document` after a non-zero FormulaEvaluator canary exit, the document stage is skipped so parity diagnosis is not gated on guide rewrite. Pass `--force-document` to rewrite guides anyway. Document-stage failures (timeouts, validation exhaustion, LLM errors) raise loudly after logging that export/differential artifacts under `dist/` are preserved.
+When the default full run reaches `document` after a non-zero exported-library differential exit, the document stage is skipped so parity diagnosis is not gated on guide rewrite. Pass `--force-document` to rewrite guides anyway. Harness exceptions abort the pipeline (fail closed). Document-stage failures (timeouts, validation exhaustion, LLM errors) raise loudly after logging that export/differential artifacts under `dist/` are preserved.
 
 The document stage launches a Cursor SDK agent against `dist/` (`CURSOR_API_KEY`, `DOCUMENT_AGENT_MODEL`, default deadline 1800s via `DOCUMENT_AGENT_DEADLINE`). Authored trees cache under `.cache/user-guide/`. Set `PIPELINE_STALL_SECONDS` for heartbeat stack dumps during the document stage.
 
@@ -380,7 +379,7 @@ Ordered to match the [onboarding checklist](#clone-and-configure-onboarding-chec
 - [ ] **Configure:** Internal binding coverage passes (`uv run pytest tests/test_internal_binding_coverage.py`)
 - [ ] **Export:** `dist/` package builds; keyword-only `compute_*` scenario runs (bindings authored beyond empty placeholders)
 - [ ] **Annotate:** Public API and internals helpers have Google-style docstrings (`--only-stage annotate` or a full run)
-- [ ] **Validate:** FormulaEvaluator library-vs-graph canary and authored exported-library sweep pass (no Excel required for the library harness)
+- [ ] **Validate:** Authored exported-library FormulaEvaluator sweep passes (`build_scenarios()` / `output_cell_labels()` filled; no Excel required for the library harness)
 - [ ] **Document:** Public API uses domain language; economist-facing `user_guide/` present
 
 ## Development

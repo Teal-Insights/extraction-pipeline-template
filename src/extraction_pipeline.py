@@ -827,27 +827,40 @@ def run_validate_stage(
     no_cache: bool = False,
     timings: PipelineTimings | None = None,
 ) -> int | None:
-    """Run FormulaEvaluator parity on the inverted-tree package.
+    """Run the authored exported-library FormulaEvaluator sweep.
+
+    Compares keyword-only ``compute_*`` to the graph evaluator across
+    ``build_scenarios()``. Copies reports from
+    ``data/differential/exported_library/`` into
+    ``dist/tests/results/reference/`` when present. Does not overwrite Excel
+    goldens under ``data/differential/graph/``.
 
     Returns 0 when every compared cell matches, otherwise 1. Non-zero does not
     abort the pipeline; document may still run with ``--force-document``.
+    Harness exceptions propagate (fail closed).
     """
-    from src.inverted_tree_validate import write_formula_evaluator_parity_reports
+    from src.differential_validation import (
+        has_parity_reports,
+        run_post_refactor_differential,
+    )
+    from src.export_validation_assets import export_reference_reports
 
-    del no_cache
     config = state.config
     with (
         profile_if_enabled(config.graph_output_dir, basename="validate"),
         stage_span(timings, "validate") as timer,
     ):
         started = time.perf_counter()
-        report_dir = config.dist_root / "tests" / "results" / "reference"
-        exit_code = write_formula_evaluator_parity_reports(
-            config, report_dir=report_dir
+        exit_code = run_post_refactor_differential(
+            config=config,
+            no_cache=no_cache,
         )
-        timer.record("formula_evaluator_parity", time.perf_counter() - started)
+        report_dir = config.repo_root / config.differential_report_dir_rel
+        if has_parity_reports(report_dir):
+            export_reference_reports(config=config)
+        timer.record("exported_library_differential", time.perf_counter() - started)
         print(
-            f"validate: FormulaEvaluator parity exit={exit_code}",
+            f"validate: exported-library differential exit={exit_code}",
             flush=True,
         )
     _write_downstream_manifest(
@@ -1084,7 +1097,7 @@ def _run_pipeline_stages(
             and not force_document
         ):
             print(
-                "Skipping document stage because FormulaEvaluator parity "
+                "Skipping document stage because exported-library differential "
                 f"exited with code {differential_exit_code}. Export artifacts "
                 "are ready for diagnosis; pass --force-document to rewrite "
                 "guides anyway.",
@@ -1174,7 +1187,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--force-document",
         action="store_true",
         help=(
-            "Run the document stage even when FormulaEvaluator parity "
+            "Run the document stage even when exported-library differential "
             "finished with a non-zero exit code."
         ),
     )

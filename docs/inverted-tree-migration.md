@@ -52,7 +52,7 @@ The orchestrator is `extract → export → annotate → validate → document`.
 | **extract** | Dependency graph + series resolution. Graph cache keys do not fold bindings. |
 | **export** | `CodeGenerator(graph).generate_modules(..., paradigm="inverted_tree")`. `paradigm` is required in the codegen cache key so a ctx payload cannot be served as inverted tree. |
 | **annotate** | LLM Google-style docstrings spliced onto `api.py` and `internals.py` (`src/inverted_tree_docstrings.py`, cache `.cache/inverted-tree-docstrings.json`). Fail closed if the model returns argument names that do not match the signature. |
-| **validate** | Compare default-path `compute_*` to `FormulaEvaluator` on the pipeline graph (`src/inverted_tree_validate.py`). Configure cells in `workbook_config.INVERTED_TREE_VALIDATE_CASES`. Empty cases fail closed. Writes **only** `dist/tests/results/reference/`. |
+| **validate** | Run the authored exported-library FormulaEvaluator sweep (`tests.differential.differential_test_exported_library` via `src.differential_validation.run_post_refactor_differential`). Empty `build_scenarios()` / `output_cell_labels()` fail closed. Copies reports from `data/differential/exported_library/` into `dist/tests/results/reference/` when present. Does not overwrite `data/differential/graph/`. |
 | **document** | Cursor SDK agent authors `user_guide/` against keyword-only `compute_*`. Bump `USER_GUIDE_AGENT_PROMPT_VERSION` (and clear `.cache/user-guide/`) when the agent prompt template changes. |
 
 `--only-stage`, `--start-from-stage`, and `--stop-after-stage` use these names.
@@ -82,21 +82,18 @@ These do not come along automatically from a template merge:
      still sets nodes by those addresses).
    - `mvp_outputs_for_scenario()` — keyword-only `compute_*` calls.
    - Leave `build_axes()` as `()` unless the derived repo already thinks in axes.
-3. **Configure default validate cells** in `workbook_config.py`
-   (`INVERTED_TREE_VALIDATE_CASES`: `compute_*` name, output addresses, and
-   `data.py` default kwargs). Fail closed; do not skip cells because a helper
-   is missing. This canary is not a substitute for the authored scenario matrix.
-4. **Map scenario fields onto `compute_*` kwargs.** Leaves that are not in the
+   Pipeline `validate` *is* this library-vs-graph sweep.
+3. **Map scenario fields onto `compute_*` kwargs.** Leaves that are not in the
    scenario come from `data.py` defaults and must match the graph's stored
    workbook values. Canonical baseline tables may differ from `data.py`
    defaults; copy whatever the library hooks already used so the two harnesses
    stay aligned.
-5. **Rewrite tests** that import `make_context`, `set_*`, `_api_helpers`, or
+4. **Rewrite tests** that import `make_context`, `set_*`, `_api_helpers`, or
    records-shaped `OBS_VALUE` outputs. Prefer explicit kwargs over
    `**dict[str, object]` so `ty` can check them.
-6. **Refresh user-guide caches** after the agent prompt or exported API
+5. **Refresh user-guide caches** after the agent prompt or exported API
    changes (`USER_GUIDE_AGENT_PROMPT_VERSION`, `.cache/user-guide/`).
-7. **`workbook_config.RUNNABLE_CELL_RULES`** should reject `make_context(` and
+6. **`workbook_config.RUNNABLE_CELL_RULES`** should reject `make_context(` and
    `set_*` in user-guide `{python}` cells.
 
 Keep `xlwings` / `fastpyxl` for the graph-vs-Excel sweep. Documentation
@@ -105,13 +102,13 @@ not the extraction venv.
 
 ## Pitfalls
 
-- **Fail closed.** Missing scenarios, empty validate addresses, LLM arg-name
+- **Fail closed.** Missing scenarios, empty `output_cell_labels()`, LLM arg-name
   drift, unbound constant leaves, and graph writes with no `compute_*`
   counterpart should raise. Do not add skip-if-absent paths.
 - **Codegen cache `paradigm`.** Omitting it (or defaulting it to `ctx`) serves
   the wrong modules on a cache hit. The key requires `paradigm`.
-- **Narrow validate ≠ full sweep.** Default-path FormulaEvaluator is a
-  pipeline canary. The authored matrix is the codegen proof.
+- **Validate is the full sweep.** Pipeline `validate` runs the authored
+  library-vs-graph matrix.
 - **Do not treat empty graph hooks as extraction proof.** README coverage
   numbers that assume an authored matrix will lie until hooks are filled.
 - **Dist `--layout exported` still needs the extraction repo** for
@@ -137,6 +134,7 @@ not the extraction venv.
 6. Commit new library-vs-graph reports under
    `data/differential/exported_library/` only after that sweep passes. Until
    then, leave any historical Excel goldens in place; pipeline `validate`
-   must not clobber them.
+   copies library reports into `dist/tests/results/reference/` and must not
+   clobber `data/differential/graph/`.
 7. Delete the ctx clustering / Pass-1 / Pass-2 stack. This template has
    already done that step.
