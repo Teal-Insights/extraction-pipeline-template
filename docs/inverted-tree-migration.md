@@ -1,6 +1,6 @@
 # Migrating a derived pipeline to inverted-tree export
 
-This template exports **only** inverted-tree Python (`paradigm="inverted_tree"`).
+This template exports **only** inverted-tree Python.
 There is no ctx dual-mode flag, no `make_context` / `set_*` public API, and no
 clustering or Pass-1 / Pass-2 internals refactor. Derived repos that still run
 the old ctx path should follow this playbook rather than keeping leftover
@@ -50,7 +50,7 @@ The orchestrator is `extract → export → annotate → validate → document`.
 | Stage | What it does |
 |---|---|
 | **extract** | Dependency graph + series resolution. Graph cache keys do not fold bindings. |
-| **export** | `CodeGenerator(graph).generate_modules(..., paradigm="inverted_tree")`. `paradigm` is required in the codegen cache key so a ctx payload cannot be served as inverted tree. |
+| **export** | `CodeGenerator(graph).generate_modules(...)`. The local codegen cache key still folds `paradigm="inverted_tree"` so a ctx payload cannot be served as inverted tree. |
 | **annotate** | LLM Google-style docstrings spliced onto `api.py` and `internals.py` (`src/inverted_tree_docstrings.py`, cache `.cache/inverted-tree-docstrings.json`). Fail closed if the model returns argument names that do not match the signature. |
 | **validate** | Run the authored exported-library FormulaEvaluator sweep (`tests.differential.differential_test_exported_library` via `src.differential_validation.run_post_refactor_differential`). Empty `build_scenarios()` / `output_cell_labels()` fail closed. Copies reports from `data/differential/exported_library/` into `dist/tests/results/reference/` when present. Does not overwrite `data/differential/graph/`. |
 | **document** | Cursor SDK agent authors `user_guide/` against keyword-only `compute_*`. Bump `USER_GUIDE_AGENT_PROMPT_VERSION` (and clear `.cache/user-guide/`) when the agent prompt template changes. |
@@ -125,7 +125,7 @@ not the extraction venv.
 
 1. Land constant-binding coverage and schema 1.13.0 while still on ctx export.
    Ctx and inverted tree both need those series.
-2. Require `excel-grapher>=12.7.1` (or newer) with `paradigm="inverted_tree"`.
+2. Require `excel-grapher>=12.7.1` (or newer). Inverted-tree is the only `generate_modules` export.
 3. Remodel stages to `extract → export → annotate → validate → document`.
 4. Author graph-vs-Excel hooks and run that sweep on Windows before trusting
    extraction.

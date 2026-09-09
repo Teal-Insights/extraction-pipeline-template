@@ -4,16 +4,17 @@ from __future__ import annotations
 
 from excel_grapher.exporter import CodeGenerator
 
+from src.extraction_pipeline import call_generate_modules
+
 
 def test_synthetic_inverted_tree_export_omits_ctx_helpers(
     synthetic_configured_pipeline,
 ) -> None:
     pipeline = synthetic_configured_pipeline
-    modules = CodeGenerator(pipeline.graph).generate_modules(
-        list(pipeline.config.targets),
+    modules = call_generate_modules(
+        CodeGenerator(pipeline.graph),
         series_bindings=pipeline.series_bindings,
         bindings_workbook=pipeline.config.workbook_path,
-        paradigm="inverted_tree",
     )
     assert "api.py" in modules
     assert "internals.py" in modules

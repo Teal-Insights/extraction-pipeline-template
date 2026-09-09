@@ -11,6 +11,7 @@ from src.extraction_pipeline import (
     PIPELINE_STAGES,
     AnnotateStageState,
     ExportStageState,
+    call_generate_modules,
     main,
     run_export_stage,
     run_pipeline,
@@ -140,8 +141,10 @@ def test_run_export_stage_forwards_blank_ranges_to_generate_modules(
         run_export_stage(config, no_cache=True)
 
     generator.generate_modules.assert_called()
-    assert generator.generate_modules.call_args.kwargs["blank_ranges"] == blank_ranges
-    assert generator.generate_modules.call_args.kwargs["paradigm"] == "inverted_tree"
+    call = generator.generate_modules.call_args
+    assert call.args == ()
+    assert "paradigm" not in call.kwargs
+    assert call.kwargs["blank_ranges"] == blank_ranges
 
 
 def test_run_export_stage_builds_code_generator_from_graph(
@@ -175,7 +178,43 @@ def test_run_export_stage_builds_code_generator_from_graph(
         run_export_stage(config, no_cache=True)
 
     generator_cls.assert_called_once_with(graph)
-    assert generator.generate_modules.call_args.kwargs["paradigm"] == "inverted_tree"
+    call = generator.generate_modules.call_args
+    assert call.args == ()
+    assert "paradigm" not in call.kwargs
+
+
+class _LegacyExporter:
+    def generate_modules(
+        self,
+        *,
+        series_bindings: object,
+        bindings_workbook: object,
+        blank_ranges: object = None,
+        paradigm: str = "ctx",
+    ) -> dict[str, str]:
+        assert paradigm == "inverted_tree"
+        return {"legacy": "ok"}
+
+
+class _ModernExporter:
+    def generate_modules(
+        self,
+        *,
+        series_bindings: object,
+        bindings_workbook: object,
+        blank_ranges: object = None,
+    ) -> dict[str, str]:
+        return {"modern": "ok"}
+
+
+def test_call_generate_modules_passes_paradigm_only_when_declared() -> None:
+    kwargs = {
+        "series_bindings": object(),
+        "bindings_workbook": "workbook.xlsx",
+        "blank_ranges": ("'Sheet'!A1",),
+    }
+    assert call_generate_modules(_LegacyExporter(), **kwargs) == {"legacy": "ok"}
+    assert call_generate_modules(_ModernExporter(), **kwargs) == {"modern": "ok"}
 
 
 def test_pipeline_stages_order() -> None:
