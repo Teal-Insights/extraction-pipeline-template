@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import time
@@ -675,6 +676,34 @@ def run_export_stage(
         return state
 
 
+def call_generate_modules(
+    generator: Any,
+    *,
+    series_bindings: object,
+    bindings_workbook: Path | str,
+    blank_ranges: Sequence[str] | None = None,
+) -> dict[str, str]:
+    """Call ``generate_modules`` without removed positional targets or ``paradigm``.
+
+    excel-grapher 15 is inverted-tree only and keyword-only. Older exporters
+    still declare ``paradigm`` and default to ctx, so pass
+    ``paradigm='inverted_tree'`` only when that parameter exists.
+    """
+    generate_modules = generator.generate_modules
+    if "paradigm" in inspect.signature(generate_modules).parameters:
+        return generate_modules(
+            series_bindings=series_bindings,
+            bindings_workbook=bindings_workbook,
+            blank_ranges=blank_ranges,
+            paradigm="inverted_tree",
+        )
+    return generate_modules(
+        series_bindings=series_bindings,
+        bindings_workbook=bindings_workbook,
+        blank_ranges=blank_ranges,
+    )
+
+
 def _generate_export_package(
     config: PipelineConfig,
     *,
@@ -695,7 +724,8 @@ def _generate_export_package(
 
     def _build_modules() -> dict[str, str]:
         with CodeGenerator(graph) as generator:
-            return generator.generate_modules(
+            return call_generate_modules(
+                generator,
                 series_bindings=series_bindings,
                 bindings_workbook=config.workbook_path,
                 blank_ranges=config.blank_ranges,
