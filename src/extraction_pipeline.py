@@ -696,10 +696,8 @@ def _generate_export_package(
     def _build_modules() -> dict[str, str]:
         with CodeGenerator(graph) as generator:
             return generator.generate_modules(
-                targets,
                 series_bindings=series_bindings,
                 bindings_workbook=config.workbook_path,
-                paradigm="inverted_tree",
                 blank_ranges=config.blank_ranges,
             )
 

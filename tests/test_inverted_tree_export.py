@@ -10,10 +10,8 @@ def test_synthetic_inverted_tree_export_omits_ctx_helpers(
 ) -> None:
     pipeline = synthetic_configured_pipeline
     modules = CodeGenerator(pipeline.graph).generate_modules(
-        list(pipeline.config.targets),
         series_bindings=pipeline.series_bindings,
         bindings_workbook=pipeline.config.workbook_path,
-        paradigm="inverted_tree",
     )
     assert "api.py" in modules
     assert "internals.py" in modules
