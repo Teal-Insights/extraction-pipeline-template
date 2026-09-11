@@ -76,15 +76,15 @@ logger = logging.getLogger(__name__)
 PipelineStageName = Literal[
     "extract",
     "export",
-    "annotate",
     "validate",
+    "annotate",
     "document",
 ]
 PIPELINE_STAGES: tuple[PipelineStageName, ...] = (
     "extract",
     "export",
-    "annotate",
     "validate",
+    "annotate",
     "document",
 )
 
@@ -154,7 +154,7 @@ class ExportStageState:
 
 @dataclass(frozen=True)
 class AnnotateStageState:
-    """Cache-key references produced by annotate for validation / document."""
+    """Cache-key references produced by annotate for document."""
 
     config: PipelineConfig
     codegen_cache_key: str
@@ -786,7 +786,7 @@ def _generate_export_package(
 
 
 def run_annotate_stage(
-    state: ExportStageState,
+    state: ExportStageState | AnnotateStageState,
     *,
     no_cache: bool = False,
     force_rebuild: bool = False,
@@ -824,7 +824,7 @@ def annotate_stage_state_from_manifest(
     config: PipelineConfig,
     manifest: StageManifest,
 ) -> AnnotateStageState:
-    """Build ``AnnotateStageState`` from an annotate-stage (or compatible) manifest."""
+    """Build ``AnnotateStageState`` from a validate- or annotate-stage manifest."""
     codegen_key = manifest.cache_keys.get("codegen_cache_key")
     if not codegen_key:
         raise StageManifestError(
@@ -850,7 +850,7 @@ def _write_downstream_manifest(
 
 
 def run_validate_stage(
-    state: AnnotateStageState,
+    state: ExportStageState,
     *,
     no_cache: bool = False,
     timings: PipelineTimings | None = None,
@@ -864,8 +864,8 @@ def run_validate_stage(
     goldens under ``data/differential/graph/``.
 
     Returns 0 when every compared cell matches, otherwise 1. Non-zero does not
-    abort the pipeline; document may still run with ``--force-document``.
-    Harness exceptions propagate (fail closed).
+    abort the pipeline; annotate and document may still run with
+    ``--force-document``. Harness exceptions propagate (fail closed).
     """
     from src.differential_validation import (
         has_parity_reports,
@@ -953,8 +953,8 @@ def run_pipeline(
     """Run pipeline stages from ``start_from_stage`` through ``stop_after_stage``.
 
     A full run records ``extract`` then ``export`` (handing the live graph from
-    extract into export so the graph is not built twice), then ``annotate``,
-    ``validate``, and ``document``. When ``only_stage`` is set it overrides both
+    extract into export so the graph is not built twice), then ``validate``,
+    ``annotate``, and ``document``. When ``only_stage`` is set it overrides both
     bounds to that single stage. Entering mid-pipeline requires a warm upstream
     stage manifest whose fingerprints still match the current inputs.
     """
@@ -1024,18 +1024,25 @@ def _run_pipeline_stages(
 ) -> None:
     export_state: ExportStageState | None = None
     annotate_state: AnnotateStageState | None = None
+    annotate_source: ExportStageState | AnnotateStageState | None = None
     extracted_graph: DependencyGraph | None = None
     extracted_graph_cache_key: str | None = None
 
     if start_from_stage != "extract":
         upstream = require_upstream_manifest(config, start_from_stage=start_from_stage)
-        if start_from_stage == "annotate":
+        if start_from_stage == "validate":
             export_state = export_stage_state_from_manifest(config, upstream)
             materialize_package(
                 config,
                 codegen_key=export_state.codegen_cache_key,
             )
-        elif start_from_stage in ("validate", "document"):
+        elif start_from_stage == "annotate":
+            annotate_source = annotate_stage_state_from_manifest(config, upstream)
+            materialize_package(
+                config,
+                codegen_key=annotate_source.codegen_cache_key,
+            )
+        elif start_from_stage == "document":
             annotate_state = annotate_stage_state_from_manifest(config, upstream)
             materialize_package(
                 config,
@@ -1077,17 +1084,50 @@ def _run_pipeline_stages(
         if stop_after_stage == "export":
             return
 
+    differential_exit_code: int | None = None
     if _stage_in_range(
-        "annotate",
+        "validate",
         start_from_stage=start_from_stage,
         stop_after_stage=stop_after_stage,
     ):
         if export_state is None:
             raise StageManifestError(
-                "annotate stage requires export stage state or a warm export manifest"
+                "validate stage requires export stage state or a warm export manifest"
+            )
+        differential_exit_code = run_validate_stage(
+            export_state,
+            no_cache=no_cache,
+            timings=timings,
+        )
+        if stop_after_stage == "validate":
+            return
+        if (
+            isinstance(differential_exit_code, int)
+            and differential_exit_code != 0
+            and not force_document
+        ):
+            print(
+                "Skipping annotate and document stages because exported-library "
+                f"differential exited with code {differential_exit_code}. "
+                "Export artifacts are ready for diagnosis; pass --force-document "
+                "to splice docstrings and rewrite guides anyway.",
+                flush=True,
+            )
+            return
+
+    if _stage_in_range(
+        "annotate",
+        start_from_stage=start_from_stage,
+        stop_after_stage=stop_after_stage,
+    ):
+        source = annotate_source if annotate_source is not None else export_state
+        if source is None:
+            raise StageManifestError(
+                "annotate stage requires validate stage state or a warm validate "
+                "manifest"
             )
         annotate_state = run_annotate_stage(
-            export_state,
+            source,
             no_cache=no_cache,
             force_rebuild=force_rebuild,
             timings=timings,
@@ -1095,43 +1135,11 @@ def _run_pipeline_stages(
         if stop_after_stage == "annotate":
             return
 
-    differential_exit_code: int | None = None
-    if _stage_in_range(
-        "validate",
-        start_from_stage=start_from_stage,
-        stop_after_stage=stop_after_stage,
-    ):
-        if annotate_state is None:
-            raise StageManifestError(
-                "validate stage requires annotate stage state or a warm annotate "
-                "manifest"
-            )
-        differential_exit_code = run_validate_stage(
-            annotate_state,
-            no_cache=no_cache,
-            timings=timings,
-        )
-        if stop_after_stage == "validate":
-            return
-
     if _stage_in_range(
         "document",
         start_from_stage=start_from_stage,
         stop_after_stage=stop_after_stage,
     ):
-        if (
-            isinstance(differential_exit_code, int)
-            and differential_exit_code != 0
-            and not force_document
-        ):
-            print(
-                "Skipping document stage because exported-library differential "
-                f"exited with code {differential_exit_code}. Export artifacts "
-                "are ready for diagnosis; pass --force-document to rewrite "
-                "guides anyway.",
-                flush=True,
-            )
-            return
         run_document_stage(
             config,
             timings=timings,
@@ -1215,8 +1223,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--force-document",
         action="store_true",
         help=(
-            "Run the document stage even when exported-library differential "
-            "finished with a non-zero exit code."
+            "Run the annotate and document stages even when exported-library "
+            "differential finished with a non-zero exit code."
         ),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)

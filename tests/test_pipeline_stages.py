@@ -221,8 +221,8 @@ def test_pipeline_stages_order() -> None:
     assert PIPELINE_STAGES == (
         "extract",
         "export",
-        "annotate",
         "validate",
+        "annotate",
         "document",
     )
 
@@ -332,14 +332,33 @@ def _mock_annotate_state(config: PipelineConfig) -> AnnotateStageState:
     return AnnotateStageState(config=config, codegen_cache_key="c" * 64)
 
 
-def test_run_pipeline_stop_after_annotate_skips_validate_and_document(
+def _mock_export_state(config: PipelineConfig) -> ExportStageState:
+    return ExportStageState(
+        config=config,
+        graph_cache_key="g" * 64,
+        projection_cache_key="p" * 64,
+        series_derived_cache_key="s" * 64,
+        codegen_cache_key="c" * 64,
+        package_root=config.package_root,
+    )
+
+
+def _export_cache_keys() -> dict[str, str]:
+    return {
+        "graph_cache_key": "g" * 64,
+        "projection_cache_key": "p" * 64,
+        "series_derived_cache_key": "s" * 64,
+        "codegen_cache_key": "c" * 64,
+    }
+
+
+def test_run_pipeline_stop_after_validate_skips_annotate_and_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
     graph = object()
     graph_cache_key = "g" * 64
     extract_result = MagicMock(graph=graph, graph_cache_key=graph_cache_key)
-    annotate_state = _mock_annotate_state(synthetic_pipeline_config_fixture)
     with (
         patch(
             "src.extraction_pipeline.extract_dependency_graph",
@@ -349,32 +368,24 @@ def test_run_pipeline_stop_after_annotate_skips_validate_and_document(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
         ) as export,
-        patch(
-            "src.extraction_pipeline.run_annotate_stage",
-            return_value=annotate_state,
-        ) as annotate,
+        patch("src.extraction_pipeline.run_annotate_stage") as annotate,
         patch("src.extraction_pipeline.run_validate_stage") as validate,
         patch("src.documentation_pipeline.run_documentation_pipeline") as document,
     ):
         run_pipeline(
             synthetic_pipeline_config_fixture,
-            stop_after_stage="annotate",
+            stop_after_stage="validate",
         )
 
     export.assert_called_once()
     assert export.call_args.kwargs["graph"] is graph
     assert export.call_args.kwargs["graph_cache_key"] is graph_cache_key
-    annotate.assert_called_once_with(
-        export_state,
-        no_cache=False,
-        force_rebuild=False,
-        timings=ANY,
-    )
-    validate.assert_not_called()
+    validate.assert_called_once_with(export_state, no_cache=False, timings=ANY)
+    annotate.assert_not_called()
     document.assert_not_called()
 
 
-def test_run_pipeline_stop_after_validate_skips_document(
+def test_run_pipeline_stop_after_annotate_skips_document(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
@@ -393,21 +404,24 @@ def test_run_pipeline_stop_after_validate_skips_document(
             "src.extraction_pipeline.run_annotate_stage",
             return_value=annotate_state,
         ) as annotate,
-        patch("src.extraction_pipeline.run_validate_stage") as validate,
+        patch(
+            "src.extraction_pipeline.run_validate_stage",
+            return_value=0,
+        ) as validate,
         patch("src.documentation_pipeline.run_documentation_pipeline") as document,
     ):
         run_pipeline(
             synthetic_pipeline_config_fixture,
-            stop_after_stage="validate",
+            stop_after_stage="annotate",
         )
 
+    validate.assert_called_once_with(export_state, no_cache=False, timings=ANY)
     annotate.assert_called_once_with(
         export_state,
         no_cache=False,
         force_rebuild=False,
         timings=ANY,
     )
-    validate.assert_called_once_with(annotate_state, no_cache=False, timings=ANY)
     document.assert_not_called()
 
 
@@ -429,7 +443,7 @@ def test_run_pipeline_default_runs_through_document(
         patch(
             "src.extraction_pipeline.run_annotate_stage",
             return_value=annotate_state,
-        ),
+        ) as annotate,
         patch(
             "src.extraction_pipeline.run_validate_stage",
             return_value=0,
@@ -438,12 +452,20 @@ def test_run_pipeline_default_runs_through_document(
     ):
         run_pipeline(synthetic_pipeline_config_fixture)
 
-    validate.assert_called_once_with(annotate_state, no_cache=False, timings=ANY)
+    validate.assert_called_once_with(export_state, no_cache=False, timings=ANY)
+    annotate.assert_called_once_with(
+        export_state,
+        no_cache=False,
+        force_rebuild=False,
+        timings=ANY,
+    )
     document.assert_called_once_with(
         synthetic_pipeline_config_fixture,
         no_cache=False,
         force_rebuild=False,
     )
+    assert validate.call_args_list[0][0][0] is export_state
+    assert annotate.call_args_list[0][0][0] is export_state
 
 
 def test_run_pipeline_passes_no_cache_to_validate_stage(
@@ -474,13 +496,8 @@ def test_run_pipeline_passes_no_cache_to_validate_stage(
             no_cache=True,
         )
 
-    annotate.assert_called_once_with(
-        export_state,
-        no_cache=True,
-        force_rebuild=False,
-        timings=ANY,
-    )
-    validate.assert_called_once_with(annotate_state, no_cache=True, timings=ANY)
+    annotate.assert_not_called()
+    validate.assert_called_once_with(export_state, no_cache=True, timings=ANY)
 
 
 def test_run_pipeline_rejects_unknown_stage(
@@ -540,12 +557,11 @@ def test_main_rejects_extract_graph_with_stop_after_stage(
         main(["--extract-graph", "--stop-after-stage", "export"])
 
 
-def test_run_pipeline_skips_document_when_differential_failed(
+def test_run_pipeline_skips_annotate_and_document_when_differential_failed(
     synthetic_pipeline_config_fixture,
 ) -> None:
     export_state = object()
     extract_result = MagicMock(graph=object(), graph_cache_key="g" * 64)
-    annotate_state = _mock_annotate_state(synthetic_pipeline_config_fixture)
     with (
         patch(
             "src.extraction_pipeline.extract_dependency_graph",
@@ -555,19 +571,21 @@ def test_run_pipeline_skips_document_when_differential_failed(
             "src.extraction_pipeline.run_export_stage",
             return_value=export_state,
         ),
-        patch(
-            "src.extraction_pipeline.run_annotate_stage",
-            return_value=annotate_state,
-        ),
+        patch("src.extraction_pipeline.run_annotate_stage") as annotate,
         patch(
             "src.extraction_pipeline.run_validate_stage",
             return_value=1,
         ) as validate,
         patch("src.documentation_pipeline.run_documentation_pipeline") as document,
+        patch(
+            "src.inverted_tree_docstrings.annotate_exported_package",
+        ) as overlay,
     ):
         run_pipeline(synthetic_pipeline_config_fixture)
 
-    validate.assert_called_once_with(annotate_state, no_cache=False, timings=ANY)
+    validate.assert_called_once_with(export_state, no_cache=False, timings=ANY)
+    annotate.assert_not_called()
+    overlay.assert_not_called()
     document.assert_not_called()
 
 
@@ -589,7 +607,7 @@ def test_run_pipeline_force_document_runs_docs_after_differential_failure(
         patch(
             "src.extraction_pipeline.run_annotate_stage",
             return_value=annotate_state,
-        ),
+        ) as annotate,
         patch(
             "src.extraction_pipeline.run_validate_stage",
             return_value=1,
@@ -601,6 +619,12 @@ def test_run_pipeline_force_document_runs_docs_after_differential_failure(
             force_document=True,
         )
 
+    annotate.assert_called_once_with(
+        export_state,
+        no_cache=False,
+        force_rebuild=False,
+        timings=ANY,
+    )
     document.assert_called_once_with(
         synthetic_pipeline_config_fixture,
         no_cache=False,
@@ -658,10 +682,7 @@ def test_run_validate_stage_records_exported_library_differential_span(
     tmp_path: Path,
 ) -> None:
     config = _sample_config(tmp_path)
-    state = AnnotateStageState(
-        config=config,
-        codegen_cache_key="c" * 64,
-    )
+    state = _mock_export_state(config)
     timings = PipelineTimings()
 
     with (
@@ -685,7 +706,7 @@ def test_run_validate_stage_copies_exported_library_reports_when_present(
     tmp_path: Path,
 ) -> None:
     config = _sample_config(tmp_path)
-    state = AnnotateStageState(config=config, codegen_cache_key="c" * 64)
+    state = _mock_export_state(config)
     _write_exported_library_reports(tmp_path)
     graph_dir = tmp_path / "data" / "differential" / "graph"
     graph_dir.mkdir(parents=True)
@@ -711,10 +732,7 @@ def test_run_validate_stage_copies_exported_library_reports_when_present(
 
 
 def test_run_validate_stage_skips_copy_when_reports_missing(tmp_path: Path) -> None:
-    state = AnnotateStageState(
-        config=_sample_config(tmp_path),
-        codegen_cache_key="c" * 64,
-    )
+    state = _mock_export_state(_sample_config(tmp_path))
 
     with patch(
         "src.differential_validation.run_post_refactor_differential",
@@ -729,10 +747,7 @@ def test_run_validate_stage_skips_copy_when_reports_missing(tmp_path: Path) -> N
 
 
 def test_run_validate_stage_propagates_harness_exceptions(tmp_path: Path) -> None:
-    state = AnnotateStageState(
-        config=_sample_config(tmp_path),
-        codegen_cache_key="c" * 64,
-    )
+    state = _mock_export_state(_sample_config(tmp_path))
 
     with (
         patch(
@@ -784,15 +799,37 @@ def test_run_pipeline_writes_stage_timings_artifact(
 def test_run_pipeline_threads_one_timings_object_through_every_stage(
     synthetic_pipeline_config_fixture,
 ) -> None:
+    order: list[str] = []
+
+    def _validate(*_args: object, **kwargs: object) -> int:
+        order.append("validate")
+        return 0
+
+    def _annotate(*_args: object, **kwargs: object) -> AnnotateStageState:
+        order.append("annotate")
+        return _mock_annotate_state(synthetic_pipeline_config_fixture)
+
+    def _document(*_args: object, **kwargs: object) -> None:
+        order.append("document")
+
     with (
         patch(
             "src.extraction_pipeline.extract_dependency_graph",
             return_value=MagicMock(graph=object(), graph_cache_key="g" * 64),
         ) as extract,
         patch("src.extraction_pipeline.run_export_stage") as export,
-        patch("src.extraction_pipeline.run_annotate_stage") as annotate,
-        patch("src.extraction_pipeline.run_validate_stage", return_value=0) as validate,
-        patch("src.extraction_pipeline.run_document_stage") as document,
+        patch(
+            "src.extraction_pipeline.run_annotate_stage",
+            side_effect=_annotate,
+        ) as annotate,
+        patch(
+            "src.extraction_pipeline.run_validate_stage",
+            side_effect=_validate,
+        ) as validate,
+        patch(
+            "src.extraction_pipeline.run_document_stage",
+            side_effect=_document,
+        ) as document,
     ):
         run_pipeline(synthetic_pipeline_config_fixture)
 
@@ -802,6 +839,7 @@ def test_run_pipeline_threads_one_timings_object_through_every_stage(
     assert annotate.call_args.kwargs["timings"] is timings
     assert validate.call_args.kwargs["timings"] is timings
     assert document.call_args.kwargs["timings"] is timings
+    assert order == ["validate", "annotate", "document"]
 
 
 def test_run_document_stage_is_profiled(
@@ -940,7 +978,34 @@ def _isolated_config_for_manifests(
     )
 
 
-def test_run_pipeline_start_from_annotate_skips_export(
+def test_run_pipeline_start_from_annotate_requires_validate_manifest(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    from src.stage_manifest import (
+        StageManifestMissingError,
+        compute_input_fingerprints,
+        write_stage_manifest,
+    )
+
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    write_stage_manifest(
+        config,
+        stage="export",
+        cache_keys=_export_cache_keys(),
+        upstream_keys={},
+        fingerprints=compute_input_fingerprints(config),
+    )
+
+    with pytest.raises(StageManifestMissingError, match="validate\\.json"):
+        run_pipeline(
+            config,
+            start_from_stage="annotate",
+            stop_after_stage="annotate",
+        )
+
+
+def test_run_pipeline_start_from_annotate_skips_export_and_validate(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
@@ -953,32 +1018,18 @@ def test_run_pipeline_start_from_annotate_skips_export(
 
     write_stage_manifest(
         config,
-        stage="export",
-        cache_keys={
-            "graph_cache_key": "g" * 64,
-            "projection_cache_key": "p" * 64,
-            "series_derived_cache_key": "s" * 64,
-            "codegen_cache_key": "c" * 64,
-        },
+        stage="validate",
+        cache_keys={"codegen_cache_key": "c" * 64},
         upstream_keys={},
         fingerprints=compute_input_fingerprints(config),
-    )
-    export_state = ExportStageState(
-        config=config,
-        graph_cache_key="g" * 64,
-        projection_cache_key="p" * 64,
-        series_derived_cache_key="s" * 64,
-        codegen_cache_key="c" * 64,
-        package_root=config.package_root,
     )
 
     with (
         patch("src.extraction_pipeline.run_export_stage") as export,
-        patch(
-            "src.extraction_pipeline.export_stage_state_from_manifest",
-            return_value=export_state,
-        ),
         patch("src.extraction_pipeline.materialize_package") as materialize,
+        patch(
+            "src.inverted_tree_docstrings.annotate_exported_package",
+        ) as overlay,
         patch(
             "src.extraction_pipeline.run_annotate_stage",
             return_value=_mock_annotate_state(config),
@@ -993,13 +1044,14 @@ def test_run_pipeline_start_from_annotate_skips_export(
         )
 
     export.assert_not_called()
+    overlay.assert_not_called()
     materialize.assert_called_once_with(config, codegen_key="c" * 64)
     annotate.assert_called_once()
     validate.assert_not_called()
     document.assert_not_called()
 
 
-def test_run_pipeline_only_stage_validate_materializes_from_manifest(
+def test_run_pipeline_only_stage_validate_uses_export_manifest_without_annotate(
     synthetic_pipeline_config_fixture,
     tmp_path: Path,
 ) -> None:
@@ -1012,8 +1064,8 @@ def test_run_pipeline_only_stage_validate_materializes_from_manifest(
 
     write_stage_manifest(
         config,
-        stage="annotate",
-        cache_keys={"codegen_cache_key": "c" * 64},
+        stage="export",
+        cache_keys=_export_cache_keys(),
         upstream_keys={},
         fingerprints=compute_input_fingerprints(config),
     )
@@ -1024,7 +1076,7 @@ def test_run_pipeline_only_stage_validate_materializes_from_manifest(
         patch("src.extraction_pipeline.materialize_package") as materialize,
         patch(
             "src.inverted_tree_docstrings.annotate_exported_package",
-        ),
+        ) as overlay,
         patch(
             "src.extraction_pipeline.run_validate_stage",
             return_value=0,
@@ -1035,9 +1087,49 @@ def test_run_pipeline_only_stage_validate_materializes_from_manifest(
 
     export.assert_not_called()
     annotate.assert_not_called()
+    overlay.assert_not_called()
     materialize.assert_called_once_with(config, codegen_key="c" * 64)
     validate.assert_called_once()
     document.assert_not_called()
+    assert validate.call_args.args[0].codegen_cache_key == "c" * 64
+
+
+def test_run_pipeline_start_from_document_rematerializes_and_applies_cached_docstrings(
+    synthetic_pipeline_config_fixture,
+    tmp_path: Path,
+) -> None:
+    from src.stage_manifest import (
+        compute_input_fingerprints,
+        write_stage_manifest,
+    )
+
+    config = _isolated_config_for_manifests(synthetic_pipeline_config_fixture, tmp_path)
+    write_stage_manifest(
+        config,
+        stage="annotate",
+        cache_keys={"codegen_cache_key": "c" * 64},
+        upstream_keys={},
+        fingerprints=compute_input_fingerprints(config),
+    )
+
+    with (
+        patch("src.extraction_pipeline.run_export_stage") as export,
+        patch("src.extraction_pipeline.run_validate_stage") as validate,
+        patch("src.extraction_pipeline.run_annotate_stage") as annotate,
+        patch("src.extraction_pipeline.materialize_package") as materialize,
+        patch(
+            "src.inverted_tree_docstrings.annotate_exported_package",
+        ) as overlay,
+        patch("src.extraction_pipeline.run_document_stage") as document,
+    ):
+        run_pipeline(config, start_from_stage="document")
+
+    export.assert_not_called()
+    validate.assert_not_called()
+    annotate.assert_not_called()
+    materialize.assert_called_once_with(config, codegen_key="c" * 64)
+    overlay.assert_called_once_with(config)
+    document.assert_called_once()
 
 
 def test_run_pipeline_start_from_annotate_aborts_on_workbook_drift(
@@ -1055,7 +1147,7 @@ def test_run_pipeline_start_from_annotate_aborts_on_workbook_drift(
 
     write_stage_manifest(
         config,
-        stage="export",
+        stage="validate",
         cache_keys={"codegen_cache_key": "c" * 64},
         upstream_keys={},
         fingerprints=compute_input_fingerprints(config),

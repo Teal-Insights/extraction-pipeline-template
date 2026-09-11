@@ -17,7 +17,7 @@ Follow this order when adapting the template to a new workbook. Each step has a 
 | 5. Review graph | **Graph reviewer** | Inspect `artifacts/dependency-graph/` (see [artifacts/README.md](artifacts/README.md)). Confirm expected sheets, no spurious nodes, and complete shock/engine paths. Optionally run opt-in LLM dependency audits: `uv run pytest tests/test_extraction_graph_accuracy.py --run-skipped` (workbook audits auto-select parents from the warm committed `.cache/dependency-graph/` entry — run `--only-stage extract` or `scripts.regenerate_graph_cache` first; `GRAPH_AUDIT_CASES` is optional steering only. The synthetic smoke-test audit runs without extra configuration). Set the provider API key for `LLM_GRAPH_AUDIT_MODEL` (defaults to `gpt-5.5`). |
 | 6. Verify graph | **Parity owner** | Define a scenario matrix in `tests/differential/` and run graph-oracle differential parity before export (see [Verify graph](#3-verify-graph)). Prefer a warm `.cache/dependency-graph/` from extract first. Do not proceed to export until graph-oracle parity passes. |
 | 7. Export | **Parity owner** | Run export (`uv run python -m src.extraction_pipeline --stop-after-stage export` or the full pipeline). Codegen emits keyword-only `compute_*`. See [Export](#4-export). |
-| 8. Annotate and validate | **Parity owner** | Annotate splices LLM docstrings onto `api.py` / `internals.py`. Validate compares `compute_*` to `FormulaEvaluator` on the graph (see [Annotate](#5-annotate) and [Validate](#6-validate)). |
+| 8. Validate and annotate | **Parity owner** | Validate compares `compute_*` to `FormulaEvaluator` on the graph. Annotate splices LLM docstrings onto `api.py` / `internals.py` after parity (see [Validate](#5-validate) and [Annotate](#6-annotate)). |
 | 9. Document | **Config author** | Generate economist-facing docs from the exported package (see [Document](#7-document)). |
 
 Copy the checkbox list in [Checklist for a new workbook](#checklist-for-a-new-workbook) into your extraction tracking issue and check items off as you go.
@@ -56,16 +56,16 @@ Extract is graph-first. Binding load, validation, derivation, and internal-cover
 
 ## Pipeline stages
 
-The orchestrator is `extract → export → annotate → validate → document` (`PIPELINE_STAGES` in [src/extraction_pipeline.py](src/extraction_pipeline.py)). Configure and graph-vs-Excel review are human gates around that sequence:
+The orchestrator is `extract → export → validate → annotate → document` (`PIPELINE_STAGES` in [src/extraction_pipeline.py](src/extraction_pipeline.py)). Configure and graph-vs-Excel review are human gates around that sequence:
 
 ```mermaid
 flowchart LR
   configure[Configure] --> extract[Extract]
   extract --> verifyGraph[Verify graph]
   verifyGraph --> export[Export]
-  export --> annotate[Annotate]
-  annotate --> validate[Validate]
-  validate --> document[Document]
+  export --> validate[Validate]
+  validate --> annotate[Annotate]
+  annotate --> document[Document]
 ```
 
 ### 1. Configure
@@ -209,22 +209,9 @@ order, and each helper returns `tuple[float, ...]`. There is no `make_context`,
 no `set_*`, and no records-shaped setters. Helpers are named from output
 `series_id` / `output.compute.name`. Package shape: `api.py`, `internals.py`,
 `runtime.py`, `data.py`, `__init__.py`. The validation bundle is copied into
-`dist/tests/`. Docstrings are placeholders until [Annotate](#5-annotate).
+`dist/tests/`. Docstrings are placeholders until [Annotate](#6-annotate).
 
-### 5. Annotate
-
-[src/inverted_tree_docstrings.py](src/inverted_tree_docstrings.py) asks
-`DOCSTRING_MODEL` for Google-style docstrings keyed by function signature and
-bindings notes, then splices them onto `api.py` and `internals.py`. Successful
-responses cache under `.cache/inverted-tree-docstrings.json`. The stage fails
-closed if the model returns argument names that do not match the signature.
-
-```bash
-uv run python -m src.extraction_pipeline --start-from-stage annotate --stop-after-stage annotate
-# equivalent: --only-stage annotate
-```
-
-### 6. Validate
+### 5. Validate
 
 Two oracles, two questions:
 
@@ -249,6 +236,23 @@ goldens under `data/differential/graph/`.
 uv run python -m tests.differential.differential_test_exported_library
 ```
 
+### 6. Annotate
+
+[src/inverted_tree_docstrings.py](src/inverted_tree_docstrings.py) asks
+`DOCSTRING_MODEL` for Google-style docstrings keyed by function signature and
+bindings notes, then splices them onto `api.py` and `internals.py`. Successful
+responses cache under `.cache/inverted-tree-docstrings.json`. The stage fails
+closed if the model returns argument names that do not match the signature.
+A full pipeline run skips annotate (and document) when validate exits non-zero,
+unless you pass `--force-document`.
+
+```bash
+uv run python -m src.extraction_pipeline --start-from-stage annotate --stop-after-stage annotate
+# equivalent: --only-stage annotate
+```
+
+Entering at annotate requires a warm `artifacts/stages/validate.json`.
+
 ### 7. Document
 
 Great Docs generates the distributable website from the exported package. LLM
@@ -269,27 +273,28 @@ uv run python -m src.extraction_pipeline
 
 ### Stage entry and exit
 
-The pipeline is ordered as `extract → export → annotate → validate → document`. Each completed stage writes `artifacts/stages/<stage>.json` (cache keys, upstream keys, and input fingerprints). Use the flags below to enter or exit at a named stage without re-paying upstream work:
+The pipeline is ordered as `extract → export → validate → annotate → document`. Each completed stage writes `artifacts/stages/<stage>.json` (cache keys, upstream keys, and input fingerprints). Use the flags below to enter or exit at a named stage without re-paying upstream work:
 
 | Flag | Behavior | Typical use |
 |---|---|---|
 | `--stop-after-stage extract` (or `--extract-graph`) | Run extract only (graph review artifacts) | Bindings / constraint iteration |
-| `--stop-after-stage export` | Run through export | Inspect generated `compute_*` before docstrings |
-| `--start-from-stage annotate` | Resume at annotate from warm `export.json` | Re-run LLM docstrings after export is stable |
-| `--only-stage validate` | Run validate only (rehydrates `dist/` from manifest keys) | Exported-library FormulaEvaluator sweep without export/annotate |
+| `--stop-after-stage export` | Run through export | Inspect generated `compute_*` before the library sweep |
+| `--stop-after-stage validate` | Run through the exported-library FormulaEvaluator sweep | Inspect parity before paying for docstrings |
+| `--start-from-stage annotate` | Resume at annotate from warm `validate.json` | Re-run LLM docstrings after parity passes |
+| `--only-stage validate` | Run validate only from warm `export.json` (no cached docstring overlay) | Exported-library FormulaEvaluator sweep without annotate |
 | `--only-stage document` | Run document only | Guide rewrite against an existing package |
 | `--stop-after-stage document` (default) | Full pipeline from the start | Release / complete run |
 | `--force-rebuild` | Rebuild warm on-disk caches even when keys match | Invalidate stale cache payloads |
 
-`--start-from-stage` and `--only-stage` are mutually exclusive. `--only-stage` cannot be combined with `--stop-after-stage`. Loading a stage manifest recomputes workbook / bindings / constraints / mode fingerprints and **fails loudly** (naming the drifted input) when they disagree — it never silently falls back to a full run. Entering at `validate` or `document` rebuilds `dist/` via `materialize_package` from the manifest's codegen key, then re-applies cached annotate docstrings.
+`--start-from-stage` and `--only-stage` are mutually exclusive. `--only-stage` cannot be combined with `--stop-after-stage`. Loading a stage manifest recomputes workbook / bindings / constraints / mode fingerprints and **fails loudly** (naming the drifted input) when they disagree — it never silently falls back to a full run. `--only-stage validate` / `--start-from-stage validate` rebuild `dist/` via `materialize_package` from the export codegen key and do **not** re-apply cached annotate docstrings. Entering at `annotate` requires `artifacts/stages/validate.json`. Entering at `document` rematerializes from the annotate codegen key and then re-applies cached annotate docstrings.
 
-When the default full run reaches `document` after a non-zero exported-library differential exit, the document stage is skipped so parity diagnosis is not gated on guide rewrite. Pass `--force-document` to rewrite guides anyway. Harness exceptions abort the pipeline (fail closed). Document-stage failures (timeouts, validation exhaustion, LLM errors) raise loudly after logging that export/differential artifacts under `dist/` are preserved.
+When the default full run reaches `annotate` after a non-zero exported-library differential exit, annotate and document are skipped so parity diagnosis is not gated on LLM docstring spend or guide rewrite. Pass `--force-document` to splice docstrings and rewrite guides anyway. Harness exceptions abort the pipeline (fail closed). Document-stage failures (timeouts, validation exhaustion, LLM errors) raise loudly after logging that export/differential artifacts under `dist/` are preserved.
 
 The document stage launches a Cursor SDK agent against `dist/` (`CURSOR_API_KEY`, `DOCUMENT_AGENT_MODEL`, default deadline 1800s via `DOCUMENT_AGENT_DEADLINE`). Authored trees cache under `.cache/user-guide/`. Set `PIPELINE_STALL_SECONDS` for heartbeat stack dumps during the document stage.
 
 ```bash
 uv run python -m src.extraction_pipeline --stop-after-stage export
-uv run python -m src.extraction_pipeline --start-from-stage annotate --stop-after-stage validate
+uv run python -m src.extraction_pipeline --start-from-stage validate --stop-after-stage annotate
 uv run python -m src.extraction_pipeline --only-stage validate
 ```
 

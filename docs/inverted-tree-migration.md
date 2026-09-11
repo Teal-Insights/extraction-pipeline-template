@@ -45,14 +45,14 @@ COM at pipeline `validate` time.
 
 ## Live stages
 
-The orchestrator is `extract → export → annotate → validate → document`.
+The orchestrator is `extract → export → validate → annotate → document`.
 
 | Stage | What it does |
 |---|---|
 | **extract** | Dependency graph + series resolution. Graph cache keys do not fold bindings. |
 | **export** | `CodeGenerator(graph).generate_modules(...)`. The local codegen cache key still folds `paradigm="inverted_tree"` so a ctx payload cannot be served as inverted tree. |
-| **annotate** | LLM Google-style docstrings spliced onto `api.py` and `internals.py` (`src/inverted_tree_docstrings.py`, cache `.cache/inverted-tree-docstrings.json`). Fail closed if the model returns argument names that do not match the signature. |
 | **validate** | Run the authored exported-library FormulaEvaluator sweep (`tests.differential.differential_test_exported_library` via `src.differential_validation.run_post_refactor_differential`). Empty `build_scenarios()` / `output_cell_labels()` fail closed. Copies reports from `data/differential/exported_library/` into `dist/tests/results/reference/` when present. Does not overwrite `data/differential/graph/`. |
+| **annotate** | LLM Google-style docstrings spliced onto `api.py` and `internals.py` (`src/inverted_tree_docstrings.py`, cache `.cache/inverted-tree-docstrings.json`). Fail closed if the model returns argument names that do not match the signature. Skipped after a non-zero validate exit unless `--force-document`. |
 | **document** | Cursor SDK agent authors `user_guide/` against keyword-only `compute_*`. Bump `USER_GUIDE_AGENT_PROMPT_VERSION` (and clear `.cache/user-guide/`) when the agent prompt template changes. |
 
 `--only-stage`, `--start-from-stage`, and `--stop-after-stage` use these names.
@@ -126,7 +126,7 @@ not the extraction venv.
 1. Land constant-binding coverage and schema 1.13.0 while still on ctx export.
    Ctx and inverted tree both need those series.
 2. Require `excel-grapher>=12.7.1` (or newer). Inverted-tree is the only `generate_modules` export.
-3. Remodel stages to `extract → export → annotate → validate → document`.
+3. Remodel stages to `extract → export → validate → annotate → document`.
 4. Author graph-vs-Excel hooks and run that sweep on Windows before trusting
    extraction.
 5. Remodel the exported-library harness to FormulaEvaluator. Run the full

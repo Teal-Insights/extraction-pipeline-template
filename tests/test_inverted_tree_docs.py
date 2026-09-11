@@ -14,8 +14,8 @@ def test_pipeline_stages_are_inverted_tree_order() -> None:
     assert PIPELINE_STAGES == (
         "extract",
         "export",
-        "annotate",
         "validate",
+        "annotate",
         "document",
     )
 
@@ -30,6 +30,8 @@ def test_readme_describes_live_stages_not_ctx_refactor() -> None:
     assert "keyword-only" in text
     assert "compute_*" in text
     assert "FormulaEvaluator" in text
+    assert "extract → export → validate → annotate → document" in text
+    assert "extract → export → annotate → validate → document" not in text
     for stage in PIPELINE_STAGES:
         assert stage in text
 
@@ -99,6 +101,8 @@ def test_inverted_tree_migration_names_live_path_and_grapher_floor() -> None:
     assert "compute_*" in text
     assert "FormulaEvaluator" in text
     assert "excel-grapher>=12.7.1" in text
+    assert "extract → export → validate → annotate → document" in text
+    assert "extract → export → annotate → validate → document" not in text
     assert "compare_cluster_variation_modes" not in text.split("Do not keep")[0]
     assert "run_refactor_stage" not in text.split("Do not keep")[0]
     pin_idx = text.find("3c759a4")
@@ -111,6 +115,8 @@ def test_agents_md_documents_annotate_and_live_caches() -> None:
     text = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert "annotate" in text.lower()
     assert "inverted-tree-docstrings" in text
+    assert "extract → export → validate → annotate → document" in text
+    assert "warm `validate.json`" in text
     assert "Pass 1 mechanical checkpoint" not in text
     assert "**before first export**" not in text
     assert "compare_cluster_variation_modes" not in text
