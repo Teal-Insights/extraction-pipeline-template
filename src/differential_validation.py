@@ -145,7 +145,8 @@ def run_post_refactor_differential(
     repo. Skips under CI so committed caches can be reused. Locally, skips the
     live harness when the package/workbook/harness fingerprint matches a prior
     successful run (unless ``no_cache``). Non-zero comparison exits are returned
-    so pipeline ``validate`` can skip ``document`` unless ``--force-document``.
+    so pipeline ``validate`` can skip ``annotate`` and ``document`` unless
+    ``--force-document``.
     Harness exceptions invalidate cache meta and propagate (fail closed).
     """
     if running_in_ci():

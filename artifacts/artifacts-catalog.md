@@ -66,8 +66,8 @@ Written by each completed pipeline stage. Used by `--start-from-stage` / `--only
 |---|---|
 | `extract.json` | Graph cache key and input fingerprints after extract |
 | `export.json` | Graph / projection / series-derived / codegen keys after export |
+| `validate.json` | Codegen key carried forward after validate |
 | `annotate.json` | Codegen key after inverted-tree docstring overlay |
-| `validate.json` | Keys carried forward after validate |
 | `document.json` | Keys carried forward after document |
 
 Each manifest records `cache_keys`, `upstream_keys`, and labeled `fingerprints` (workbook, bindings, constraints, modes, `excel-grapher` version). Loading a manifest recomputes fingerprints and aborts on drift.
@@ -83,7 +83,7 @@ Written by every `run_pipeline` invocation (`uv run python -m src.extraction_pip
 | `schema_version` | string | Timings schema version (`1.0.0`) |
 | `total_seconds` | number | Sum of every recorded stage's wall clock |
 | `stages` | array | One entry per stage reached, in run order |
-| `stages[].name` | string | `extract`, `export`, `annotate`, `validate`, or `document` |
+| `stages[].name` | string | `extract`, `export`, `validate`, `annotate`, or `document` |
 | `stages[].elapsed_seconds` | number | Stage wall clock |
 | `stages[].spans` | object | Seconds keyed by leaf span name inside that stage |
 | `caches` | object | One entry per on-disk cache; `null` fields mean the run never reached it |
@@ -93,13 +93,13 @@ Written by every `run_pipeline` invocation (`uv run python -m src.extraction_pip
 
 `caches` keys: `dependency-graph`, `bindings-validation`, `series-resolution`, `series-derived`, `projection`, `codegen`.
 
-Spans are non-overlapping leaf measurements: do not invent a total by summing them with a parent rollup. A full `run_pipeline` records `extract`, `export`, `annotate`, `validate`, and `document` in order. Graph-build spans (`create_dependency_graph`, …) land under `extract`; binding post-processing (`load_series_bindings`, `validate_series_bindings`, `derive_series`, `series_derived`) and codegen spans land under `export`; `annotate_docstrings` lands under `annotate`. Extract alone appears when `stop_after_stage=extract` (or `--extract-graph`).
+Spans are non-overlapping leaf measurements: do not invent a total by summing them with a parent rollup. A full `run_pipeline` records `extract`, `export`, `validate`, `annotate`, and `document` in order. Graph-build spans (`create_dependency_graph`, …) land under `extract`; binding post-processing (`load_series_bindings`, `validate_series_bindings`, `derive_series`, `series_derived`) and codegen spans land under `export`; `exported_library_differential` lands under `validate`; `annotate_docstrings` lands under `annotate`. Extract alone appears when `stop_after_stage=extract` (or `--extract-graph`).
 
 Notable spans: `create_dependency_graph` (extract); `load_series_bindings`, `validate_series_bindings`, `derive_series`, `series_derived`, `codegen`, `write_export_package` (export); `annotate_docstrings` (annotate); `exported_library_differential` (validate).
 
 ### cProfile output
 
-Set `PIPELINE_PROFILE=1` to additionally write `<stage>.prof` and `<stage>.pstats.txt` under `artifacts/dependency-graph/` for each of `extract`, `export`, `annotate`, `validate`, and `document`.
+Set `PIPELINE_PROFILE=1` to additionally write `<stage>.prof` and `<stage>.pstats.txt` under `artifacts/dependency-graph/` for each of `extract`, `export`, `validate`, `annotate`, and `document`.
 
 ## `workbook-audit.md`
 
