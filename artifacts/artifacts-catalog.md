@@ -58,6 +58,28 @@ uv run python -m http.server 8000 --directory artifacts/dependency-graph
 
 Open `http://localhost:8000/`.
 
+## `startup-site/`
+
+Written by `uv run python -m scripts.i_o_tables` (override the destination with `--output-dir`). Local/untracked (see `artifacts/.gitignore`). Built from the cached dependency graph plus binding sidecars; input domains come from series bindings (`Literal` / `Between` / `RealBetween`) with a `CONSTRAINTS` overlay.
+
+| File | Description |
+|---|---|
+| `startup-guide.csv` | Public-input catalog: series id, address, description, dtype, acceptable values, default, key |
+| `output-catalog.csv` | Public-output catalog: series id, address, compute name, `UNIT_MEASURE` when present, description, key |
+| `index.html` | Landing page with links to the catalogs, statement graph, and workbook download |
+| `inputs.html` | HTML table of public inputs |
+| `outputs.html` | HTML table of public outputs |
+| `statement-graph.html` | excel-grapher statement graph (`to_semantic_viz_payload` / `write_semantic_viz_html`) |
+| `download/<workbook>` | Copy of the configured workbook |
+
+Serve locally (POSIX `--directory` so Git Bash does not treat `\t` as a tab):
+
+```bash
+uv run python -m http.server 8000 --directory artifacts/startup-site
+```
+
+Open `http://localhost:8000/`.
+
 ## `stages/`
 
 Written by each completed pipeline stage. Used by `--start-from-stage` / `--only-stage` to resume without re-running upstream work. Local/untracked (see `.gitignore`).
