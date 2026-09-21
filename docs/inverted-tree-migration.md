@@ -13,7 +13,7 @@ hooks, and files later deleted.
 
 The first Tiny DSA inverted-tree pin was excel-grapher git rev
 `3c759a472f85c115359e9cb14c05eac86432e093` (excel-grapher #597). That pin is
-**historical**: this template now requires `excel-grapher>=12.7.1`. Raise the
+**historical**: this template now requires `excel-grapher>=22.0.0`. Raise the
 floor and `uv lock` when upgrading, then regenerate caches with `--force`.
 
 ## Why move
@@ -21,9 +21,9 @@ floor and `uv lock` when upgrading, then regenerate caches with `--force`.
 Ctx export is a mutable evaluation context plus records-shaped setters. Inverted
 tree is a pure function of the leaf closure of each output subgraph:
 
-- `compute_*` is keyword-only.
-- Scalars stay scalars; series are 1-D sequences in canonical key order.
-- Returns are `tuple[float, ...]` (tuple index ↔ key order), not SDMX records.
+- `compute_*` takes a typed `{Output}Inputs` bundle (`from_defaults` fills defaults).
+- Scalars stay scalars; series are named-axis tensors in canonical key order.
+- Returns are a scalar or Tensor (index ↔ key order), not SDMX records.
 - There is no `make_context`, no `set_*`, and no `_api_helpers` / `_readers`.
 
 Bindings remain the Excel map (`series_id` ↔ range). Internals helpers are
@@ -69,7 +69,7 @@ These do not come along automatically from a template merge:
    `constant`. Inverted-tree helpers take those leaves as arguments (with
    `data.py` defaults). A MATCH key or year-label row that stays an unbound
    `xl_cell` will not appear as a typed sequence on `compute_*`. Stamp binding
-   schema **1.13.0** on every shard together. Add a coverage test: every
+   schema **1.19.0** on every shard together. Add a coverage test: every
    `kind == "constant"` leaf must appear in the constants shard. Fail closed.
 2. **Fill graph (and library) scenario hooks** in
    `tests/differential/differential_test_graph.py` and
@@ -80,10 +80,10 @@ These do not come along automatically from a template merge:
    - `output_cell_labels()` — `(label, address)` pairs for every compared cell.
    - `inputs_for_excel()` — scenario → Excel cell writes (the graph driver
      still sets nodes by those addresses).
-   - `mvp_outputs_for_scenario()` — keyword-only `compute_*` calls.
+   - `mvp_outputs_for_scenario()` — wrap leaf kwargs in `{Output}Inputs.from_defaults(...)` then call `compute_*`.
    - Leave `build_axes()` as `()` unless the derived repo already thinks in axes.
    Pipeline `validate` *is* this library-vs-graph sweep.
-3. **Map scenario fields onto `compute_*` kwargs.** Leaves that are not in the
+3. **Map scenario fields onto `{Output}Inputs.from_defaults(...)`.** Leaves that are not in the
    scenario come from `data.py` defaults and must match the graph's stored
    workbook values. Canonical baseline tables may differ from `data.py`
    defaults; copy whatever the library hooks already used so the two harnesses
@@ -123,9 +123,9 @@ not the extraction venv.
 
 ## Suggested sequence if you are still on ctx
 
-1. Land constant-binding coverage and schema 1.13.0 while still on ctx export.
+1. Land constant-binding coverage and schema 1.19.0 while still on ctx export.
    Ctx and inverted tree both need those series.
-2. Require `excel-grapher>=12.7.1` (or newer). Inverted-tree is the only `generate_modules` export.
+2. Require `excel-grapher>=22.0.0` (or newer). Inverted-tree is the only `generate_modules` export.
 3. Remodel stages to `extract → export → validate → annotate → document`.
 4. Author graph-vs-Excel hooks and run that sweep on Windows before trusting
    extraction.

@@ -1,4 +1,4 @@
-schema_version: 1.13.0
+schema_version: 1.19.0
 workbook: workbook.xlsx
 concept_scheme:
   id: synthetic_model
@@ -15,10 +15,6 @@ series:
     data_range: Inputs!A1
     layout: scalar
     input:
-      setter:
-        name: set_input_rate
-        record_contract: records
-        strict: true
       domain:
         real_between:
           min: 0.0

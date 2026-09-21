@@ -29,7 +29,7 @@ Each gate has a default owner role. Adapt names to your team; the responsibiliti
 | Criterion | Pass condition |
 |---|---|
 | **Targets declared** | Every published output is a named target (range name or sheet-qualified address) driving target-driven graph extraction. |
-| **Series bindings authored** | `bindings/inputs.bindings.yaml` and `bindings/outputs.bindings.yaml` exist, use `schema_version: 1.13.0`, and declare one logical scalar/series/table per public I/O function. Every dimension should have an explicit `id`; record/key fields and refactor parameters use the effective dimension id, with concept as semantic metadata. Reader-only fixed leaves that formulas should call via `read_*` are declared with `constant: {}` (typically in `bindings/constants.bindings.yaml`). |
+| **Series bindings authored** | `bindings/inputs.bindings.yaml` and `bindings/outputs.bindings.yaml` exist, use `schema_version: 1.19.0`, and declare one logical scalar/series/table per public I/O function. Every dimension should have an explicit `id`; record/key fields and refactor parameters use the effective dimension id, with concept as semantic metadata. Reader-only fixed leaves that formulas should call via `read_*` are declared with `constant: {}` (typically in `bindings/constants.bindings.yaml`). |
 | **Bindings validated against graph** | `validate_series_bindings(...)` reports `ok`; input bindings overlap graph leaves, output bindings overlap target nodes. |
 | **Dynamic refs resolved** | All `OFFSET` / `INDEX` / `MATCH` / `CHOOSE` dependencies are resolved via `DynamicRefConfig.from_constraints(...)` without `DynamicRefError`. |
 | **Every mutable leaf is bound** | Each leaf classified as `input` appears in `inputs.bindings.yaml`; unbound mutable leaves fail the configure tests. |
@@ -71,7 +71,7 @@ Configure checklist (workbook-neutral):
 | Criterion | Pass condition |
 |---|---|
 | **Leaf classification attached** | Before codegen, every graph leaf is classified `input` or `constant` and attached to the graph. |
-| **Inverted-tree public API** | Codegen emits keyword-only `compute_*` from series bindings. Scalars stay scalars; series are 1-D sequences in canonical key order; returns are `tuple[float, ...]`. There is no `make_context()`, no `set_*`, and no records-shaped setters. |
+| **Inverted-tree public API** | Codegen emits `compute_*` that take a typed `{Output}Inputs` bundle (`from_defaults` fills `data.*_DEFAULT`). Scalars stay scalars; series are named-axis tensors in canonical key order. There is no `make_context()`, no `set_*`, and no records-shaped setters. |
 | **Inputs validated at runtime** | Keyword arguments match the binding contract; domain/units prose belongs in docstrings, not implied runtime validation beyond what codegen emits. |
 | **Domain-language identifiers** | Public `compute_*` names use macrofinance vocabulary (`compute_output_baseline`), not workbook coordinates (`U24`, `OFFSET_RANGE_3`). Internals helpers are named from `series_id`. |
 | **Pandas/Polars compatible** | Callers can tabulate `compute_*` tuples with pandas or polars. Native DataFrame in/out is a known gap. |
@@ -116,7 +116,7 @@ Golden-master parity (100% pass rate, precision policy, first-divergence reporti
 
 ### Known gaps/footguns
 
-- **Binding authoring needs a scaling strategy:** Larger workbooks need a structured discovery workflow (logical tables → series catalog → graph cross-check); the prompt pattern in the pipeline doc is the reference. When sharding outputs, share `compute_*` / `set_*` names only for intentional merges of complementary slices; uniquify names for distinct scenario/engine paths or export can leave most paths unreachable (see [bindings/README.md](bindings/README.md)).
+- **Binding authoring needs a scaling strategy:** Larger workbooks need a structured discovery workflow (logical tables → series catalog → graph cross-check); the prompt pattern in the pipeline doc is the reference. When sharding outputs, share `compute_*` / input series ids only for intentional merges of complementary slices; uniquify names for distinct scenario/engine paths or export can leave most paths unreachable (see [bindings/README.md](bindings/README.md)).
 - **User override of formula cells is not currently allowed**: Currently we're enforcing that all input cells must be leaf nodes. However, there's at least one user-editable cell in the LIC DSF that is not a leaf node, so we will need to relax this constraint for the LIC DSF extraction.
 - **Synchronous LLM API calls slow down the pipeline**: Currently we're calling LLMs synchronously at each stage of the pipeline. For large workbooks, we will need to parallelize LLM calls to speed up the pipeline. (In some cases, sequencing is important, so we'll have to do this intelligently.)
 - **LLM-authored configs and docstrings are not currently validated**: We may want to run some evals over the AI-generated series bindings and docstrings to make sure this is really the API shape we want.
