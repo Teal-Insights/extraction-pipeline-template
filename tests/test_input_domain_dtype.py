@@ -315,12 +315,15 @@ def test_build_pipeline_graph_rejects_float_between_domain(
 
 
 def test_authoring_prompt_documents_between_vs_real_between() -> None:
-    prompt = (
+    conventions = (
         Path(__file__).resolve().parents[1]
-        / "templates"
-        / "binding-authoring-prompt.txt"
+        / ".agents"
+        / "skills"
+        / "author-bindings"
+        / "references"
+        / "conventions.md"
     ).read_text(encoding="utf-8")
-    assert "input.domain.between is an integer interval" in prompt
-    assert "input.domain.real_between is a real interval" in prompt
-    assert "dtype: float" in prompt
-    assert "Do not pair dtype: float with between." in prompt
+    assert "input.domain.between is an integer interval" in conventions
+    assert "input.domain.real_between is a real interval" in conventions
+    assert "dtype: float" in conventions or "dtype `float`" in conventions
+    assert "Do not pair" in conventions and "between" in conventions

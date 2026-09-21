@@ -5,7 +5,7 @@ and (when needed) `constants.bindings.yaml` here.
 
 Bootstrap extract (`--extract-graph` / `--stop-after-stage extract`) is graph-first: empty `series: []` placeholder shards are fine so you can review `artifacts/dependency-graph/` before bindings exist. excel-grapher 5.1.4+ also loads and merges those placeholders (including divergent `concept_scheme` blocks). Author real series before export so the public API and leaf coverage are complete.
 
-Use schema version `1.13.0` and the prompt in [templates/binding-authoring-prompt.txt](../templates/binding-authoring-prompt.txt). Prefer authoring from an extracted graph rather than guessing sheet geometry up front.
+Use schema version `1.13.0` and the vendored skill in [.agents/skills/author-bindings](../.agents/skills/author-bindings/SKILL.md). Prefer authoring from an extracted graph rather than guessing sheet geometry up front.
 
 ## Constant bindings (reader-only leaves)
 
@@ -81,9 +81,8 @@ output:
 ```
 
 `dims` defaults to the series `key` when omitted. Leaves without helper coverage
-still use `xl_cell`. Declare helper blocks in the binding catalog for every
-output series id that matches a same-named function in the generated
-`internals.py`; `scripts/author_bindings.py` passes them through verbatim.
+still use `xl_cell`. Declare helper blocks on every output series id that matches a same-named function in the generated
+`internals.py`.
 
 After authoring (or when export fails in codegen), run
 `uv run python -m scripts.binding_resolution_audit`
@@ -149,7 +148,7 @@ but fail at output/input codegen:
    the extracted graph never resolve cleanly.
 
 Pedagogical catalog fragment (not used by the synthetic smoke workbook):
-[templates/binding-pattern-measure-shards.example.yaml](../templates/binding-pattern-measure-shards.example.yaml).
+[.agents/skills/author-bindings/assets/measure-shards.example.yaml](../.agents/skills/author-bindings/assets/measure-shards.example.yaml).
 The example shows the intentional **shared-name** merge for milestone Gap
 columns; see its header comments for the **unique-name** alternative used
 for per-scenario engine shards.
