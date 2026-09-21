@@ -102,8 +102,9 @@ itself a differential signal about extraction coverage.
 3. **`inputs_for_excel(scenario)`** — map each scenario to graph cell writes
    (Excel addresses). The graph driver sets nodes by those addresses; keep the
    hook name.
-4. **`mvp_outputs_for_scenario(api, scenario)`** — call keyword-only `compute_*`
-   and return `{label: value}`.
+4. **`mvp_outputs_for_scenario(api, scenario)`** — wrap leaf kwargs in
+   `{Output}Inputs.from_defaults(...)`, call `compute_*`, and return
+   `{label: value}`.
 
 Optional fifth hook:
 
@@ -144,8 +145,8 @@ Prefer building output specs from derived output series
 - `specs_from_output_series(...)` → one `OutputCellSpec` per bound cell
 
 Graph outputs are keyed by **address**; MVP outputs by **label**. Map
-`compute_*` sequence results onto those labels in catalog order, or named-axis
-series by spec keys, via `outputs_from_sequences()`.
+`compute_*` Tensor / sequence results onto those labels in catalog order, or
+named-axis series by spec keys, via `outputs_from_sequences()`.
 
 ### Crash attribution and reports
 

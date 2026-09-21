@@ -11,6 +11,7 @@ import pytest
 from excel_grapher.core.address_keys import normalize_key
 
 from tests.differential.binding_adapter import (
+    call_compute,
     excel_writes_for_inputs,
     expressible_input_cells,
     input_kwargs_for_compute,
@@ -52,6 +53,16 @@ class _FakeSeries:
     def __getitem__(self, key: Any) -> Any:
         coord = key if isinstance(key, tuple) else (key,)
         return dict(self.items())[coord]
+
+
+@dataclass(frozen=True)
+class _FakeInputs:
+    country_name: str
+    revenue_shocks: object
+
+    @classmethod
+    def from_defaults(cls, **kwargs: Any) -> _FakeInputs:
+        return cls(**kwargs)
 
 
 def _shock_series(values: tuple[Any, ...]) -> _FakeSeries:
@@ -267,3 +278,53 @@ def test_input_kwargs_without_series_keep_data_defaults_for_arrays() -> None:
         "country_name": "France",
         "revenue_shocks": (0.0, 0.0, 0.0),
     }
+
+
+def test_input_kwargs_walk_inputs_dataclass_fields() -> None:
+    def compute(inputs: _FakeInputs) -> _FakeInputs:
+        return inputs
+
+    data = SimpleNamespace(REVENUE_SHOCKS_DEFAULT=(0.0, 0.0, 0.0))
+    data.__name__ = "pkg.data"
+    kwargs = input_kwargs_for_compute(
+        compute,
+        data,
+        inputs={
+            "country_name": "France",
+            "revenue_shocks": (
+                {"SCENARIO": "base", "TIME_PERIOD": 2035, "OBS_VALUE": 2.0},
+            ),
+        },
+        input_series=(_scalar("country_name", "Inputs!A1"), _shocks()),
+    )
+    assert kwargs == {
+        "country_name": "France",
+        "revenue_shocks": (0.0, 2.0, 0.0),
+    }
+
+
+def test_call_compute_passes_inputs_from_defaults() -> None:
+    captured: dict[str, object] = {}
+
+    def compute(inputs: _FakeInputs) -> _FakeInputs:
+        captured["inputs"] = inputs
+        return inputs
+
+    pkg = SimpleNamespace(FakeInputs=_FakeInputs)
+    result = call_compute(
+        pkg,
+        compute,
+        {"country_name": "France", "revenue_shocks": (0.0, 2.0, 0.0)},
+    )
+    assert result is captured["inputs"]
+    assert isinstance(result, _FakeInputs)
+    assert result.country_name == "France"
+    assert result.revenue_shocks == (0.0, 2.0, 0.0)
+
+
+def test_call_compute_fail_closed_without_from_defaults() -> None:
+    def compute(inputs: dict[str, object]) -> dict[str, object]:
+        return inputs
+
+    with pytest.raises(TypeError, match="from_defaults"):
+        call_compute(SimpleNamespace(), compute, {"country_name": "France"})
