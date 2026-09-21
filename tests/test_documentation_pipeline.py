@@ -170,6 +170,23 @@ def test_build_user_guide_agent_prompt_contains_facts_not_outline(
     assert "make_context" not in prompt
 
 
+def test_user_guide_agent_prompt_reuses_existing_pages() -> None:
+    config = load_pipeline_config()
+    prompt = " ".join(build_user_guide_agent_prompt(config).lower().split())
+    assert "existing pages" in prompt
+    assert "from scratch" in prompt
+    assert "update" in prompt
+    assert "reorganize" in prompt
+    assert "clean" in prompt
+
+
+def test_user_guide_agent_prompt_reserves_99_parity_page() -> None:
+    config = load_pipeline_config()
+    prompt = build_user_guide_agent_prompt(config)
+    assert "99-excel-parity-validation.qmd" in prompt
+    assert "03-excel-parity-validation.qmd" not in prompt
+
+
 def test_document_agent_model_defaults_to_luna(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -366,7 +383,7 @@ Result: PASS
     )
     write_validation_page(config=config)
     page = (
-        config.dist_root / "user_guide" / "03-excel-parity-validation.qmd"
+        config.dist_root / "user_guide" / "99-excel-parity-validation.qmd"
     ).read_text(encoding="utf-8")
     assert "PASS" in page
     assert "My Model" in page

@@ -1337,7 +1337,7 @@ We do not run `great-docs build` during extraction because it is difficult to co
 4. On `NameError`, optionally call the LLM to rewrite only the failing cell (requires `OPENAI_API_KEY`, limited retries).
 5. Remove the temporary script and rewrite `dist/pyproject.toml`, merging any newly required packages into `[dependency-groups].dev` alongside `DOCUMENTATION_BASELINE_DEV_DEPS`.
 
-Before validating runnable cells, `src/documentation_pipeline.py` also writes a deterministic `03-excel-parity-validation.qmd` page from `dist/tests/results/reference/parity_report.txt`. This page is not LLM-generated: it parses the parity report's headline fields, links to the shipped validation bundle, and adds a landing-page pointer so users can find the correctness evidence on the GreatDocs site.
+Before validating runnable cells, `src/documentation_pipeline.py` also writes a deterministic `99-excel-parity-validation.qmd` page from `dist/tests/results/reference/parity_report.txt`. This page is not LLM-generated: it parses the parity report's headline fields, links to the shipped validation bundle, and adds a landing-page pointer so users can find the correctness evidence on the GreatDocs site.
 
 After validation succeeds, the pipeline syncs validated LLM-authored pages back into `.cache/guide-rewrites.json`. This matters because QMD validation may repair runnable cells after a section rewrite cache hit; without the sync, the next run would reload the stale cached section and repair the same cell again.
 
