@@ -7,16 +7,13 @@ Directions are mutually exclusive on one series:
 | Block | Meaning |
 | --- | --- |
 | `input: {}` | Editable graph leaf (required `compute_*` argument). Do not emit removed `input.setter`. |
-
-`input.domain.between` is an integer interval and is only valid with measure
-dtype `int`. `input.domain.real_between` is a real interval and is required for
-dtype `float` or `number` (excel-grapher `between` rejects `0.0`). Do not pair
-`dtype: float` with `between`.
 | `output.compute.name` | Public output. Name must match `compute_[a-z][a-z0-9_]*`. |
 | `internal: {}` | Formula-cell triangulation. No public `compute_*`. |
 | `constant: {}` | Reader-only **leaf** named for `data.py` / defaulted `compute_*` kwargs. |
 
 Empty `input: {}` marks an editable leaf.
+
+input.domain.between is an integer interval and is only valid with measure dtype int. input.domain.real_between is a real interval and is required for dtype float or number (excel-grapher between rejects 0.0). Do not pair dtype: float with between.
 
 Do not confuse the `constant` **direction** with `bind.kind: constant` (a fixed
 structure scalar that does not read a cell).
