@@ -1,8 +1,8 @@
-User-guide runnable cells should follow this interaction model: import `compute_*` functions from the generated package API module and pass a typed `{Output}Inputs` bundle. Build that bundle with `from_defaults(...)` so leaf overrides fill `data.*_DEFAULT`. There is no evaluation context: do not call `make_context()` or `set_*`.
+User-guide runnable cells should follow this interaction model: import `compute_*` functions from the generated package API module and pass a typed `{Output}Inputs` bundle. Build the bundle with `{Output}Inputs.from_defaults(...)`, which fills `data.*_DEFAULT` and accepts leaf overrides. There is no evaluation context: do not call `make_context()` or `set_*`, and do not pass leaf kwargs directly into `compute_*`.
 
 Input shapes:
 
-- `from_defaults` takes keyword leaf names. Scalars stay bare values (for example `country_name="Borvelia"`), never a one-element list.
+- `compute_*` takes one Inputs dataclass, not keyword-only leaf arguments. Construct it with `from_defaults` (for example `country_name="Borvelia"`), never a one-element list for a scalar.
 - Series arguments are named-axis tensors or 1-D sequences of measure values in the series' canonical key order. Pass exactly one value per key; omit optional arguments that already have defaults in the generated `data` module.
 - Each `compute_*` takes one Inputs argument and returns a scalar or Tensor (one value per horizon year), not records.
 

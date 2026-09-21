@@ -303,6 +303,26 @@ def test_input_kwargs_walk_inputs_dataclass_fields() -> None:
         "country_name": "France",
         "revenue_shocks": (0.0, 2.0, 0.0),
     }
+    assert "inputs" not in kwargs
+
+
+def test_input_kwargs_walk_inputs_dataclass_fields_without_series() -> None:
+    def compute(inputs: _FakeInputs) -> _FakeInputs:
+        return inputs
+
+    data = SimpleNamespace(REVENUE_SHOCKS_DEFAULT=(0.0, 0.0, 0.0))
+    data.__name__ = "pkg.data"
+    kwargs = input_kwargs_for_compute(
+        compute,
+        data,
+        inputs={"country_name": "France", "revenue_shocks": ()},
+        scalar_input_keys=frozenset({"country_name"}),
+    )
+    assert kwargs == {
+        "country_name": "France",
+        "revenue_shocks": (0.0, 0.0, 0.0),
+    }
+    assert "inputs" not in kwargs
 
 
 def test_call_compute_passes_inputs_from_defaults() -> None:
@@ -327,6 +347,14 @@ def test_call_compute_passes_inputs_from_defaults() -> None:
 def test_call_compute_fail_closed_without_from_defaults() -> None:
     def compute(inputs: dict[str, object]) -> dict[str, object]:
         return inputs
+
+    with pytest.raises(TypeError, match="from_defaults"):
+        call_compute(SimpleNamespace(), compute, {"country_name": "France"})
+
+
+def test_call_compute_fail_closed_on_keyword_leaf_signature() -> None:
+    def compute(*, country_name: str) -> str:
+        return country_name
 
     with pytest.raises(TypeError, match="from_defaults"):
         call_compute(SimpleNamespace(), compute, {"country_name": "France"})

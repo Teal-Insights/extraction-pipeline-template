@@ -776,7 +776,19 @@ def inputs_for_excel(scenario: Scenario) -> dict[str, Any]:
 
 
 def mvp_outputs_for_scenario(api: ModuleType, scenario: Scenario) -> dict[str, Any]:
-    """Call ``compute_*`` with ``{Output}Inputs.from_defaults(...)`` and return ``{label: value}``."""
+    """Call ``compute_*`` with ``{Output}Inputs.from_defaults(...)`` and return ``{label: value}``.
+
+    Generated excel-grapher 22 helpers take a single frozen Inputs bundle, not
+    leaf kwargs. Prefer ``compute_outputs_for_writes`` so scalars, sequences,
+    and named-axis series map onto labels. Author workbook-specific hooks like::
+
+        model = importlib.import_module(f"{api.__package__}.model")
+        bundle = model.OutputBaselineInputs.from_defaults(
+            country_name=inputs.country_name,
+            growth_baseline=growth_baseline,
+        )
+        api.compute_output_baseline(bundle)
+    """
     raise NotImplementedError(
         "Author mvp_outputs_for_scenario() to call compute_* via "
         "compute_outputs_for_writes (wrapping leaf kwargs in "

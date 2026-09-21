@@ -103,8 +103,9 @@ itself a differential signal about extraction coverage.
    (Excel addresses). The graph driver sets nodes by those addresses; keep the
    hook name.
 4. **`mvp_outputs_for_scenario(api, scenario)`** — wrap leaf kwargs in
-   `{Output}Inputs.from_defaults(...)`, call `compute_*`, and return
-   `{label: value}`.
+   `{Output}Inputs.from_defaults(...)`, pass that bundle to `compute_*`, and
+   return `{label: value}`. Do not call `compute_*(country_name=..., ...)`;
+   excel-grapher 22 helpers take a single Inputs dataclass.
 
 Optional fifth hook:
 
@@ -152,7 +153,7 @@ Graph outputs are keyed by **address**; MVP outputs by **label**. Prefer
 `compute_outputs_for_writes` from `mvp_outputs_for_scenario()` so scalars,
 1-tuples, sequences, and named-axis series all map onto those labels via
 `outputs_from_sequences()`. Wrap leaf kwargs in `{Output}Inputs.from_defaults(...)`
-before calling `compute_*`.
+before calling `compute_*`; do not pass leaf kwargs into `compute_*`.
 
 ### Crash attribution and reports
 
