@@ -73,7 +73,7 @@ flowchart LR
 1. Edit [workbook_config.py](workbook_config.py): paths, `TARGETS`, `BLANK_RANGES`, `CONSTRAINTS`, and `DIST_METADATA`. Keep `bindings/*.bindings.yaml` as empty `series: []` placeholders until after the first extract if needed.
 2. **Dynamic-ref pass** — list leaves that need domains to resolve `OFFSET` / `INDIRECT` / `INDEX` (`excel_grapher.list_dynamic_ref_constraint_candidates` against `TARGETS`), constrain them, and iterate until `--extract-graph` succeeds without `DynamicRefError`. That lister only covers dynamic-ref argument leaves; it will not enumerate every leaf that later appears in the finished graph.
 3. **Leaf-classification pass** — after a successful extract, review empty leaves that sit in the graph only because a formula rectangle names them (`INDEX`/`MATCH` padding, far-right `NPV`/`SUM` year-window overflow, unused ladder copies, separator rows). Declare those sheet-qualified A1 rectangles in `BLANK_RANGES` and re-extract: BFS does not create the nodes, edges that name them are kept, and OFFSET/INDEX leaves inside the rects are **not** required in `CONSTRAINTS`. Pass the **same** sequence to graph build, `FormulaEvaluator`, and codegen (the pipeline does this from `workbook_config.BLANK_RANGES`). Do **not** bind these as inputs or constants, do **not** drop them by narrowing a year domain (`C18`-style — the ranges are literal `:BB` / `:BD`), and do **not** put user-fillable yellow slots in `BLANK_RANGES`. `Literal[None]` freezes dynamic-ref *classification*; it does not omit nodes from the graph. Then constrain every remaining unconstrained graph leaf (`graph.leaf_keys()` minus `CONSTRAINTS`) so each leaf classifies as `input` or `constant`. Every mutable input leaf must appear in `inputs.bindings.yaml`. Fixed leaves that formulas should read via `read_*` (not `xl_cell`) need a `constant: {}` series in `constants.bindings.yaml` (see [Authoring constants](#authoring-constants)).
-4. Author I/O `bindings/*.bindings.yaml` (schema version `1.17.0`, one logical series per public API function or input/constant group). Empty `series: []` placeholders load (excel-grapher 5.1.4+); author real series before export.
+4. Author I/O `bindings/*.bindings.yaml` (schema version `1.19.0`, one logical series per public API function or input/constant group). Empty `series: []` placeholders load (excel-grapher 5.1.4+); author real series before export.
 5. Bind every internal formula cell in `internals.bindings.yaml` (see [Authoring internals](#authoring-internals) below).
 
 Validation checks:
@@ -136,7 +136,7 @@ Author `internals.bindings.yaml` after `--extract-graph`, when you can see which
 - **Validate** — `validate_series_bindings(...)`, then `derive_internal_series(...)`. Run `uv run pytest tests/test_internal_binding_coverage.py` once `INTERNAL_BINDING_VALIDATION_MODE` is enabled.
 - **Review** — re-run `--extract-graph` and confirm bound formula nodes show `keys:` / `record:` labels in the graph explorer.
 
-Schema details and field shapes: excel-grapher `user_guide/05-series-bindings.qmd` (internal direction, schema 1.17.0). Use [.agents/skills/author-bindings](.agents/skills/author-bindings/SKILL.md) for agent-assisted drafting.
+Schema details and field shapes: excel-grapher `user_guide/05-series-bindings.qmd` (internal direction, schema 1.19.0). Use [.agents/skills/author-bindings](.agents/skills/author-bindings/SKILL.md) for agent-assisted drafting.
 
 #### Authoring constants
 
@@ -146,8 +146,7 @@ Structural blanks are a different lever. Cells that formulas *name* but users ne
 
 - **Same YAML shape as public bindings** — use `constant: {}` instead of `input` / `output` / `internal`. Mutually exclusive with those directions.
 - **Leaf-only** — `data_range` must cover graph leaves (not formula nodes). Formula triangulation stays in `internals.bindings.yaml`.
-- **Reader name** — default `read_<series_id>`; override with `constant.reader.name` when needed.
-- **No public setter** — do not declare `input.setter` on constant series. If downstream users must edit the cell, use an `input` binding instead.
+- **No public write surface** — do not declare `input: {}` on constant series. If downstream users must edit the cell, use an `input` binding instead.
 - **Validate** — `validate_series_bindings(...)`, then `derive_constant_series(...)`. Run `uv run python -m scripts.binding_resolution_audit` (includes the `constant` direction by default).
 
 Synthetic example: [tests/fixtures/synthetic/constants.bindings.yaml](tests/fixtures/synthetic/constants.bindings.yaml). Full rules: [bindings/README.md](bindings/README.md#constant-bindings-reader-only-leaves). Schema reference: excel-grapher `user_guide/05-series-bindings.qmd` (constant direction, schema 1.11.0+).
@@ -203,9 +202,11 @@ Reports land under `data/differential/graph/`. Exit codes: **`0`** all compariso
 ### 4. Export
 
 Export calls `CodeGenerator.generate_modules(...)`.
-The package is keyword-only `compute_*`
-functions: scalars stay scalars, series are 1-D sequences in canonical key
-order, and each helper returns `tuple[float, ...]`. There is no `make_context`,
+The package is `compute_*`
+functions that take a typed `{Output}Inputs` bundle
+(`from_defaults` fills `data.*_DEFAULT` with keyword leaf overrides).
+Scalars stay scalars; series are named-axis tensors in canonical key
+order. There is no `make_context`,
 no `set_*`, and no records-shaped setters. Helpers are named from output
 `series_id` / `output.compute.name`. Package shape: `api.py`, `internals.py`,
 `runtime.py`, `data.py`, `__init__.py`. The validation bundle is copied into

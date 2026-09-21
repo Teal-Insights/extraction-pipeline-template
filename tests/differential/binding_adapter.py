@@ -5,65 +5,13 @@ from __future__ import annotations
 import dataclasses
 import inspect
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from excel_grapher.core.address_keys import normalize_key
 
+from .output_specs import OutputCellSpec, outputs_from_sequences
+
 _RECORD_VALUE_FIELD = "OBS_VALUE"
-
-
-class _DataclassType(Protocol):
-    __dataclass_fields__: dict[str, object]
-
-
-def _inputs_annotation(function: Callable[..., object]) -> _DataclassType | None:
-    """Return the Inputs dataclass when ``compute`` takes a single ``inputs`` bundle."""
-    parameters = inspect.signature(function).parameters
-    if list(parameters) != ["inputs"]:
-        return None
-    annotation = function.__annotations__.get("inputs")
-    if isinstance(annotation, str):
-        annotation = getattr(function, "__globals__", {}).get(annotation)
-    if annotation is not None and dataclasses.is_dataclass(annotation):
-        return cast(_DataclassType, annotation)
-    return None
-
-
-def _compute_leaf_names(function: Callable[..., object]) -> list[str]:
-    """Leaf names for overlay kwargs, including generated Inputs fields."""
-    function_name = getattr(function, "__name__", type(function).__name__)
-    parameters = inspect.signature(function).parameters
-    for parameter in parameters.values():
-        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
-            raise TypeError(f"{function_name} has unsupported *args")
-        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
-            raise TypeError(f"{function_name} has unsupported **kwargs")
-    annotation = _inputs_annotation(function)
-    if annotation is not None:
-        return [str(name) for name in annotation.__dataclass_fields__]
-    return list(parameters)
-
-
-def call_compute(
-    pkg: object,
-    compute: Callable[..., object],
-    kwargs: Mapping[str, object],
-) -> object:
-    """Call ``compute`` with a constructed ``{Output}Inputs`` bundle.
-
-    Generated excel-grapher 22 ``compute_*`` functions take a single frozen
-    Inputs dataclass. ``from_defaults`` fills ``data.*_DEFAULT`` and accepts
-    the leaf-name overlay dict from ``input_kwargs_for_compute``.
-    """
-    annotation = compute.__annotations__.get("inputs")
-    if isinstance(annotation, str):
-        annotation = getattr(pkg, annotation, None)
-    if annotation is None or not hasattr(annotation, "from_defaults"):
-        raise TypeError(
-            f"{getattr(compute, '__name__', compute)}() expected an Inputs class "
-            "with from_defaults(), not leaf keywords"
-        )
-    return compute(annotation.from_defaults(**kwargs))
 
 
 def _cell_key(cell: Mapping[str, Any], key_fields: Sequence[str]) -> tuple[Any, ...]:
@@ -240,6 +188,88 @@ def excel_writes_for_inputs(
     return writes
 
 
+def series_inputs_from_excel_writes(
+    input_series: Sequence[Mapping[str, Any]],
+    writes: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Inverse of ``excel_writes_for_inputs``: Excel address writes → series overlays."""
+    index: dict[str, tuple[Mapping[str, Any], Mapping[str, Any]]] = {}
+    for series in input_series:
+        for cell in series["cells"]:
+            address = normalize_key(str(cell["address"]))
+            if address in index:
+                raise ValueError(
+                    f"input series {series['id']!r} reuses bound cell {address}"
+                )
+            index[address] = (series, cell)
+
+    overlays: dict[str, Any] = {}
+    for address, value in writes.items():
+        key = normalize_key(str(address))
+        try:
+            series, cell = index[key]
+        except KeyError as exc:
+            raise LookupError(
+                f"no bound input series covers Excel write {address}"
+            ) from exc
+        series_id = str(series["id"])
+        key_fields = tuple(series["key_fields"])
+        if not key_fields:
+            overlays[series_id] = value
+            continue
+        record = {field: cell["key"][field] for field in key_fields}
+        record[_RECORD_VALUE_FIELD] = value
+        existing = overlays.setdefault(series_id, [])
+        existing.append(record)
+    return {
+        series_id: tuple(value) if isinstance(value, list) else value
+        for series_id, value in overlays.items()
+    }
+
+
+def _resolve_annotation(function: Callable[..., object], name: str) -> object:
+    annotation = function.__annotations__.get(name)
+    if isinstance(annotation, str):
+        return getattr(function, "__globals__", {}).get(annotation)
+    return annotation
+
+
+def compute_leaf_names(function: Callable[..., object]) -> tuple[str, ...]:
+    """Leaf names required by ``compute``, including generated Inputs fields."""
+    parameters = inspect.signature(function).parameters
+    function_name = getattr(function, "__name__", type(function).__name__)
+    if list(parameters) == ["inputs"]:
+        annotation = _resolve_annotation(function, "inputs")
+        if annotation is not None and dataclasses.is_dataclass(annotation):
+            return tuple(field.name for field in dataclasses.fields(annotation))
+    names: list[str] = []
+    for name, parameter in parameters.items():
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            raise TypeError(f"{function_name} has unsupported *args")
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            raise TypeError(f"{function_name} has unsupported **kwargs")
+        names.append(name)
+    return tuple(names)
+
+
+def call_compute(
+    pkg: object, compute: Callable[..., object], kwargs: Mapping[str, object]
+) -> object:
+    """Call ``compute`` with a constructed ``{Output}Inputs`` bundle."""
+    annotation = compute.__annotations__.get("inputs")
+    if isinstance(annotation, str):
+        annotation = getattr(pkg, annotation, None) or getattr(
+            compute, "__globals__", {}
+        ).get(annotation)
+    if annotation is None or not hasattr(annotation, "from_defaults"):
+        compute_name = getattr(compute, "__name__", type(compute).__name__)
+        raise TypeError(
+            f"{compute_name}() expected an Inputs class with from_defaults(), "
+            "not leaf keywords"
+        )
+    return compute(annotation.from_defaults(**kwargs))
+
+
 def input_kwargs_for_compute(
     function: Callable[..., object],
     data: object,
@@ -248,13 +278,14 @@ def input_kwargs_for_compute(
     input_series: Sequence[Mapping[str, Any]] | None = None,
     scalar_input_keys: frozenset[str] | None = None,
 ) -> dict[str, object]:
-    """Build keyword args for an inverted-tree ``compute_*`` function.
+    """Build leaf kwargs for an inverted-tree ``compute_*`` function.
 
-    When ``input_series`` is provided, matrix series overlay ``data.*_DEFAULT``
-    sequences at catalog index, or named-axis series by coordinate. Otherwise
-    dashboard scalars come from ``scalar_input_keys`` and required arrays come
-    from ``data`` defaults.
-    Constant kwargs that already have generated defaults are omitted.
+    When the signature is a single ``inputs`` parameter whose annotation is an
+    Inputs dataclass, walk those fields (excel-grapher 22). Otherwise walk
+    keyword-only leaf parameters. Overlay ``data.*_DEFAULT`` sequences at
+    catalog index, or named-axis series by coordinate. Constant kwargs that
+    already have generated defaults are omitted so ``from_defaults`` can fill
+    them.
     """
     series_by_id = (
         {str(series["id"]): series for series in input_series}
@@ -265,8 +296,9 @@ def input_kwargs_for_compute(
     kwargs: dict[str, object] = {}
     function_name = getattr(function, "__name__", type(function).__name__)
     parameters = inspect.signature(function).parameters
-    uses_inputs_bundle = _inputs_annotation(function) is not None
-    for name in _compute_leaf_names(function):
+    bundled = list(parameters) == ["inputs"]
+    for name in compute_leaf_names(function):
+        parameter = parameters.get(name)
         series = series_by_id.get(name)
         if series is not None:
             if series["key_fields"]:
@@ -298,12 +330,16 @@ def input_kwargs_for_compute(
                 )
             kwargs[name] = inputs[name]
             continue
-        if not uses_inputs_bundle:
-            parameter = parameters[name]
-            if parameter.default is not inspect.Parameter.empty:
-                continue
+        if (
+            not bundled
+            and parameter is not None
+            and parameter.default is not inspect.Parameter.empty
+        ):
+            continue
         attr = _default_attr_name(name)
         if not hasattr(data, attr):
+            if bundled:
+                continue
             module_name = getattr(data, "__name__", type(data).__name__)
             raise TypeError(
                 f"{function_name} required parameter {name!r} is not a "
@@ -311,3 +347,53 @@ def input_kwargs_for_compute(
             )
         kwargs[name] = getattr(data, attr)
     return kwargs
+
+
+def _catalog_order_values(result: object) -> object:
+    """Normalize a ``compute_*`` return for catalog zip or named-series lookup.
+
+    Inverted-tree scalars stay scalars (``str``, ``float``); sequences stay
+    sequences; named-axis series stay tensors. ``str``/``bytes`` are one
+    observation, not character sequences.
+    """
+    if (
+        not isinstance(result, (str, bytes, Sequence))
+        and getattr(result, "domain", None) is not None
+    ):
+        return result
+    if isinstance(result, (str, bytes)) or not isinstance(result, Sequence):
+        return (result,)
+    return result
+
+
+def compute_outputs_for_writes(
+    api: object,
+    data: object,
+    *,
+    excel_writes: Mapping[str, Any],
+    input_series: Sequence[Mapping[str, Any]],
+    output_specs: tuple[OutputCellSpec, ...],
+) -> dict[str, Any]:
+    """Call each unique ``compute_*`` with binding-mapped kwargs; zip results."""
+    series_inputs = series_inputs_from_excel_writes(input_series, excel_writes)
+    shocked_ids = frozenset(series_inputs)
+    shocked_series = [
+        series for series in input_series if str(series["id"]) in shocked_ids
+    ]
+    values_by_compute: dict[str, object] = {}
+    for spec in output_specs:
+        if spec.compute in values_by_compute:
+            continue
+        function = getattr(api, spec.compute)
+        kwargs = input_kwargs_for_compute(
+            function,
+            data,
+            inputs=series_inputs,
+            input_series=shocked_series,
+        )
+        if list(inspect.signature(function).parameters) == ["inputs"]:
+            raw = call_compute(api, function, kwargs)
+        else:
+            raw = function(**kwargs)
+        values_by_compute[spec.compute] = _catalog_order_values(raw)
+    return outputs_from_sequences(output_specs, values_by_compute)

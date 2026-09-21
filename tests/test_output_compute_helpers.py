@@ -1,4 +1,4 @@
-"""Output compute helpers (series-bindings schema 1.17.0).
+"""Output compute helpers (series-bindings schema 1.19.0).
 
 When an internals helper covers a published output series' leaves, the series
 declares ``output.compute.helper`` so generated ``compute_*`` calls the helper
@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from excel_grapher.series_bindings import CURRENT_SCHEMA_VERSION
 
 from src.codegen_cache import OPTIONAL_GENERATED_MODULES, write_generated_modules
 
@@ -28,17 +29,7 @@ SKILL_CATALOG = (
 
 def test_skill_catalog_declares_a_schema_version() -> None:
     catalog = yaml.safe_load(SKILL_CATALOG.read_text(encoding="utf-8"))
-    assert isinstance(catalog["schema_version"], str)
-    assert catalog["schema_version"]
-    major, minor, patch = (int(part) for part in catalog["schema_version"].split("."))
-    assert (major, minor, patch) >= (1, 17, 0)
-
-
-def test_skill_catalog_uses_empty_input_block() -> None:
-    catalog = yaml.safe_load(SKILL_CATALOG.read_text(encoding="utf-8"))
-    (series,) = catalog["inputs"]["series"]
-    assert series["input"] == {}
-    assert "setter" not in series["input"]
+    assert catalog["schema_version"] == CURRENT_SCHEMA_VERSION
 
 
 def test_optional_generated_modules_include_output_leaves(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ and (when needed) `constants.bindings.yaml` here.
 
 Bootstrap extract (`--extract-graph` / `--stop-after-stage extract`) is graph-first: empty `series: []` placeholder shards are fine so you can review `artifacts/dependency-graph/` before bindings exist. excel-grapher 5.1.4+ also loads and merges those placeholders (including divergent `concept_scheme` blocks). Author real series before export so the public API and leaf coverage are complete.
 
-Use schema version `1.17.0` and the vendored skill in [.agents/skills/author-bindings](../.agents/skills/author-bindings/SKILL.md). Prefer authoring from an extracted graph rather than guessing sheet geometry up front.
+Use schema version `1.19.0` and the vendored skill in [.agents/skills/author-bindings](../.agents/skills/author-bindings/SKILL.md). Prefer authoring from an extracted graph rather than guessing sheet geometry up front.
 
 ## Constant bindings (reader-only leaves)
 
@@ -20,7 +20,7 @@ Put constant series in `constants.bindings.yaml` (or any mergeable
 `constant: {}` instead of `input` / `output` / `internal`:
 
 ```yaml
-schema_version: 1.17.0
+schema_version: 1.19.0
 series:
   - id: shock_year_anchor
     sheet: Engine
@@ -40,8 +40,8 @@ series:
 |---|---|
 | Leaf-only | `data_range` must intersect graph **leaves** (inverse of `internal`, which requires formula nodes). Non-leaf overlap → `non_leaf_constant_overlap`; no leaf overlap → `no_leaf_constant_targets`. |
 | Exclusive | Mutually exclusive with `input`, `output`, and `internal` on the same series. |
-| Codegen | Names the leaf for inverted-tree export: values land in `data.py`. Optional `constant.reader.name` is gone; inverted-tree does not emit public readers or extra `compute_*` for constants. |
-| Mutability | Values still live in `data.py`; there is no public write surface. |
+| Codegen | Names the leaf for inverted-tree export: values land in `data.py` and as defaulted `{Output}Inputs.from_defaults(...)` fields. Optional `constant.reader.name` is gone; inverted-tree does not emit public readers or extra `compute_*` for constants. |
+| Mutability | Values still live in `data.py` and as Inputs defaults; there is no public write surface. |
 | Validate | `validate_series_bindings(...)`, then `derive_constant_series(...)`. Include `constant` when running `scripts.binding_resolution_audit`. |
 
 **Leaf classification vs constant bindings.** `CONSTRAINTS` with a single-value
@@ -69,7 +69,7 @@ Synthetic example: [tests/fixtures/synthetic/constants.bindings.yaml](../tests/f
 
 When an internals helper covers a published output series' leaves, declare
 `output.compute.helper` so generated `compute_*` calls the helper from record
-dims instead of `xl_cell(address)` (excel-grapher schema 1.10.0+):
+dims instead of `xl_cell(address)` (excel-grapher schema 1.13.0+):
 
 ```yaml
 output:
@@ -123,18 +123,18 @@ but fail at output/input codegen:
    - a **richer key** that includes the measure dimension (common for
      internals that triangulate the whole triplet table).
 
-   When you shard, choose `output.compute.name` / series `id`
+   When you shard, choose `output.compute.name` / input series `id`
    deliberately:
 
    | Choice | When | Effect |
    |---|---|---|
-   | **Share** the same name across shards | Shards are complementary slices of one logical public series (e.g. Gap columns for 2050 / 2075 that should become one `compute_gap_milestones`) | Export merges shards into one public function |
+   | **Share** the same name / id across shards | Shards are complementary slices of one logical public series (e.g. Gap columns for 2050 / 2075 that should become one `compute_gap_milestones`) | Export merges shards into one public function |
    | **Uniquify** per shard | Each shard is a distinct scenario / engine path (e.g. Paris vs Moderate expenditure rows on separate sheets) | Each path keeps its own `output.compute.name` / input series id |
 
-   Schema 1.14.0+ uniquifies complementary input shards by series `id` (list
-   `data_range`), not by setter name. Empty `input: {}` marks an editable leaf;
-   extra `setter` / `reader` keys are rejected. Callers pass those series as
-   `{Output}Inputs.from_defaults(...)` fields into `compute_*`.
+   Complementary input shards share a series `id` (schema 1.14.0+); `input: {}`
+   marks them as editable leaves. Extra `setter` / `reader` keys are rejected.
+   Callers pass those series as `{Output}Inputs.from_defaults(...)` fields into
+   `compute_*`.
 
    Sharing a name across distinct engine paths is the failure mode: export
    merges the colliding definitions, so most scenario paths become

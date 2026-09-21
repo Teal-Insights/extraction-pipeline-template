@@ -12,7 +12,7 @@ import fastpyxl
 import pytest
 import yaml
 from excel_grapher.grapher.graph import DependencyGraph
-from excel_grapher.series_bindings import load_series_bindings
+from excel_grapher.series_bindings import CURRENT_SCHEMA_VERSION, load_series_bindings
 from excel_grapher.series_bindings.resolve import BindingDirection
 
 from scripts.regenerate_graph_cache import (
@@ -747,6 +747,7 @@ def test_binding_guidance_documents_unique_vs_shared_compute_names() -> None:
         assert "share" in lowered or "shared" in lowered
 
     assert "output.compute.name" in readme
+    assert "input series" in readme.lower() or "series `id`" in readme
     assert "compute_" in pitfalls
 
 
@@ -773,7 +774,7 @@ def test_binding_guidance_documents_constant_direction() -> None:
     for text in (pipeline_readme, conventions):
         lowered = text.lower()
         assert "read_" in lowered or "reader-only" in lowered
-        assert "set_" in lowered or "input.setter" in lowered
+        assert "input: {}" in text
         assert (
             "xl_cell" in lowered
             or "formula-body" in lowered
@@ -793,19 +794,6 @@ def test_excel_grapher_floor_is_22_0_0() -> None:
     assert "excel-grapher>=22.0.0" in pyproject
     assert '{ name = "excel-grapher", specifier = ">=22.0.0" }' in lockfile
     assert installed >= (22, 0, 0)
-
-
-def test_authored_bindings_have_no_input_setter() -> None:
-    """excel-grapher 1.16.0+ rejects extra setter/reader keys on input: {}."""
-    root = Path(__file__).resolve().parents[1]
-    for path in (
-        *root.joinpath("bindings").glob("*.bindings.yaml"),
-        *root.joinpath("tests/fixtures").rglob("*.bindings.yaml"),
-        *root.joinpath("templates").glob("*.yaml"),
-        *root.joinpath(".agents/skills/author-bindings/assets").glob("*.yaml"),
-    ):
-        text = path.read_text(encoding="utf-8")
-        assert "setter:" not in text, path
 
 
 def test_binding_resolution_audit_uses_public_apply_series_excludes() -> None:
@@ -838,6 +826,75 @@ def test_skill_catalog_documents_constants_sidecar() -> None:
     assert "input" not in constants[0]
     assert "output" not in constants[0]
     assert "internal" not in constants[0]
+
+
+def test_synthetic_fixtures_and_skill_catalog_use_current_schema() -> None:
+    """Authored shards and pedagogical assets stamp CURRENT_SCHEMA_VERSION."""
+    synthetic = REPO_ROOT / "tests" / "fixtures" / "synthetic"
+    for shard in (
+        "inputs.bindings.yaml",
+        "outputs.bindings.yaml",
+        "internals.bindings.yaml",
+        "constants.bindings.yaml",
+    ):
+        payload = yaml.safe_load((synthetic / shard).read_text(encoding="utf-8"))
+        assert payload["schema_version"] == CURRENT_SCHEMA_VERSION
+    shared = yaml.safe_load(
+        (
+            REPO_ROOT
+            / "tests"
+            / "fixtures"
+            / "bindings_shared_time_period"
+            / "internals.bindings.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    assert shared["schema_version"] == CURRENT_SCHEMA_VERSION
+    catalog = yaml.safe_load(
+        (AUTHOR_BINDINGS_SKILL / "assets" / "catalog.example.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    measure = yaml.safe_load(
+        (AUTHOR_BINDINGS_SKILL / "assets" / "measure-shards.example.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert catalog["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert measure["schema_version"] == CURRENT_SCHEMA_VERSION
+
+
+def test_synthetic_fixtures_load_on_current_excel_grapher() -> None:
+    bindings = load_series_bindings(REPO_ROOT / "tests" / "fixtures" / "synthetic")
+    assert bindings["schema_version"] == CURRENT_SCHEMA_VERSION
+    series_by_id = {series["id"]: series for series in bindings["series"]}
+    assert series_by_id["input_rate"]["input"] == {}
+    assert "setter" not in series_by_id["input_rate"]["input"]
+
+
+def test_authored_yaml_has_no_input_setter_blocks() -> None:
+    roots = (
+        REPO_ROOT / "bindings",
+        REPO_ROOT / "tests" / "fixtures",
+        REPO_ROOT / "templates",
+        AUTHOR_BINDINGS_SKILL / "assets",
+    )
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*.yaml"):
+            text = path.read_text(encoding="utf-8")
+            assert "setter:" not in text, path
+
+
+def test_skill_catalog_uses_empty_input_block() -> None:
+    catalog = yaml.safe_load(
+        (AUTHOR_BINDINGS_SKILL / "assets" / "catalog.example.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    inputs = catalog["inputs"]["series"]
+    assert inputs[0]["input"] == {}
+    assert "setter" not in inputs[0]["input"]
 
 
 def test_findings_from_resolution_flags_partial_bind_and_empty_public() -> None:
@@ -898,6 +955,33 @@ def test_findings_from_resolution_flags_partial_bind_and_empty_public() -> None:
     assert any(
         finding.code == "empty_public_series" and finding.severity == "warning"
         for finding in empty
+    )
+
+    empty_input = findings_from_resolution(
+        {
+            "series_id": "missing_input",
+            "ok": True,
+            "requires_address": False,
+            "leaves": [],
+            "issues": [
+                {
+                    "level": "warning",
+                    "code": "no_resolved_cells",
+                    "message": "No resolved input cells",
+                    "series_id": "missing_input",
+                    "address": None,
+                }
+            ],
+        },
+        direction="input",
+        series={
+            "id": "missing_input",
+            "input": {},
+        },
+    )
+    assert any(
+        finding.code == "empty_public_series" and finding.severity == "warning"
+        for finding in empty_input
     )
 
 
