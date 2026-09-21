@@ -867,8 +867,9 @@ def test_synthetic_fixtures_load_on_current_excel_grapher() -> None:
     bindings = load_series_bindings(REPO_ROOT / "tests" / "fixtures" / "synthetic")
     assert bindings["schema_version"] == CURRENT_SCHEMA_VERSION
     series_by_id = {series["id"]: series for series in bindings["series"]}
-    assert series_by_id["input_rate"]["input"] == {}
-    assert "setter" not in series_by_id["input_rate"]["input"]
+    input_block = series_by_id["input_rate"]["input"]
+    assert "setter" not in input_block
+    assert input_block["domain"]["real_between"] == {"min": 0.0, "max": 100.0}
 
 
 def test_authored_yaml_has_no_input_setter_blocks() -> None:
@@ -886,15 +887,15 @@ def test_authored_yaml_has_no_input_setter_blocks() -> None:
             assert "setter:" not in text, path
 
 
-def test_skill_catalog_uses_empty_input_block() -> None:
+def test_skill_catalog_input_has_no_setter() -> None:
     catalog = yaml.safe_load(
         (AUTHOR_BINDINGS_SKILL / "assets" / "catalog.example.yaml").read_text(
             encoding="utf-8"
         )
     )
-    inputs = catalog["inputs"]["series"]
-    assert inputs[0]["input"] == {}
-    assert "setter" not in inputs[0]["input"]
+    input_block = catalog["inputs"]["series"][0]["input"]
+    assert "setter" not in input_block
+    assert input_block["domain"]["real_between"] == {"min": 0.0, "max": 100.0}
 
 
 def test_findings_from_resolution_flags_partial_bind_and_empty_public() -> None:
