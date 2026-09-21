@@ -28,6 +28,7 @@ from src.dependency_graph_viz import (
     write_dependency_graph_site,
 )
 from src.graph_cache import get_or_build_dependency_graph
+from src.input_domain_dtype import require_input_domain_dtype_consistency
 from src.internal_binding_coverage import InternalBindingCoverageReport
 from src.internal_bindings import (
     BindingKeyValue,
@@ -508,6 +509,7 @@ def resolve_pipeline_bindings(
         series_bindings: WorkbookSeriesBindings = load_series_bindings(
             config.bindings_path
         )
+        require_input_domain_dtype_consistency(series_bindings)
 
     with stage("validate_series_bindings"):
         validation_result = get_or_build_bindings_validation(
