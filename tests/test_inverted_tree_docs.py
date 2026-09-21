@@ -100,7 +100,7 @@ def test_inverted_tree_migration_names_live_path_and_grapher_floor() -> None:
     assert "annotate" in text
     assert "compute_*" in text
     assert "FormulaEvaluator" in text
-    assert "excel-grapher>=12.7.1" in text
+    assert "excel-grapher>=22.0.0" in text
     assert "extract → export → validate → annotate → document" in text
     assert "extract → export → annotate → validate → document" not in text
     assert "compare_cluster_variation_modes" not in text.split("Do not keep")[0]

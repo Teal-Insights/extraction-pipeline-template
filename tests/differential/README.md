@@ -102,8 +102,10 @@ itself a differential signal about extraction coverage.
 3. **`inputs_for_excel(scenario)`** — map each scenario to graph cell writes
    (Excel addresses). The graph driver sets nodes by those addresses; keep the
    hook name.
-4. **`mvp_outputs_for_scenario(api, scenario)`** — call keyword-only `compute_*`
-   and return `{label: value}`.
+4. **`mvp_outputs_for_scenario(api, scenario)`** — wrap leaf kwargs in
+   `{Output}Inputs.from_defaults(...)`, pass that bundle to `compute_*`, and
+   return `{label: value}`. Do not call `compute_*(country_name=..., ...)`;
+   excel-grapher 22 helpers take a single Inputs dataclass.
 
 Optional fifth hook:
 
@@ -144,7 +146,7 @@ Prefer building output specs from derived output series
 - `specs_from_output_series(...)` → one `OutputCellSpec` per bound cell
 
 Graph outputs are keyed by **address**; MVP outputs by **label**. Map
-`compute_*` tuple results onto those labels in `mvp_outputs_for_scenario()`.
+`compute_*` results onto those labels in `mvp_outputs_for_scenario()`.
 
 ### Crash attribution and reports
 

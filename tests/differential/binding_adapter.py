@@ -2,13 +2,68 @@
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from excel_grapher.core.address_keys import normalize_key
 
 _RECORD_VALUE_FIELD = "OBS_VALUE"
+
+
+class _DataclassType(Protocol):
+    __dataclass_fields__: dict[str, object]
+
+
+def _inputs_annotation(function: Callable[..., object]) -> _DataclassType | None:
+    """Return the Inputs dataclass when ``compute`` takes a single ``inputs`` bundle."""
+    parameters = inspect.signature(function).parameters
+    if list(parameters) != ["inputs"]:
+        return None
+    annotation = function.__annotations__.get("inputs")
+    if isinstance(annotation, str):
+        annotation = getattr(function, "__globals__", {}).get(annotation)
+    if annotation is not None and dataclasses.is_dataclass(annotation):
+        return cast(_DataclassType, annotation)
+    return None
+
+
+def _compute_leaf_names(function: Callable[..., object]) -> list[str]:
+    """Leaf names for overlay kwargs, including generated Inputs fields."""
+    function_name = getattr(function, "__name__", type(function).__name__)
+    parameters = inspect.signature(function).parameters
+    for parameter in parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            raise TypeError(f"{function_name} has unsupported *args")
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            raise TypeError(f"{function_name} has unsupported **kwargs")
+    annotation = _inputs_annotation(function)
+    if annotation is not None:
+        return [str(name) for name in annotation.__dataclass_fields__]
+    return list(parameters)
+
+
+def call_compute(
+    pkg: object,
+    compute: Callable[..., object],
+    kwargs: Mapping[str, object],
+) -> object:
+    """Call ``compute`` with a constructed ``{Output}Inputs`` bundle.
+
+    Generated excel-grapher 22 ``compute_*`` functions take a single frozen
+    Inputs dataclass. ``from_defaults`` fills ``data.*_DEFAULT`` and accepts
+    the leaf-name overlay dict from ``input_kwargs_for_compute``.
+    """
+    annotation = compute.__annotations__.get("inputs")
+    if isinstance(annotation, str):
+        annotation = getattr(pkg, annotation, None)
+    if annotation is None or not hasattr(annotation, "from_defaults"):
+        raise TypeError(
+            f"{getattr(compute, '__name__', compute)}() expected an Inputs class "
+            "with from_defaults(), not leaf keywords"
+        )
+    return compute(annotation.from_defaults(**kwargs))
 
 
 def _cell_key(cell: Mapping[str, Any], key_fields: Sequence[str]) -> tuple[Any, ...]:
@@ -133,11 +188,9 @@ def input_kwargs_for_compute(
     dashboard_keys = scalar_input_keys or frozenset()
     kwargs: dict[str, object] = {}
     function_name = getattr(function, "__name__", type(function).__name__)
-    for name, parameter in inspect.signature(function).parameters.items():
-        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
-            raise TypeError(f"{function_name} has unsupported *args")
-        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
-            raise TypeError(f"{function_name} has unsupported **kwargs")
+    parameters = inspect.signature(function).parameters
+    uses_inputs_bundle = _inputs_annotation(function) is not None
+    for name in _compute_leaf_names(function):
         series = series_by_id.get(name)
         if series is not None:
             if series["key_fields"]:
@@ -169,8 +222,10 @@ def input_kwargs_for_compute(
                 )
             kwargs[name] = inputs[name]
             continue
-        if parameter.default is not inspect.Parameter.empty:
-            continue
+        if not uses_inputs_bundle:
+            parameter = parameters[name]
+            if parameter.default is not inspect.Parameter.empty:
+                continue
         attr = _default_attr_name(name)
         if not hasattr(data, attr):
             module_name = getattr(data, "__name__", type(data).__name__)

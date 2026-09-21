@@ -776,10 +776,26 @@ def inputs_for_excel(scenario: Scenario) -> dict[str, Any]:
 
 
 def mvp_outputs_for_scenario(api: ModuleType, scenario: Scenario) -> dict[str, Any]:
-    """Call keyword-only ``compute_*`` helpers and return ``{label: value}``."""
+    """Call ``compute_*`` with ``{Output}Inputs.from_defaults(...)`` and return ``{label: value}``.
+
+    Generated excel-grapher 22 helpers take a single frozen Inputs bundle, not
+    leaf kwargs. Author workbook-specific hooks like::
+
+        model = importlib.import_module(f"{api.__package__}.model")
+        bundle = model.OutputBaselineInputs.from_defaults(
+            country_name=inputs.country_name,
+            growth_baseline=growth_baseline,
+        )
+        api.compute_output_baseline(bundle)
+
+    ``tests.differential.binding_adapter.call_compute`` wraps the same pattern
+    for the generic adapter: build a leaf-name kwargs dict, then
+    ``compute(Inputs.from_defaults(**kwargs))``.
+    """
     raise NotImplementedError(
-        "Author mvp_outputs_for_scenario() to call keyword-only compute_* "
-        "helpers and map tuple results onto output_cell_labels()."
+        "Author mvp_outputs_for_scenario() to wrap leaf kwargs in "
+        "{Output}Inputs.from_defaults(...) and pass that bundle to compute_*, "
+        "then map results onto output_cell_labels()."
     )
 
 

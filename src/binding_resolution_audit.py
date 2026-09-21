@@ -81,10 +81,7 @@ def _series_by_id(bindings: WorkbookSeriesBindings) -> dict[str, dict[str, Any]]
 
 def _is_public_api_series(series: dict[str, Any], direction: BindingDirection) -> bool:
     if direction == "input":
-        input_block = series.get("input")
-        return isinstance(input_block, dict) and isinstance(
-            input_block.get("setter"), dict
-        )
+        return isinstance(series.get("input"), dict)
     if direction == "output":
         output_block = series.get("output")
         return isinstance(output_block, dict) and isinstance(
