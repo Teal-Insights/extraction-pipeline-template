@@ -142,13 +142,15 @@ Prefer building output specs from derived output series
 [`output_specs.py`](output_specs.py):
 
 - `specs_from_output_series(...)` → one `OutputCellSpec` per bound cell
-- `compute_outputs_for_writes(...)` → call each unique `compute_*` and zip
-  catalog-order values onto those labels. Scalar returns (`str`, `float`)
-  are one observation, not character sequences.
+- `compute_outputs_for_writes(...)` → call each unique `compute_*` and map
+  results onto those labels. Scalar returns (`str`, `float`) are one
+  observation, not character sequences. Named-axis series are read by spec
+  keys.
 
 Graph outputs are keyed by **address**; MVP outputs by **label**. Prefer
-`compute_outputs_for_writes` from `mvp_outputs_for_scenario()` so 1-tuples and
-scalars both zip onto those labels.
+`compute_outputs_for_writes` from `mvp_outputs_for_scenario()` so scalars,
+1-tuples, sequences, and named-axis series all map onto those labels via
+`outputs_from_sequences()`.
 
 ### Crash attribution and reports
 
