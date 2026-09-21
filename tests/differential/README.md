@@ -146,7 +146,10 @@ Prefer building output specs from derived output series
 - `specs_from_output_series(...)` → one `OutputCellSpec` per bound cell
 
 Graph outputs are keyed by **address**; MVP outputs by **label**. Map
-`compute_*` results onto those labels in `mvp_outputs_for_scenario()`.
+`compute_*` results onto those labels in `mvp_outputs_for_scenario()`:
+sequence results in catalog order, or named-axis series by spec keys, via
+`outputs_from_sequences()`. Call `compute_*` with
+`{Output}Inputs.from_defaults(...)`, not leaf kwargs.
 
 ### Crash attribution and reports
 
