@@ -778,8 +778,9 @@ def inputs_for_excel(scenario: Scenario) -> dict[str, Any]:
 def mvp_outputs_for_scenario(api: ModuleType, scenario: Scenario) -> dict[str, Any]:
     """Call ``compute_*`` with ``{Output}Inputs.from_defaults(...)`` and return ``{label: value}``."""
     raise NotImplementedError(
-        "Author mvp_outputs_for_scenario() to wrap leaf kwargs in "
-        "{Output}Inputs.from_defaults(...) then call compute_* and map "
+        "Author mvp_outputs_for_scenario() to call compute_* via "
+        "compute_outputs_for_writes (wrapping leaf kwargs in "
+        "{Output}Inputs.from_defaults(...)) and map catalog-order "
         "results onto output_cell_labels()."
     )
 

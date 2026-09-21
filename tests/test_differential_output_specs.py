@@ -207,3 +207,23 @@ def test_outputs_from_sequences_zips_catalog_order_for_sequences() -> None:
     values = outputs_from_sequences(specs, {"compute_gdp": (1.5, 2.5)})
 
     assert values == {"gdp[2030]": 1.5, "gdp[2031]": 2.5}
+
+
+def test_outputs_from_sequences_fail_closed_on_length_mismatch() -> None:
+    specs = (
+        OutputCellSpec(
+            label="rating_a",
+            address="Out!A1",
+            compute="compute_rating",
+            keys=(),
+        ),
+        OutputCellSpec(
+            label="rating_b",
+            address="Out!B1",
+            compute="compute_rating",
+            keys=(),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="compute_rating"):
+        outputs_from_sequences(specs, {"compute_rating": ("High",)})
