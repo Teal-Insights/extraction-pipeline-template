@@ -776,10 +776,11 @@ def inputs_for_excel(scenario: Scenario) -> dict[str, Any]:
 
 
 def mvp_outputs_for_scenario(api: ModuleType, scenario: Scenario) -> dict[str, Any]:
-    """Call keyword-only ``compute_*`` helpers and return ``{label: value}``."""
+    """Call ``compute_*`` with ``{Output}Inputs.from_defaults(...)`` and return ``{label: value}``."""
     raise NotImplementedError(
-        "Author mvp_outputs_for_scenario() to call keyword-only compute_* "
-        "helpers and map tuple results onto output_cell_labels()."
+        "Author mvp_outputs_for_scenario() to wrap leaf kwargs in "
+        "{Output}Inputs.from_defaults(...) then call compute_* and map "
+        "results onto output_cell_labels()."
     )
 
 
