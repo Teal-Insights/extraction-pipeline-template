@@ -779,7 +779,8 @@ def mvp_outputs_for_scenario(api: ModuleType, scenario: Scenario) -> dict[str, A
     """Call keyword-only ``compute_*`` helpers and return ``{label: value}``."""
     raise NotImplementedError(
         "Author mvp_outputs_for_scenario() to call keyword-only compute_* "
-        "helpers and map tuple results onto output_cell_labels()."
+        "helpers (via compute_outputs_for_writes) and map catalog-order "
+        "results onto output_cell_labels()."
     )
 
 

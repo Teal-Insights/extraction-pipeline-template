@@ -8,6 +8,8 @@ from typing import Any, cast
 
 from excel_grapher.core.address_keys import normalize_key
 
+from .output_specs import OutputCellSpec, outputs_from_tuple
+
 _RECORD_VALUE_FIELD = "OBS_VALUE"
 
 
@@ -110,6 +112,45 @@ def excel_writes_for_inputs(
     return writes
 
 
+def series_inputs_from_excel_writes(
+    input_series: Sequence[Mapping[str, Any]],
+    writes: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Inverse of ``excel_writes_for_inputs``: Excel address writes → series overlays."""
+    index: dict[str, tuple[Mapping[str, Any], Mapping[str, Any]]] = {}
+    for series in input_series:
+        for cell in series["cells"]:
+            address = normalize_key(str(cell["address"]))
+            if address in index:
+                raise ValueError(
+                    f"input series {series['id']!r} reuses bound cell {address}"
+                )
+            index[address] = (series, cell)
+
+    overlays: dict[str, Any] = {}
+    for address, value in writes.items():
+        key = normalize_key(str(address))
+        try:
+            series, cell = index[key]
+        except KeyError as exc:
+            raise LookupError(
+                f"no bound input series covers Excel write {address}"
+            ) from exc
+        series_id = str(series["id"])
+        key_fields = tuple(series["key_fields"])
+        if not key_fields:
+            overlays[series_id] = value
+            continue
+        record = {field: cell["key"][field] for field in key_fields}
+        record[_RECORD_VALUE_FIELD] = value
+        existing = overlays.setdefault(series_id, [])
+        existing.append(record)
+    return {
+        series_id: tuple(value) if isinstance(value, list) else value
+        for series_id, value in overlays.items()
+    }
+
+
 def input_kwargs_for_compute(
     function: Callable[..., object],
     data: object,
@@ -180,3 +221,43 @@ def input_kwargs_for_compute(
             )
         kwargs[name] = getattr(data, attr)
     return kwargs
+
+
+def _catalog_order_values(result: object) -> Sequence[Any]:
+    """Normalize a ``compute_*`` return to catalog-order values.
+
+    Inverted-tree scalars stay scalars (``str``, ``float``); series stay
+    sequences. ``str``/``bytes`` are one observation, not character sequences.
+    """
+    if isinstance(result, (str, bytes)) or not isinstance(result, Sequence):
+        return (result,)
+    return result
+
+
+def compute_outputs_for_writes(
+    api: object,
+    data: object,
+    *,
+    excel_writes: Mapping[str, Any],
+    input_series: Sequence[Mapping[str, Any]],
+    output_specs: tuple[OutputCellSpec, ...],
+) -> dict[str, Any]:
+    """Call each unique ``compute_*`` with binding-mapped kwargs; zip results."""
+    series_inputs = series_inputs_from_excel_writes(input_series, excel_writes)
+    shocked_ids = frozenset(series_inputs)
+    shocked_series = [
+        series for series in input_series if str(series["id"]) in shocked_ids
+    ]
+    values_by_compute: dict[str, Sequence[Any]] = {}
+    for spec in output_specs:
+        if spec.compute in values_by_compute:
+            continue
+        function = getattr(api, spec.compute)
+        kwargs = input_kwargs_for_compute(
+            function,
+            data,
+            inputs=series_inputs,
+            input_series=shocked_series,
+        )
+        values_by_compute[spec.compute] = _catalog_order_values(function(**kwargs))
+    return outputs_from_tuple(output_specs, values_by_compute)

@@ -42,6 +42,31 @@ def specs_from_output_series(
     return tuple(specs)
 
 
+def outputs_from_tuple(
+    specs: tuple[OutputCellSpec, ...],
+    values_by_compute: Mapping[str, Sequence[Any]],
+) -> dict[str, Any]:
+    """Zip catalog-order ``compute_*`` tuples onto specs sharing a compute name."""
+    grouped: dict[str, list[OutputCellSpec]] = {}
+    for spec in specs:
+        grouped.setdefault(spec.compute, []).append(spec)
+
+    values: dict[str, Any] = {}
+    for compute, compute_specs in grouped.items():
+        try:
+            result = values_by_compute[compute]
+        except KeyError as exc:
+            raise LookupError(f"no tuple result for {compute}") from exc
+        if len(result) != len(compute_specs):
+            raise ValueError(
+                f"{compute} returned {len(result)} value(s) for "
+                f"{len(compute_specs)} bound cell(s)"
+            )
+        for spec, value in zip(compute_specs, result, strict=True):
+            values[spec.label] = value
+    return values
+
+
 def outputs_from_records(
     specs: tuple[OutputCellSpec, ...],
     records_by_compute: Mapping[str, list[dict[str, Any]]],

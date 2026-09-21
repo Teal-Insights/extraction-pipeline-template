@@ -9,11 +9,13 @@ import pytest
 from excel_grapher.core.address_keys import normalize_key
 
 from tests.differential.binding_adapter import (
+    compute_outputs_for_writes,
     excel_writes_for_inputs,
     expressible_input_cells,
     input_kwargs_for_compute,
     overlay_series_values,
 )
+from tests.differential.output_specs import OutputCellSpec
 
 
 def _scalar(series_id: str, address: str) -> dict[str, Any]:
@@ -159,3 +161,91 @@ def test_input_kwargs_without_series_keep_data_defaults_for_arrays() -> None:
         "country_name": "France",
         "revenue_shocks": (0.0, 0.0, 0.0),
     }
+
+
+def _spec(label: str, address: str, compute: str) -> OutputCellSpec:
+    return OutputCellSpec(label=label, address=address, compute=compute, keys=())
+
+
+def test_compute_outputs_wraps_scalar_string_as_one_catalog_value() -> None:
+    def compute_external_dsa_risk_rating_signal() -> str:
+        return "High"
+
+    values = compute_outputs_for_writes(
+        SimpleNamespace(
+            compute_external_dsa_risk_rating_signal=compute_external_dsa_risk_rating_signal
+        ),
+        SimpleNamespace(),
+        excel_writes={},
+        input_series=(),
+        output_specs=(
+            _spec(
+                "external_dsa_risk_rating_signal",
+                "Chart Data!D10",
+                "compute_external_dsa_risk_rating_signal",
+            ),
+        ),
+    )
+    assert values == {"external_dsa_risk_rating_signal": "High"}
+
+
+def test_compute_outputs_wraps_scalar_float_as_one_catalog_value() -> None:
+    def compute_gdp() -> float:
+        return 1.5
+
+    values = compute_outputs_for_writes(
+        SimpleNamespace(compute_gdp=compute_gdp),
+        SimpleNamespace(),
+        excel_writes={},
+        input_series=(),
+        output_specs=(_spec("gdp", "Out!A1", "compute_gdp"),),
+    )
+    assert values == {"gdp": 1.5}
+
+
+def test_compute_outputs_fail_closed_when_scalar_covers_two_specs() -> None:
+    def compute_rating() -> str:
+        return "High"
+
+    with pytest.raises(ValueError, match="compute_rating"):
+        compute_outputs_for_writes(
+            SimpleNamespace(compute_rating=compute_rating),
+            SimpleNamespace(),
+            excel_writes={},
+            input_series=(),
+            output_specs=(
+                _spec("rating_a", "Out!A1", "compute_rating"),
+                _spec("rating_b", "Out!B1", "compute_rating"),
+            ),
+        )
+
+
+def test_compute_outputs_maps_one_tuple_onto_one_spec() -> None:
+    def compute_rating() -> tuple[str, ...]:
+        return ("High",)
+
+    values = compute_outputs_for_writes(
+        SimpleNamespace(compute_rating=compute_rating),
+        SimpleNamespace(),
+        excel_writes={},
+        input_series=(),
+        output_specs=(_spec("rating", "Out!A1", "compute_rating"),),
+    )
+    assert values == {"rating": "High"}
+
+
+def test_compute_outputs_zips_multi_cell_sequence() -> None:
+    def compute_gdp() -> tuple[float, ...]:
+        return (1.0, 2.0)
+
+    values = compute_outputs_for_writes(
+        SimpleNamespace(compute_gdp=compute_gdp),
+        SimpleNamespace(),
+        excel_writes={},
+        input_series=(),
+        output_specs=(
+            _spec("gdp[2030]", "Out!B1", "compute_gdp"),
+            _spec("gdp[2031]", "Out!C1", "compute_gdp"),
+        ),
+    )
+    assert values == {"gdp[2030]": 1.0, "gdp[2031]": 2.0}

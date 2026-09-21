@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from tests.differential.output_specs import (
     OutputCellSpec,
     outputs_from_records,
+    outputs_from_tuple,
     specs_from_output_series,
 )
 
@@ -131,3 +134,44 @@ def test_outputs_from_records_nulls_ambiguous_compute_key_collisions() -> None:
     assert values["paris[2030]"] is None
     assert values["moderate[2030]"] is None
     assert values["solo[2030]"] == 3.0
+
+
+def test_outputs_from_tuple_zips_catalog_order() -> None:
+    specs = (
+        OutputCellSpec(
+            label="gdp[2030]",
+            address="Out!B1",
+            compute="compute_gdp",
+            keys=(("TIME_PERIOD", 2030),),
+        ),
+        OutputCellSpec(
+            label="gdp[2031]",
+            address="Out!C1",
+            compute="compute_gdp",
+            keys=(("TIME_PERIOD", 2031),),
+        ),
+    )
+
+    values = outputs_from_tuple(specs, {"compute_gdp": (1.0, 2.0)})
+
+    assert values == {"gdp[2030]": 1.0, "gdp[2031]": 2.0}
+
+
+def test_outputs_from_tuple_fail_closed_on_length_mismatch() -> None:
+    specs = (
+        OutputCellSpec(
+            label="rating_a",
+            address="Out!A1",
+            compute="compute_rating",
+            keys=(),
+        ),
+        OutputCellSpec(
+            label="rating_b",
+            address="Out!B1",
+            compute="compute_rating",
+            keys=(),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="compute_rating"):
+        outputs_from_tuple(specs, {"compute_rating": ("High",)})
