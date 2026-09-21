@@ -22,6 +22,10 @@ inputs:
           name: set_input_rate
           record_contract: records
           strict: true
+        domain:
+          real_between:
+            min: 0.0
+            max: 100.0
       structure:
         measure:
           concept: OBS_VALUE
