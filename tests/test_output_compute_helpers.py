@@ -12,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-
 from excel_grapher.series_bindings import CURRENT_SCHEMA_VERSION
 
 from src.codegen_cache import OPTIONAL_GENERATED_MODULES, write_generated_modules
