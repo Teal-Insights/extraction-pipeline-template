@@ -145,7 +145,8 @@ Prefer building output specs from derived output series
 - `specs_from_output_series(...)` → one `OutputCellSpec` per bound cell
 
 Graph outputs are keyed by **address**; MVP outputs by **label**. Map
-`compute_*` Tensor / tuple results onto those labels in `mvp_outputs_for_scenario()`.
+`compute_*` Tensor / sequence results onto those labels in catalog order, or
+named-axis series by spec keys, via `outputs_from_sequences()`.
 
 ### Crash attribution and reports
 

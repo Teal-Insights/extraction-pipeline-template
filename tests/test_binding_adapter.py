@@ -183,6 +183,20 @@ def test_overlay_series_values_fail_closed_on_unknown_named_series_key() -> None
         )
 
 
+def test_overlay_series_values_fail_closed_on_key_fields_axis_mismatch() -> None:
+    series = {
+        "id": "revenue_shocks",
+        "key_fields": ["SCENARIO", "YEAR"],
+        "cells": _shocks()["cells"],
+    }
+    with pytest.raises(ValueError, match="key_fields"):
+        overlay_series_values(
+            series,
+            _shock_series((0.0, 0.0, 0.0)),
+            ({"SCENARIO": "base", "YEAR": 2035, "OBS_VALUE": 1.0},),
+        )
+
+
 def test_input_kwargs_fail_closed_on_non_record_matrix_overlay() -> None:
     def compute(*, revenue_shocks: tuple[float, ...]) -> tuple[float, ...]:
         return (1.0,)
