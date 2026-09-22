@@ -16,6 +16,7 @@ from src.package_materialize import (
     read_package_cache_keys,
 )
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
+from tests.fixtures.synthetic_pipeline import link_series_graph_template
 
 _SAMPLE_MODULES = {
     "__init__.py": "# init\n",
@@ -52,6 +53,7 @@ def _sample_config(repo_root: Path) -> PipelineConfig:
 
 
 def _prepare_repo(tmp_path: Path) -> PipelineConfig:
+    link_series_graph_template(tmp_path)
     config = _sample_config(tmp_path)
     config.workbook_path.parent.mkdir(parents=True, exist_ok=True)
     config.workbook_path.write_bytes(b"fake-xlsx")

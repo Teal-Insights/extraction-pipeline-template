@@ -38,6 +38,11 @@ addopts = "-v -p no:faulthandler -p no:cacheprovider"
 # Prefer fixing the code over adding noqa when cheap (e.g. typed attribute
 # access instead of getattr(..., "const")).
 
+[tool.ty.src]
+# Series-graph templates are copied into a generated package. Their relative
+# imports and ``tiny_dsa`` imports resolve only after that copy.
+exclude = ["templates"]
+
 [tool.ruff.format]
 # Keep formatted Python on LF so Windows checkouts cannot reintroduce the CRLF
 # bytes that `git diff --check` flags as trailing whitespace.

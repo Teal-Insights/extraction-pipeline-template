@@ -21,7 +21,9 @@ def main() -> int:
     backends = available_backends()
     backend = "formula_evaluator" if "formula_evaluator" in backends else "export"
     payload = bootstrap(backend=backend)
-    OUT.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    OUT.write_text(
+        json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
     print(f"wrote {OUT} (backend={backend})")
     return 0
 
