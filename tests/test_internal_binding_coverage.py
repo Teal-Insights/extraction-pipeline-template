@@ -9,6 +9,7 @@ import pytest
 from excel_grapher.series_bindings.types import WorkbookSeriesBindings
 
 from src.extraction_pipeline import build_pipeline_graph
+from src.graph_binding_coverage import GraphBindingCoverageError
 from src.internal_binding_coverage import (
     InternalBindingCoverageError,
     enforce_internal_binding_coverage,
@@ -284,11 +285,14 @@ def test_build_pipeline_graph_raises_when_validation_mode_is_error(
         bindings_path=bindings_path,
         internal_binding_validation_mode="error",
     )
-    with pytest.raises(InternalBindingCoverageError, match="Engine!B2"):
+    with pytest.raises(GraphBindingCoverageError, match="Engine!B2"):
         build_pipeline_graph(config)
 
 
 def test_workbook_internal_binding_coverage_gate() -> None:
+    from excel_grapher.series_bindings import load_series_bindings
+
+    from src.graph_cache import load_pipeline_dependency_graph
     from src.pipeline_config import load_pipeline_config, validate_pipeline_config
 
     config = load_pipeline_config()
@@ -299,5 +303,11 @@ def test_workbook_internal_binding_coverage_gate() -> None:
     except FileNotFoundError as exc:
         pytest.skip(f"Pipeline configuration is incomplete: {exc}")
 
-    with pytest.raises(InternalBindingCoverageError):
-        build_pipeline_graph(config)
+    graph, _cache_key = load_pipeline_dependency_graph(config)
+    bindings = load_series_bindings(config.bindings_path)
+    unbound = find_unbound_internal_formula_cells_from_manifest(
+        graph=graph,
+        bindings=bindings,
+        exempt_cells=config.internal_binding_exempt_cells,
+    )
+    assert unbound == ()
