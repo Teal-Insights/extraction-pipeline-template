@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from src.package_materialize import (
     adopt_codegen_cache_from_dist,
     materialize_package,
     read_package_cache_keys,
+    replace_dist_bindings,
 )
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
 from tests.fixtures.synthetic_pipeline import link_series_graph_template
@@ -110,6 +112,122 @@ def test_materialize_package_byte_identical_after_dist_wipe(tmp_path: Path) -> N
     assert read_package_cache_keys(config.dist_root) == PackageCacheKeys(
         codegen_key=codegen_key,
     )
+
+
+def test_materialize_package_replaces_dist_bindings_and_deletes_extras(
+    tmp_path: Path,
+) -> None:
+    config = _prepare_repo(tmp_path)
+    nested = config.bindings_path / "shards"
+    nested.mkdir()
+    (nested / "gap.bindings.yaml").write_text("series: []\n", encoding="utf-8")
+    (config.bindings_path / "outputs.bindings.yaml").write_text(
+        "series: [kept]\n", encoding="utf-8"
+    )
+    stale = config.dist_root / "bindings"
+    stale.mkdir(parents=True)
+    (stale / "obsolete.bindings.yaml").write_text("gone\n", encoding="utf-8")
+    stale_nested = stale / "old-shards"
+    stale_nested.mkdir()
+    (stale_nested / "retired.yaml").write_text("gone\n", encoding="utf-8")
+
+    codegen_key = "b" * 64
+    save_codegen_payload(
+        _SAMPLE_MODULES,
+        cache_key=codegen_key,
+        projection_cache_key="proj-key",
+    )
+    materialize_package(config, codegen_key=codegen_key)
+
+    dest = config.dist_root / "bindings"
+    assert (dest / "inputs.bindings.yaml").read_text(encoding="utf-8") == "series: []\n"
+    assert (dest / "outputs.bindings.yaml").read_text(encoding="utf-8") == (
+        "series: [kept]\n"
+    )
+    assert (dest / "shards" / "gap.bindings.yaml").read_text(encoding="utf-8") == (
+        "series: []\n"
+    )
+    assert not (dest / "obsolete.bindings.yaml").exists()
+    assert not stale_nested.exists()
+
+    (config.bindings_path / "outputs.bindings.yaml").unlink()
+    (config.bindings_path / "inputs.bindings.yaml").write_text(
+        "series: [updated]\n", encoding="utf-8"
+    )
+    (dest / "leftover.bindings.yaml").write_text("stale\n", encoding="utf-8")
+    materialize_package(config, codegen_key=codegen_key)
+
+    assert (dest / "inputs.bindings.yaml").read_text(encoding="utf-8") == (
+        "series: [updated]\n"
+    )
+    assert (dest / "shards" / "gap.bindings.yaml").is_file()
+    assert not (dest / "outputs.bindings.yaml").exists()
+    assert not (dest / "leftover.bindings.yaml").exists()
+
+
+def test_replace_dist_bindings_requires_a_directory(tmp_path: Path) -> None:
+    config = _prepare_repo(tmp_path)
+    shutil.rmtree(config.bindings_path)
+    config.bindings_path.write_text("not a directory\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="bindings directory not found"):
+        replace_dist_bindings(config)
+
+
+def test_replace_dist_bindings_refuses_overlapping_paths(tmp_path: Path) -> None:
+    config = _prepare_repo(tmp_path)
+    authored = config.bindings_path
+    same_path = replace(config, bindings_path=config.dist_root / "bindings")
+    (config.dist_root / "bindings").mkdir(parents=True)
+    shutil.copytree(authored, config.dist_root / "bindings", dirs_exist_ok=True)
+
+    with pytest.raises(ValueError, match="overlapping bindings path"):
+        replace_dist_bindings(same_path)
+    assert (same_path.bindings_path / "inputs.bindings.yaml").is_file()
+
+    nested_dest = replace(
+        config, dist_root=authored / "generated", bindings_path=authored
+    )
+    with pytest.raises(ValueError, match="overlapping bindings path"):
+        replace_dist_bindings(nested_dest)
+    assert (authored / "inputs.bindings.yaml").is_file()
+
+    nested_source = replace(
+        config,
+        bindings_path=config.dist_root / "bindings" / "authored",
+    )
+    nested_source.bindings_path.mkdir(parents=True)
+    (nested_source.bindings_path / "inputs.bindings.yaml").write_text(
+        "series: []\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="overlapping bindings path"):
+        replace_dist_bindings(nested_source)
+    assert (nested_source.bindings_path / "inputs.bindings.yaml").is_file()
+
+
+def test_replace_dist_bindings_replaces_symlink_and_file_destinations(
+    tmp_path: Path,
+) -> None:
+    config = _prepare_repo(tmp_path)
+    outside = tmp_path / "outside-bindings"
+    outside.mkdir()
+    (outside / "keep.yaml").write_text("keep\n", encoding="utf-8")
+    dest = config.dist_root / "bindings"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.symlink_to(outside, target_is_directory=True)
+
+    replace_dist_bindings(config)
+
+    assert dest.is_dir()
+    assert not dest.is_symlink()
+    assert (dest / "inputs.bindings.yaml").is_file()
+    assert (outside / "keep.yaml").read_text(encoding="utf-8") == "keep\n"
+
+    shutil.rmtree(dest)
+    dest.write_text("not a directory\n", encoding="utf-8")
+    replace_dist_bindings(config)
+
+    assert (dest / "inputs.bindings.yaml").read_text(encoding="utf-8") == "series: []\n"
 
 
 def test_materialize_package_fails_loudly_on_missing_codegen_payload(
