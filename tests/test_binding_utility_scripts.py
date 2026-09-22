@@ -690,7 +690,9 @@ def test_internal_binding_burndown_docstring_is_a_coverage_worklist() -> None:
 
     assert burndown_doc is not None
     assert "Those ranges are a coverage worklist." in burndown_doc
-    assert "one-cell range is not a reason to author ``layout: scalar``." in burndown_doc
+    assert (
+        "one-cell range is not a reason to author ``layout: scalar``." in burndown_doc
+    )
 
 
 def test_catalog_emitter_and_prompt_are_removed() -> None:

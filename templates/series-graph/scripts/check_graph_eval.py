@@ -28,21 +28,19 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
             for k, v in pv.items():
                 rk = k if k in jv else str(k)
                 if rk not in jv or not _close(float(v), float(jv[rk])):
-                    errors.append(f"{key}[{k}]: export={v} formula_evaluator={jv.get(rk)}")
-        else:
-            if jv is None or (
-                isinstance(pv, (int, float))
-                and isinstance(jv, (int, float))
-                and not _close(float(pv), float(jv))
-            ):
-                if not (isinstance(pv, str) and pv == jv):
-                    if not (
-                        isinstance(pv, (int, float))
-                        and isinstance(jv, (int, float))
-                        and _close(float(pv), float(jv))
-                    ):
-                        if pv != jv:
-                            errors.append(f"{key}: export={pv} formula_evaluator={jv}")
+                    errors.append(
+                        f"{key}[{k}]: export={v} formula_evaluator={jv.get(rk)}"
+                    )
+            continue
+        numeric = isinstance(pv, (int, float)) and isinstance(jv, (int, float))
+        close = numeric and _close(float(pv), float(jv))
+        if (
+            (jv is None or (numeric and not close))
+            and not (isinstance(pv, str) and pv == jv)
+            and not close
+            and pv != jv
+        ):
+            errors.append(f"{key}: export={pv} formula_evaluator={jv}")
     return errors
 
 
