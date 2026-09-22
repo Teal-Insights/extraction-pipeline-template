@@ -16,6 +16,7 @@ from src.codegen_cache import (
     load_codegen_payload,
     write_generated_modules,
 )
+from tests.conftest import install_series_graph_template
 from tests.fixtures.test_state import REPO_CODEGEN_CACHE_DIR
 
 _SAMPLE_MODULES = {
@@ -239,6 +240,7 @@ def test_run_export_stage_skips_generate_modules_on_cache_hit(
     config.graph_output_dir = tmp_path / "artifacts"
     config.dist_metadata = MagicMock()
     config.graph_output_dir.mkdir()
+    install_series_graph_template(tmp_path)
 
     graph_result = MagicMock()
     graph_result.graph = MagicMock()

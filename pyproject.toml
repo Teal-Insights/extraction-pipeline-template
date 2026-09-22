@@ -26,6 +26,15 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-v -p no:faulthandler -p no:cacheprovider"
 
+[tool.ty.src]
+# Series-graph templates are copied into a generated package. Their relative
+# imports resolve only after that copy, so they are not part of this project.
+exclude = ["templates"]
+
+[tool.ruff]
+# Same scaffold as the ty exclude above: not pipeline source.
+extend-exclude = ["templates"]
+
 [tool.ruff.lint]
 # Ruff 0.16+ expanded defaults (413 rules): see
 # https://docs.astral.sh/ruff/default-rules/

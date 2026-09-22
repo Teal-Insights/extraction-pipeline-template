@@ -16,6 +16,7 @@ from src.package_materialize import (
     read_package_cache_keys,
 )
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
+from tests.conftest import install_series_graph_template
 
 _SAMPLE_MODULES = {
     "__init__.py": "# init\n",
@@ -76,6 +77,7 @@ def _prepare_repo(tmp_path: Path) -> PipelineConfig:
         (tmp_path / "tests" / "differential" / name).write_text(
             f"# {name}\n", encoding="utf-8"
         )
+    install_series_graph_template(tmp_path)
     return config
 
 

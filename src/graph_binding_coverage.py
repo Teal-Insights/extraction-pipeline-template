@@ -74,9 +74,7 @@ def series_data_range_addresses(
             expanded: list[str] = []
             for data_range in series_data_ranges(series):
                 expanded.extend(
-                    expand_data_range_for_graph(
-                        graph, data_range, workbook=workbook
-                    )
+                    expand_data_range_for_graph(graph, data_range, workbook=workbook)
                 )
             expanded = apply_series_excludes(expanded, series)
         except (ValueError, TypeError):
