@@ -24,13 +24,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tiny_dsa.graph_api import (  # noqa: E402
+from tiny_dsa.graph_api import (
     GraphApiError,
     available_backends,
     bootstrap,
     evaluate,
 )
-from tiny_dsa.graph_schema import BackendName  # noqa: E402
+from tiny_dsa.graph_schema import BackendName
 
 STATIC_ROOT = ROOT / "assets" / "graph"
 
@@ -65,17 +65,17 @@ def _parse_backend(raw: Any) -> BackendName:
 class GraphApiHandler(BaseHTTPRequestHandler):
     server_version = "TinyDsaGraphAPI/0.1"
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
-        sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
+    def log_message(self, format: str, *args: Any) -> None:
+        sys.stderr.write(f"{self.address_string()} - {format % args}\n")
 
-    def do_OPTIONS(self) -> None:  # noqa: N802
+    def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in ("/api/health", "/api/health/"):
             from tiny_dsa.graph_api import available_backends
@@ -96,13 +96,13 @@ class GraphApiHandler(BaseHTTPRequestHandler):
                 _json_response(self, 200, bootstrap(backend=backend))
             except GraphApiError as exc:
                 _json_response(self, exc.status, exc.as_dict())
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:  # noqa: BLE001
                 _json_response(self, 500, {"error": str(exc)})
             return
         self._serve_static(parsed.path)
         return
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path not in ("/api/evaluate", "/api/evaluate/"):
             _json_response(self, 404, {"error": "not found"})
@@ -123,7 +123,7 @@ class GraphApiHandler(BaseHTTPRequestHandler):
             _json_response(self, exc.status, exc.as_dict())
         except json.JSONDecodeError as exc:
             _json_response(self, 400, {"error": f"invalid JSON: {exc}"})
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # noqa: BLE001
             _json_response(self, 500, {"error": str(exc)})
 
     def _serve_static(self, path: str) -> None:

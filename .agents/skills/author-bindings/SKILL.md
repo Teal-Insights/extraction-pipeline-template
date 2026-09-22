@@ -56,7 +56,7 @@ bindings for a workbook.
 4. Author **one series per semantic family** (a scalar parameter, a 1-D series,
    or a 2-D table), not one entry per cell. Prefer `layout: matrix` when rows
    share a label dimension and headers share a key (usually `TIME_PERIOD`).
-5. **Do not** dump burndown rows, sheet geometry, or later `#724` candidates into
+5. **Do not** dump burndown rows, sheet geometry, or coverage shards into
    YAML as a first pass. Walk sheets and tables with domain meaning, and write
    the intended series correctly once.
 6. Run bundled checks (`validate` then `audit`) until resolution is clean.
@@ -67,7 +67,7 @@ bindings for a workbook.
    remaining holes with the same semantic standard (often another matrix).
 7. Optional: `bindings upsert` writes **one** already-reflected series after
    fail-closed checks. A workbook-specific script that upserts many semantic
-   families is allowed. A generic catalog → four-file replace is not.
+   families is allowed. A generic bulk catalog emit is not.
 8. Return the sidecars plus a short validation summary.
 
 Assets under `assets/` are **pedagogical** (how a series looks). They are **not

@@ -26,15 +26,6 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-v -p no:faulthandler -p no:cacheprovider"
 
-[tool.ty.src]
-# Series-graph templates are copied into a generated package. Their relative
-# imports resolve only after that copy, so they are not part of this project.
-exclude = ["templates"]
-
-[tool.ruff]
-# Same scaffold as the ty exclude above: not pipeline source.
-extend-exclude = ["templates"]
-
 [tool.ruff.lint]
 # Ruff 0.16+ expanded defaults (413 rules): see
 # https://docs.astral.sh/ruff/default-rules/
@@ -46,6 +37,11 @@ extend-exclude = ["templates"]
 # - B010: setattr marker on a patched function (ty rejects direct assignment)
 # Prefer fixing the code over adding noqa when cheap (e.g. typed attribute
 # access instead of getattr(..., "const")).
+
+[tool.ty.src]
+# Series-graph templates are copied into a generated package. Their relative
+# imports and ``tiny_dsa`` imports resolve only after that copy.
+exclude = ["templates"]
 
 [tool.ruff.format]
 # Keep formatted Python on LF so Windows checkouts cannot reintroduce the CRLF

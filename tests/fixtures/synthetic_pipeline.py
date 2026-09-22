@@ -84,6 +84,16 @@ def write_synthetic_workbook(path: Path) -> Path:
     return path
 
 
+def link_series_graph_template(repo_root: Path) -> None:
+    """Expose the vendored series-graph template inside a sandbox repo."""
+    source = Path(__file__).resolve().parents[2] / "templates" / "series-graph"
+    destination = repo_root / "templates" / "series-graph"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        return
+    destination.symlink_to(source, target_is_directory=True)
+
+
 def load_synthetic_series_bindings(
     bindings_path: Path = BINDINGS_PATH,
 ) -> WorkbookSeriesBindings:

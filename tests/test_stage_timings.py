@@ -14,7 +14,6 @@ from src.stage_timings import (
     stage_span,
     stage_timings_path,
 )
-from tests.conftest import install_series_graph_template
 
 
 class _FakeCacheResult:
@@ -151,7 +150,9 @@ def test_export_run_records_every_cache_it_reached(
     from unittest.mock import patch
 
     from src.extraction_pipeline import run_pipeline
+    from tests.fixtures.synthetic_pipeline import link_series_graph_template
 
+    link_series_graph_template(tmp_path)
     config = replace(
         synthetic_pipeline_config_fixture,
         repo_root=tmp_path,
@@ -159,7 +160,6 @@ def test_export_run_records_every_cache_it_reached(
         graph_output_dir=tmp_path / "artifacts" / "dependency-graph",
     )
     (config.dist_root / config.dist_metadata.package_name).mkdir(parents=True)
-    install_series_graph_template(tmp_path)
 
     with (
         patch("src.extraction_pipeline.CodeGenerator") as generator_cls,

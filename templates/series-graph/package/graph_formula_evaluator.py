@@ -38,7 +38,10 @@ def is_available(*, workbook: Path | None = None) -> bool:
         return False
     try:
         import excel_grapher  # noqa: F401
-        from excel_grapher.grapher import DynamicRefConfig, create_dependency_graph  # noqa: F401
+        from excel_grapher.grapher import (  # noqa: F401
+            DynamicRefConfig,
+            create_dependency_graph,
+        )
     except ImportError:
         return False
     return True
@@ -73,9 +76,9 @@ def _build_dynamic_refs(workbook: Path) -> Any:
             return DynamicRefConfig.from_bindings(
                 bindings, workbook, bindings_path=DEFAULT_BINDINGS
             )
-        except Exception:
-            pass
-    return DynamicRefConfig.from_constraints(_CONSTRAINTS_SCHEMA)
+        except Exception:  # noqa: BLE001
+            return DynamicRefConfig.from_constraints(_CONSTRAINTS_SCHEMA, {})
+    return DynamicRefConfig.from_constraints(_CONSTRAINTS_SCHEMA, {})
 
 
 class _FormulaEvaluatorDriver:
@@ -168,7 +171,9 @@ def _get_driver(workbook: Path | None = None) -> _FormulaEvaluatorDriver:
     return _driver
 
 
-def evaluate(flat_inputs: dict[str, Any], *, workbook: Path | None = None) -> dict[str, Any]:
+def evaluate(
+    flat_inputs: dict[str, Any], *, workbook: Path | None = None
+) -> dict[str, Any]:
     """Write flat inputs onto the graph and return full series value maps."""
     driver = _get_driver(workbook)
     driver.apply_inputs(flat_inputs)

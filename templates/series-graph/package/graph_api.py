@@ -7,7 +7,8 @@ evaluate output (flat key→value maps, not tuple coordinates).
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from . import data
 from .graph_schema import (
@@ -89,7 +90,9 @@ def flatten_defaults() -> FlatInputs:
         "country_initial_debt": flatten_series(data.COUNTRY_INITIAL_DEBT_DEFAULT),
         "growth_baseline": flatten_series(data.GROWTH_BASELINE_DEFAULT),
         "interest_baseline": flatten_series(data.INTEREST_BASELINE_DEFAULT),
-        "primary_balance_baseline": flatten_series(data.PRIMARY_BALANCE_BASELINE_DEFAULT),
+        "primary_balance_baseline": flatten_series(
+            data.PRIMARY_BALANCE_BASELINE_DEFAULT
+        ),
         "shock_year": data.SHOCK_YEAR_DEFAULT,
         "shock_type": data.SHOCK_TYPE_DEFAULT,
         "shock_magnitudes": flatten_series(data.SHOCK_MAGNITUDES_DEFAULT),
@@ -135,9 +138,13 @@ def normalize_inputs(raw: Mapping[str, Any] | None) -> FlatInputs:
             str(k): float(v) for k, v in merged["country_initial_debt"].items()
         }
     if "growth_baseline" in raw:
-        merged["growth_baseline"] = _normalize_map_keys(raw["growth_baseline"], int_keys=True)
+        merged["growth_baseline"] = _normalize_map_keys(
+            raw["growth_baseline"], int_keys=True
+        )
     if "interest_baseline" in raw:
-        merged["interest_baseline"] = _normalize_map_keys(raw["interest_baseline"], int_keys=True)
+        merged["interest_baseline"] = _normalize_map_keys(
+            raw["interest_baseline"], int_keys=True
+        )
     if "primary_balance_baseline" in raw:
         merged["primary_balance_baseline"] = _normalize_map_keys(
             raw["primary_balance_baseline"], int_keys=True
@@ -167,7 +174,9 @@ def bind_model_inputs(flat: FlatInputs) -> dict[str, Any]:
     return {
         "country_name": flat["country_name"],
         "country_initial_debt": data.COUNTRY_INITIAL_DEBT_DEFAULT.with_values(
-            _ordered_values(data.COUNTRY_INITIAL_DEBT_DEFAULT, flat["country_initial_debt"])
+            _ordered_values(
+                data.COUNTRY_INITIAL_DEBT_DEFAULT, flat["country_initial_debt"]
+            )
         ),
         "growth_baseline": data.GROWTH_BASELINE_DEFAULT.with_values(
             _ordered_values(data.GROWTH_BASELINE_DEFAULT, flat["growth_baseline"])
@@ -193,10 +202,11 @@ def available_backends() -> list[BackendName]:
     try:
         from . import graph_formula_evaluator as _fe
 
-        if _fe.is_available():
-            backends.append("formula_evaluator")
-    except Exception:
-        pass
+        formula_evaluator_available = _fe.is_available()
+    except Exception:  # noqa: BLE001
+        return backends
+    if formula_evaluator_available:
+        backends.append("formula_evaluator")
     return backends
 
 
@@ -240,7 +250,9 @@ def evaluate_formula_evaluator(inputs: Mapping[str, Any] | None = None) -> FlatV
     except GraphApiError:
         raise
     except Exception as exc:
-        raise GraphApiError(str(exc), status=503, errors={"_formula_evaluator": str(exc)}) from exc
+        raise GraphApiError(
+            str(exc), status=503, errors={"_formula_evaluator": str(exc)}
+        ) from exc
 
 
 def evaluate(

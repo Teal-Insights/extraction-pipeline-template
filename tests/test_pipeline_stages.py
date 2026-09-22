@@ -19,7 +19,7 @@ from src.extraction_pipeline import (
 )
 from src.pipeline_config import DistProjectMetadata, PipelineConfig
 from src.stage_timings import PipelineTimings, stage_timings_path
-from tests.conftest import install_series_graph_template
+from tests.fixtures.synthetic_pipeline import link_series_graph_template
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +39,7 @@ def _stage_timings_in_tmp_path(
 
 
 def _sample_config(repo_root: Path) -> PipelineConfig:
+    link_series_graph_template(repo_root)
     workbook_path = repo_root / "data" / "workbook.xlsx"
     guide_path = repo_root / "data" / "guide.md"
     bindings_path = repo_root / "bindings"
@@ -83,7 +84,6 @@ def test_run_export_stage_prints_codegen_stage_boundary(
     (tmp_path / "dist" / "my_model").mkdir(parents=True)
     config.guide_path.parent.mkdir(parents=True, exist_ok=True)
     config.guide_path.write_text("guide\n", encoding="utf-8")
-    install_series_graph_template(tmp_path)
 
     with (
         patch(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -29,16 +28,6 @@ from tests.fixtures.test_state import (
     reset_pipeline_test_state,
     restore_pipeline_disk_cache,
 )
-
-
-def install_series_graph_template(repo_root: Path) -> None:
-    """Copy ``templates/series-graph`` into a stand-in project root.
-
-    Export materialize reads that template from ``PipelineConfig.repo_root``.
-    Tests that point ``repo_root`` at a temporary directory need the files there.
-    """
-    source = Path(__file__).resolve().parents[1] / "templates" / "series-graph"
-    shutil.copytree(source, repo_root / "templates" / "series-graph")
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

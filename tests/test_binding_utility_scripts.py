@@ -679,9 +679,20 @@ def test_author_bindings_skill_is_vendored() -> None:
     skill = AUTHOR_BINDINGS_SKILL / "SKILL.md"
     assert skill.is_file()
     text = skill.read_text(encoding="utf-8")
-    assert "four-file replace is not" in text
+    assert "or coverage shards into" in text
+    assert "A generic bulk catalog emit is not." in text
     assert (AUTHOR_BINDINGS_SKILL / "assets" / "catalog.example.yaml").is_file()
     assert (AUTHOR_BINDINGS_SKILL / "assets" / "measure-shards.example.yaml").is_file()
+
+
+def test_internal_binding_burndown_docstring_is_a_coverage_worklist() -> None:
+    from scripts.internal_binding_burndown import __doc__ as burndown_doc
+
+    assert burndown_doc is not None
+    assert "Those ranges are a coverage worklist." in burndown_doc
+    assert (
+        "one-cell range is not a reason to author ``layout: scalar``." in burndown_doc
+    )
 
 
 def test_catalog_emitter_and_prompt_are_removed() -> None:
