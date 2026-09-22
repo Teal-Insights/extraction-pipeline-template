@@ -33,6 +33,7 @@ from src.pipeline_monitor import (
 )
 from src.qmd_python_validation import (
     DOCUMENTATION_BASELINE_DEV_DEPS,
+    GRAPH_BASELINE_DEPS,
     VALIDATION_BASELINE_DEV_DEPS,
     extract_python_cells,
     merge_dev_dependencies,
@@ -245,6 +246,7 @@ def merge_agent_pyproject_extras(config: PipelineConfig) -> list[str]:
             extras,
         ),
         validation_dependencies=list(VALIDATION_BASELINE_DEV_DEPS),
+        graph_dependencies=list(GRAPH_BASELINE_DEPS),
         metadata=config.dist_metadata,
     )
     return extras
@@ -293,6 +295,7 @@ def restore_user_guide_cache(config: PipelineConfig, *, cache_key: str) -> bool:
             extras,
         ),
         validation_dependencies=list(VALIDATION_BASELINE_DEV_DEPS),
+        graph_dependencies=list(GRAPH_BASELINE_DEPS),
         metadata=config.dist_metadata,
     )
     return True
@@ -781,10 +784,22 @@ jobs:
         run: uv python install
 
       - name: Install project dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --group graph
+
+      - name: Refresh static graph bootstrap snapshot
+        run: uv run python scripts/write_graph_bootstrap.py
+        continue-on-error: true
 
       - name: Build documentation site
         run: uv run --with great-docs great-docs build --project-path .
+
+      - name: Ensure interactive graph assets are published
+        run: |
+          mkdir -p great-docs/_site/assets
+          if [ -d assets/graph ]; then
+            cp -a assets/graph great-docs/_site/assets/
+            test -f great-docs/_site/assets/graph/index.html
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4

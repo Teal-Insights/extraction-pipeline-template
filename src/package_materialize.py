@@ -15,9 +15,11 @@ from src.export_validation_assets import (
     export_reference_reports,
     seed_validation_harness,
 )
+from src.export_series_graph import seed_series_graph
 from src.pipeline_config import PipelineConfig
 from src.qmd_python_validation import (
     DOCUMENTATION_BASELINE_DEV_DEPS,
+    GRAPH_BASELINE_DEPS,
     VALIDATION_BASELINE_DEV_DEPS,
     render_dist_pyproject_toml,
     write_dist_readme,
@@ -102,12 +104,14 @@ def _write_dist_tree(config: PipelineConfig, modules: dict[str, str]) -> None:
         render_dist_pyproject_toml(
             dev_dependencies=list(DOCUMENTATION_BASELINE_DEV_DEPS),
             validation_dependencies=list(VALIDATION_BASELINE_DEV_DEPS),
+            graph_dependencies=list(GRAPH_BASELINE_DEPS),
             metadata=config.dist_metadata,
         ),
         encoding="utf-8",
     )
     write_dist_readme(config.dist_root, metadata=config.dist_metadata)
     seed_validation_harness(config=config)
+    seed_series_graph(config=config)
 
 
 def materialize_package(

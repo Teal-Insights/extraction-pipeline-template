@@ -264,6 +264,24 @@ require an API key. Runnable `{python}` cells must not call `make_context()` or
 [templates/canonical-api-usage.md](templates/canonical-api-usage.md) is the
 canonical interaction model for those rewrites.
 
+Export also seeds an **interactive series dependency graph** into `dist/`
+([templates/series-graph/](templates/series-graph/)): Cytoscape UI under
+`assets/graph/`, FormulaEvaluator API modules under `{package}/graph_*.py`, and
+local scripts (`serve_graph_api.py`, …). Author `{package}/graph_schema.py`
+(`NODES` / `EDGES`) from bindings + `data.*` cells — see
+`examples/tiny_dsa_graph_schema.py`. The document agent embeds a short landing-page
+section (no long topology blurb); fragment notes live in
+[templates/series-graph/docs/user-guide-graph-section.md](templates/series-graph/docs/user-guide-graph-section.md).
+
+Run the FormulaEvaluator-backed viz from `dist/`:
+
+```bash
+cd dist
+uv sync --group graph
+uv run python scripts/serve_graph_api.py
+# http://127.0.0.1:8765/
+```
+
 ## Run the pipeline
 
 After graph-oracle (Excel vs graph) parity passes (see [Verify graph](#3-verify-graph)), run the full pipeline:
@@ -365,6 +383,10 @@ uv run python -m http.server 8000 --directory artifacts/dependency-graph
 ```
 
 Open `http://localhost:8000/`.
+
+This extract-time **cell** graph is for bindings review. The **series** graph
+shipped in `dist/` (FormulaEvaluator + docs embed) is separate — see
+[Document](#7-document) and [templates/series-graph/](templates/series-graph/).
 
 ## Checklist for a new workbook
 

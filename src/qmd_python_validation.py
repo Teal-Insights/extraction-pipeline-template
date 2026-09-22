@@ -18,6 +18,13 @@ DOCUMENTATION_BASELINE_DEV_DEPS: tuple[str, ...] = (
     "matplotlib",
 )
 
+GRAPH_DEPENDENCY_GROUP = "graph"
+
+GRAPH_BASELINE_DEPS: tuple[str, ...] = (
+    "excel-grapher>=15.0.0",
+    "pytest>=8.0.0",
+)
+
 VALIDATION_DEPENDENCY_GROUP = "validation"
 
 VALIDATION_BASELINE_DEV_DEPS: tuple[str, ...] = (
@@ -104,6 +111,7 @@ def render_dist_pyproject_toml(
     *,
     dev_dependencies: list[str],
     validation_dependencies: list[str] | None = None,
+    graph_dependencies: list[str] | None = None,
     metadata: DistProjectMetadata,
 ) -> str:
     dep_lines = "\n".join(f'    "{dep}",' for dep in dev_dependencies)
@@ -113,6 +121,13 @@ def render_dist_pyproject_toml(
         validation_block = f"""
 {VALIDATION_DEPENDENCY_GROUP} = [
 {validation_lines}
+]"""
+    graph_block = ""
+    if graph_dependencies:
+        graph_lines = "\n".join(f'    "{dep}",' for dep in graph_dependencies)
+        graph_block = f"""
+{GRAPH_DEPENDENCY_GROUP} = [
+{graph_lines}
 ]"""
     return f"""[build-system]
 requires = ["setuptools>=69", "wheel"]
@@ -124,7 +139,7 @@ version = "0.1.0"
 description = {_toml_string(metadata.description)}
 requires-python = ">=3.13"
 dependencies = [
-    "fastpyxl",
+    "fastpyxl>=1.1.0",
     "numpy",
 ]
 
@@ -134,7 +149,7 @@ packages = [{_toml_string(metadata.package_name)}]
 [dependency-groups]
 dev = [
 {dep_lines}
-]{validation_block}
+]{graph_block}{validation_block}
 """
 
 
@@ -180,6 +195,7 @@ def write_dist_pyproject(
     *,
     dev_dependencies: list[str],
     validation_dependencies: list[str] | None = None,
+    graph_dependencies: list[str] | None = None,
     metadata: DistProjectMetadata,
 ) -> None:
     pyproject_path = dist_root / "pyproject.toml"
@@ -187,6 +203,7 @@ def write_dist_pyproject(
         render_dist_pyproject_toml(
             dev_dependencies=dev_dependencies,
             validation_dependencies=validation_dependencies,
+            graph_dependencies=graph_dependencies,
             metadata=metadata,
         ),
         encoding="utf-8",
