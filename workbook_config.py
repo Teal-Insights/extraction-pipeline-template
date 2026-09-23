@@ -87,7 +87,7 @@ RUNNABLE_CELL_RULES: tuple[RunnableCellRule, ...] = (
         ),
     ),
     RunnableCellRule(
-        pattern=r"\bset_[A-Za-z_][A-Za-z0-9_]*\s*\(",
+        pattern=r"(?<![\w.])set_[A-Za-z_][A-Za-z0-9_]*\s*\(",
         message="inverted-tree runnable cells must not call set_* setters",
     ),
 )
