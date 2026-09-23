@@ -426,14 +426,15 @@ Pull requests run the same test suite on Ubuntu via `.github/workflows/test.yml`
 
 ### Deploying the generated package
 
-The deploy workflow (`.github/workflows/deploy.yml`) is available from the Actions tab via `workflow_dispatch`. It is **publish-only**: the extraction pipeline calls LLM providers and can take hours, so generation is run locally and never in CI. Generate the package and commit `dist/`, then dispatch the workflow:
+Publish the committed `dist/` with `scripts/publish_dist.sh`. Run that script when asked to publish `dist/`.
 
 ```bash
 uv run python -m src.extraction_pipeline
 git add -f dist && git commit -m "Regenerate dist/"
+bash scripts/publish_dist.sh
 ```
 
-`dist/` is gitignored by default; commit it explicitly (`git add -f dist`) so the deploy workflow has something to publish. On dispatch the workflow verifies the committed `dist/`, uploads it as a build artifact, and — when `DIST_METADATA.repository_url` points at a GitHub repository — publishes `dist/` to that repository by rsyncing over its contents and pushing to `main`. Publishing requires a `DEPLOY_TOKEN` repository secret (a token with write access to the target repository); when `repository_url` is unset or not a GitHub URL, the publish steps are skipped and only the artifact is produced. The generated package ships its own docs deploy workflow (`dist/.github/workflows/deploy-docs.yml`), so the target repository can publish the user guide to GitHub Pages on push.
+The script reads the target repository from `DIST_METADATA.repository_url`, exports the committed `dist/` tree with `git archive` (ignored build output such as `.venv/` and `great-docs/_site/` stays behind), rsyncs that tree onto a fresh clone, and pushes `main`. It exits if `dist/` is missing from the commit or has uncommitted changes. The package repository builds its user guide to GitHub Pages from `dist/.github/workflows/deploy-docs.yml` on that push.
 
 Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (workbook audits auto-select from a warm `.cache/dependency-graph/`; optional `GRAPH_AUDIT_CASES` steers pins/labels; synthetic fixture audits run without extra setup; provider API key required for `LLM_GRAPH_AUDIT_MODEL`).
 
@@ -447,7 +448,7 @@ Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (workbook audit
 | `data/` | Workbook, guide, differential reports |
 | `dist/` | Generated distributable package (gitignored) |
 | `templates/` | Binding prompt and canonical API usage reference |
-| `.github/workflows/` | Template CI (PR tests) and manual deploy workflow |
+| `.github/workflows/` | Template CI (PR tests) |
 | `technical_standard.md` | Acceptance bar and stage gates |
 | `lessons-learned.md` | Design rationale from the Tiny DSA rehearsal |
 | `artifacts/` | Generated exploration artifacts; see [artifacts/README.md](artifacts/README.md) |
