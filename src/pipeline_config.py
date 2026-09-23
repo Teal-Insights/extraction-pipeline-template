@@ -35,9 +35,9 @@ class DistProjectMetadata:
     def repository_slug(self) -> str | None:
         """Return ``owner/repo`` when ``repository_url`` is a GitHub repository.
 
-        The deploy workflow uses this slug as the target repository for
-        publishing the generated ``dist/`` package. Returns ``None`` for
-        non-GitHub or unset URLs, which disables the publish steps.
+        ``scripts/publish_dist.sh`` uses this slug as the target repository
+        for publishing the generated ``dist/`` package. Returns ``None`` for
+        non-GitHub or unset URLs, in which case that script refuses to publish.
         """
         if self.repository_url is None:
             return None
