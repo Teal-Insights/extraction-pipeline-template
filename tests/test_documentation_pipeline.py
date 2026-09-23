@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import workbook_config
 from src.documentation_pipeline import (
     CURSOR_API_KEY_ENV,
     DEFAULT_DOCUMENT_AGENT_DEADLINE_SECONDS,
@@ -359,6 +360,46 @@ def test_validate_runnable_cell_rules_rejects_forbidden_pattern(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="forbidden pattern"):
+        validate_runnable_cell_rules(config)
+
+
+def _config_with_authored_runnable_cell_rules(tmp_path: Path) -> PipelineConfig:
+    return replace(
+        _minimal_config(tmp_path),
+        runnable_cell_rules=workbook_config.RUNNABLE_CELL_RULES,
+    )
+
+
+def _write_python_cell(config: PipelineConfig, source: str) -> None:
+    guide = config.dist_root / "user_guide"
+    guide.mkdir(parents=True)
+    (guide / "01-worked-assessment.qmd").write_text(
+        f"---\ntitle: t\n---\n\n```{{python}}\n{source}\n```\n",
+        encoding="utf-8",
+    )
+
+
+def test_validate_runnable_cell_rules_allows_matplotlib_method_calls(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_authored_runnable_cell_rules(tmp_path)
+    _write_python_cell(
+        config,
+        'ax.set_ylabel("Debt, percent of GDP")\n'
+        'ax.set_xlabel("Year")\n'
+        'ax.set_title("France, primary expenditure held at the baseline level")\n'
+        'ax.spines["top"].set_visible(False)\n'
+        'ax.spines["right"].set_visible(False)',
+    )
+    validate_runnable_cell_rules(config)
+
+
+def test_validate_runnable_cell_rules_rejects_bare_set_call(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_authored_runnable_cell_rules(tmp_path)
+    _write_python_cell(config, 'set_country_name(ctx, "France")')
+    with pytest.raises(ValueError, match="must not call set_"):
         validate_runnable_cell_rules(config)
 
 
