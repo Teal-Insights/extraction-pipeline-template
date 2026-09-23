@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import workbook_config
 from src.documentation_pipeline import (
     CURSOR_API_KEY_ENV,
     DEFAULT_DOCUMENT_AGENT_DEADLINE_SECONDS,
@@ -34,7 +35,6 @@ from src.documentation_pipeline import (
     validate_runnable_cell_rules,
     write_validation_page,
 )
-import workbook_config
 from src.pipeline_config import (
     DistProjectMetadata,
     PipelineConfig,
@@ -385,15 +385,11 @@ def test_validate_runnable_cell_rules_allows_matplotlib_method_calls(
     config = _config_with_authored_runnable_cell_rules(tmp_path)
     _write_python_cell(
         config,
-        "\n".join(
-            (
-                'ax.set_ylabel("Debt, percent of GDP")',
-                'ax.set_xlabel("Year")',
-                'ax.set_title("France, primary expenditure held at the baseline level")',
-                'ax.spines["top"].set_visible(False)',
-                'ax.spines["right"].set_visible(False)',
-            )
-        ),
+        'ax.set_ylabel("Debt, percent of GDP")\n'
+        'ax.set_xlabel("Year")\n'
+        'ax.set_title("France, primary expenditure held at the baseline level")\n'
+        'ax.spines["top"].set_visible(False)\n'
+        'ax.spines["right"].set_visible(False)',
     )
     validate_runnable_cell_rules(config)
 
