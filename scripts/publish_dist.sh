@@ -34,11 +34,15 @@ fi
 
 sha=$(git rev-parse HEAD)
 origin_url=$(git remote get-url origin)
+# Drop userinfo so a credentialed HTTPS remote is recorded as owner/repo.
 origin_slug=$(
-  printf '%s\n' "${origin_url}" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git/?$##'
+  printf '%s\n' "${origin_url}" \
+    | sed -E 's#^(git@github.com:|https://([^/@]*@)?github.com/)##' \
+    | sed -E 's#\.git/?$##'
 )
-if [[ -z "${origin_slug}" || "${origin_slug}" == "${origin_url}" ]]; then
-  echo "Cannot parse origin remote as a GitHub repository: ${origin_url}" >&2
+if [[ ! "${origin_slug}" =~ ^[^/]+/[^/]+$ ]]; then
+  safe_origin=$(printf '%s\n' "${origin_url}" | sed -E 's#://[^@]+@#://***@#')
+  echo "Cannot parse origin remote as a GitHub repository: ${safe_origin}" >&2
   exit 1
 fi
 

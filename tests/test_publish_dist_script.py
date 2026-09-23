@@ -21,6 +21,12 @@ def test_publish_script_resolves_target_from_workbook_config() -> None:
     assert "Teal-Insights" not in text
 
 
+def test_publish_script_records_owner_repo_without_remote_userinfo() -> None:
+    text = script_text()
+    assert "([^/@]*@)?" in text
+    assert "Deploy generated package from ${origin_slug}@${sha}" in text
+
+
 def test_publish_script_rsyncs_committed_dist_and_pushes_main() -> None:
     text = script_text()
     assert "git archive" in text
