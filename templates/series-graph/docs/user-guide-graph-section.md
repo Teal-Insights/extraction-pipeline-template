@@ -13,16 +13,14 @@ resources:
   - ../assets/graph/**
 ```
 
-Copy the preview CSS from the Tiny DSA export
-(`exports/py-tiny-dsa/user_guide/index.qmd` `include-in-header`) or the
-styled block under `## Interactive dependency graph` there, renaming the
-`tiny-dsa-graph-*` class prefix to `series-graph-*` if you prefer.
+Style the embed with a small `include-in-header` block using a
+`series-graph-*` class prefix.
 
 ## HTML embed
 
 Link + iframe pointing at `assets/graph/index.html` (fullscreen) and
 `assets/graph/index.html?preview=1` (docs paint). Resolve relative bases for
-both `/user-guide/` and site-root publishes (see Tiny DSA `index.qmd` script).
+both `/user-guide/` and site-root publishes.
 
 ## Local FormulaEvaluator API
 
@@ -35,5 +33,5 @@ uv run python scripts/serve_graph_api.py
 ```
 
 Author `{package}/graph_schema.py` (`NODES` / `EDGES`) before the viz is useful.
-Reference: `examples/tiny_dsa_graph_schema.py` and
+Reference: `examples/reference_graph_schema.py` and
 `templates/series-graph/README.md` in this pipeline repo.

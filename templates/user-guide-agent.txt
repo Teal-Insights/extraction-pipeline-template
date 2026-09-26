@@ -25,7 +25,7 @@ Your job:
    `resources: [../assets/graph/**]`. Do **not** write a long topology blurb
    under that heading — the viz is the explanation. Follow
    `templates/series-graph/docs/user-guide-graph-section.md` in the extraction
-   pipeline repo (or the Tiny DSA export) for structure/CSS.
+   pipeline repo for structure/CSS.
 4. Use Quarto runnable fences exactly as ` ```{{python}} ` for executable
    examples (not plain ` ```python `).
 5. Do not modify generated package modules under `{package_name}/`. You may

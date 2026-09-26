@@ -240,6 +240,8 @@ def test_run_export_stage_skips_generate_modules_on_cache_hit(
     )
     config.graph_output_dir = tmp_path / "artifacts"
     config.dist_metadata = MagicMock()
+    config.dist_metadata.package_name = "pkg"
+    config.differential_workbook_rel = Path("data/workbook.xlsx")
     config.graph_output_dir.mkdir()
 
     graph_result = MagicMock()

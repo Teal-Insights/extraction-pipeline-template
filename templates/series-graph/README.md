@@ -10,12 +10,13 @@ browser-side formula clone.
 |------|------|
 | `{package}/graph_api.py` | `bootstrap()` / `evaluate(backend=…)` |
 | `{package}/graph_schema.py` | **Author** `NODES` / `EDGES` (scaffold) |
-| `{package}/graph_formula_evaluator.py` | FormulaEvaluator over `tests/fixtures/*.xlsx` |
+| `{package}/graph_formula_evaluator.py` | FormulaEvaluator over the `tests/fixtures/` workbook and `bindings/` |
 | `assets/graph/` | Cytoscape UI (`app.js` calls `/api/…`) |
 | `scripts/serve_graph_api.py` | Local stdlib HTTP server |
 | `scripts/write_graph_bootstrap.py` | Static `bootstrap.json` for docs paint |
 | `scripts/check_graph_eval.py` | FormulaEvaluator vs export parity on defaults |
-| `examples/tiny_dsa_graph_schema.py` | Full Tiny DSA reference schema |
+| `examples/reference_graph_schema.py` | Worked reference schema |
+| `assets/graph/API.md` | HTTP contract the UI expects |
 
 ## Author the schema (per workbook)
 
@@ -25,8 +26,8 @@ After export, edit `{package}/graph_schema.py`:
 2. Build `NODES` with roles/kinds/keys and cell addresses from `data.*`.
 3. Author `EDGES` as producer → consumer pairs (the series DAG).
 
-Copy patterns from `examples/tiny_dsa_graph_schema.py` (or the committed
-`py-tiny-dsa` export). Addresses should match binding `data_range` cells.
+Copy patterns from `examples/reference_graph_schema.py`. Addresses should
+match binding `data_range` cells.
 
 ## Run locally
 

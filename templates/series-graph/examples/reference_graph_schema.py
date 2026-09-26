@@ -1,4 +1,4 @@
-"""REFERENCE: Tiny DSA series-graph schema (bindings + data.* cells).
+"""REFERENCE: worked series-graph schema (bindings + data.* cells).
 
 Copy patterns from here when authoring ``{package}/graph_schema.py`` for a
 new workbook. Do not import this module from generated packages.

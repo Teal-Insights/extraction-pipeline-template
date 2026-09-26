@@ -205,16 +205,17 @@ def test_replace_dist_bindings_refuses_overlapping_paths(tmp_path: Path) -> None
     assert (nested_source.bindings_path / "inputs.bindings.yaml").is_file()
 
 
-def test_replace_dist_bindings_replaces_symlink_and_file_destinations(
-    tmp_path: Path,
-) -> None:
+def test_replace_dist_bindings_replaces_symlink_destination(tmp_path: Path) -> None:
     config = _prepare_repo(tmp_path)
     outside = tmp_path / "outside-bindings"
     outside.mkdir()
     (outside / "keep.yaml").write_text("keep\n", encoding="utf-8")
     dest = config.dist_root / "bindings"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.symlink_to(outside, target_is_directory=True)
+    try:
+        dest.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"cannot create symlinks here: {exc}")
 
     replace_dist_bindings(config)
 
@@ -223,8 +224,13 @@ def test_replace_dist_bindings_replaces_symlink_and_file_destinations(
     assert (dest / "inputs.bindings.yaml").is_file()
     assert (outside / "keep.yaml").read_text(encoding="utf-8") == "keep\n"
 
-    shutil.rmtree(dest)
+
+def test_replace_dist_bindings_replaces_file_destination(tmp_path: Path) -> None:
+    config = _prepare_repo(tmp_path)
+    dest = config.dist_root / "bindings"
+    dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("not a directory\n", encoding="utf-8")
+
     replace_dist_bindings(config)
 
     assert (dest / "inputs.bindings.yaml").read_text(encoding="utf-8") == "series: []\n"

@@ -13,7 +13,7 @@ Repeatable pieces (do not invent):
   formulas depend on bound series
 
 See the extraction-pipeline-template reference:
-``templates/series-graph/examples/tiny_dsa_graph_schema.py``.
+``templates/series-graph/examples/reference_graph_schema.py``.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ SERIES_IDS: tuple[str, ...] = INPUT_IDS
 EDGES: tuple[tuple[str, str], ...] = ()
 
 # Author: one node dict per series id (role, kind, keys, address/addresses, …).
-# Start from Tiny DSA reference or build with `_node` helpers below.
+# Start from the reference example or build with `_node` helpers below.
 NODES: tuple[dict[str, Any], ...] = ()
 
 NODES_BY_ID: dict[str, dict[str, Any]] = {node["id"]: node for node in NODES}

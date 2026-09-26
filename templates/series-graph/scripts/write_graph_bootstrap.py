@@ -16,7 +16,7 @@ OUT = ROOT / "assets" / "graph" / "bootstrap.json"
 
 def main() -> int:
     sys.path.insert(0, str(ROOT))
-    from tiny_dsa.graph_api import available_backends, bootstrap
+    from __SERIES_GRAPH_PACKAGE__.graph_api import available_backends, bootstrap
 
     backends = available_backends()
     backend = "formula_evaluator" if "formula_evaluator" in backends else "export"

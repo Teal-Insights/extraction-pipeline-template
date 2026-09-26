@@ -1,5 +1,5 @@
 /**
- * Tiny DSA interactive dependency graph.
+ * Interactive series dependency graph.
  * Loads series topology from GET /api/graph and recomputes via
  * POST /api/evaluate with backend=formula_evaluator (excel-grapher).
  * Fall back: ./bootstrap.json for static docs preview when the API is offline.
@@ -43,17 +43,17 @@
 
   /**
    * Resolve remote FormulaEvaluator API base (e.g. Railway).
-   * Order: ?api=… → meta[name=tiny-dsa-graph-api] → window.TINY_DSA_GRAPH_API
-   * → config.js TINY_DSA_GRAPH_API. Same-origin /api is tried next by loadBootstrap.
+   * Order: ?api=… → meta[name=series-graph-api] → window.SERIES_GRAPH_API
+   * → config.js SERIES_GRAPH_API. Same-origin /api is tried next by loadBootstrap.
    */
   function configuredApiBase() {
     const params = new URLSearchParams(window.location.search);
     const fromQuery = params.get("api");
     if (fromQuery) return trimSlash(fromQuery);
-    const meta = document.querySelector('meta[name="tiny-dsa-graph-api"]');
+    const meta = document.querySelector('meta[name="series-graph-api"]');
     if (meta && meta.content) return trimSlash(meta.content);
-    if (typeof window.TINY_DSA_GRAPH_API === "string" && window.TINY_DSA_GRAPH_API) {
-      return trimSlash(window.TINY_DSA_GRAPH_API);
+    if (typeof window.SERIES_GRAPH_API === "string" && window.SERIES_GRAPH_API) {
+      return trimSlash(window.SERIES_GRAPH_API);
     }
     return "";
   }
@@ -743,7 +743,7 @@
   }
 
   const root = typeof globalThis !== "undefined" ? globalThis : window;
-  root.TinyDsaGraph = {
+  root.SeriesGraph = {
     backend: BACKEND,
     get SERIES() {
       return SERIES;
@@ -786,7 +786,7 @@
         toast("API offline — edits need serve_graph_api.py");
       }
     } catch (err) {
-      console.error("Tiny DSA graph failed to initialize", err);
+      console.error("Series graph failed to initialize", err);
       cyEl.innerHTML =
         '<p style="padding:1rem;font:14px system-ui;color:#b91c1c;">Graph failed to load. Serve with <code>uv run python scripts/serve_graph_api.py</code> (FormulaEvaluator) or provide <code>bootstrap.json</code>.</p>';
     }

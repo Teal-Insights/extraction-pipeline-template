@@ -45,13 +45,13 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
 
 
 def main() -> int:
-    from tiny_dsa import graph_formula_evaluator as fe
-    from tiny_dsa.graph_api import evaluate
+    from __SERIES_GRAPH_PACKAGE__ import graph_formula_evaluator as fe
+    from __SERIES_GRAPH_PACKAGE__.graph_api import evaluate
 
     if not fe.is_available():
         print(
             "skip: formula_evaluator unavailable (install excel-grapher via "
-            "`uv sync --group graph` and ensure tests/fixtures/tiny-dsa.xlsx)",
+            "`uv sync --group graph` and ensure tests/fixtures/__SERIES_GRAPH_WORKBOOK_FIXTURE__)",
             file=sys.stderr,
         )
         return 0

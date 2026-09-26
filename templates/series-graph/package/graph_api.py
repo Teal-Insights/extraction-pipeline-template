@@ -241,7 +241,7 @@ def evaluate_formula_evaluator(inputs: Mapping[str, Any] | None = None) -> FlatV
 
     if not fe.is_available():
         raise GraphApiError(
-            "formula_evaluator backend requires excel-grapher and the Tiny DSA workbook fixture",
+            "formula_evaluator backend requires excel-grapher and the workbook fixture",
             status=503,
         )
     flat = normalize_inputs(inputs)

@@ -1,16 +1,19 @@
 """FormulaEvaluator backend for the series-graph API.
 
-Builds an excel-grapher dependency graph over the Tiny DSA workbook fixture
-and evaluates series cells after writing input leaves. Optional: requires
-``excel-grapher`` and ``tests/fixtures/tiny-dsa.xlsx``.
+Builds an excel-grapher dependency graph over the workbook fixture and
+evaluates series cells after writing input leaves. Optional: requires
+``excel-grapher``, ``tests/fixtures/__SERIES_GRAPH_WORKBOOK_FIXTURE__``, and
+the ``bindings/`` directory (dynamic-ref domains come from series bindings).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from .graph_schema import (
+    INPUT_IDS,
     NODES_BY_ID,
     SERIES_IDS,
     all_cell_addresses,
@@ -18,15 +21,10 @@ from .graph_schema import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_WORKBOOK = _REPO_ROOT / "tests" / "fixtures" / "tiny-dsa.xlsx"
+DEFAULT_WORKBOOK = (
+    _REPO_ROOT / "tests" / "fixtures" / "__SERIES_GRAPH_WORKBOOK_FIXTURE__"
+)
 DEFAULT_BINDINGS = _REPO_ROOT / "bindings"
-
-# Fallback dynamic-ref domains when series bindings cannot be loaded.
-_CONSTRAINTS_SCHEMA: dict[str, Any] = {
-    "Inputs!B5": Literal["Borvelia", "Litellia", "Aurelium"],
-    "Inputs!B21": Literal[1, 2, 3, 4, 5],
-    "Inputs!B22": Literal[1, 2, 3],
-}
 
 _driver: _FormulaEvaluatorDriver | None = None
 _driver_workbook: Path | None = None
@@ -34,7 +32,7 @@ _driver_workbook: Path | None = None
 
 def is_available(*, workbook: Path | None = None) -> bool:
     path = workbook or DEFAULT_WORKBOOK
-    if not path.is_file():
+    if not path.is_file() or not DEFAULT_BINDINGS.is_dir():
         return False
     try:
         import excel_grapher  # noqa: F401
@@ -67,18 +65,12 @@ def _as_json_number(value: object) -> Any:
 
 def _build_dynamic_refs(workbook: Path) -> Any:
     from excel_grapher.grapher import DynamicRefConfig
+    from excel_grapher.series_bindings import load_series_bindings
 
-    if DEFAULT_BINDINGS.is_dir():
-        try:
-            from excel_grapher.series_bindings import load_series_bindings
-
-            bindings = load_series_bindings(DEFAULT_BINDINGS)
-            return DynamicRefConfig.from_bindings(
-                bindings, workbook, bindings_path=DEFAULT_BINDINGS
-            )
-        except Exception:  # noqa: BLE001
-            return DynamicRefConfig.from_constraints(_CONSTRAINTS_SCHEMA, {})
-    return DynamicRefConfig.from_constraints(_CONSTRAINTS_SCHEMA, {})
+    bindings = load_series_bindings(DEFAULT_BINDINGS)
+    return DynamicRefConfig.from_bindings(
+        bindings, workbook, bindings_path=DEFAULT_BINDINGS
+    )
 
 
 class _FormulaEvaluatorDriver:
@@ -105,16 +97,7 @@ class _FormulaEvaluatorDriver:
     @staticmethod
     def _input_addresses() -> list[str]:
         addresses: list[str] = []
-        for series_id in (
-            "country_name",
-            "country_initial_debt",
-            "growth_baseline",
-            "interest_baseline",
-            "primary_balance_baseline",
-            "shock_year",
-            "shock_type",
-            "shock_magnitudes",
-        ):
+        for series_id in INPUT_IDS:
             node = NODES_BY_ID[series_id]
             if "address" in node:
                 addresses.append(node["address"])
@@ -132,14 +115,12 @@ class _FormulaEvaluatorDriver:
 
     def read_series_values(self, flat_inputs: dict[str, Any]) -> dict[str, Any]:
         values: dict[str, Any] = {
-            "country_name": flat_inputs["country_name"],
-            "country_initial_debt": dict(flat_inputs["country_initial_debt"]),
-            "growth_baseline": dict(flat_inputs["growth_baseline"]),
-            "interest_baseline": dict(flat_inputs["interest_baseline"]),
-            "primary_balance_baseline": dict(flat_inputs["primary_balance_baseline"]),
-            "shock_year": flat_inputs["shock_year"],
-            "shock_type": flat_inputs["shock_type"],
-            "shock_magnitudes": dict(flat_inputs["shock_magnitudes"]),
+            series_id: (
+                dict(flat_inputs[series_id])
+                if isinstance(flat_inputs[series_id], Mapping)
+                else flat_inputs[series_id]
+            )
+            for series_id in INPUT_IDS
         }
         for series_id in SERIES_IDS:
             if series_id in values:

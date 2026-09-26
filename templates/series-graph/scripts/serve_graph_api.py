@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve the Tiny DSA series-graph API (stdlib HTTP).
+"""Serve the series-graph API (stdlib HTTP).
 
 Endpoints:
   GET  /api/graph              bootstrap (schema + defaults + values)
@@ -24,13 +24,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tiny_dsa.graph_api import (
+from __SERIES_GRAPH_PACKAGE__.graph_api import (
     GraphApiError,
     available_backends,
     bootstrap,
     evaluate,
 )
-from tiny_dsa.graph_schema import BackendName
+from __SERIES_GRAPH_PACKAGE__.graph_schema import BackendName
 
 STATIC_ROOT = ROOT / "assets" / "graph"
 
@@ -63,7 +63,7 @@ def _parse_backend(raw: Any) -> BackendName:
 
 
 class GraphApiHandler(BaseHTTPRequestHandler):
-    server_version = "TinyDsaGraphAPI/0.1"
+    server_version = "SeriesGraphAPI/0.1"
 
     def log_message(self, format: str, *args: Any) -> None:
         sys.stderr.write(f"{self.address_string()} - {format % args}\n")
@@ -78,7 +78,7 @@ class GraphApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in ("/api/health", "/api/health/"):
-            from tiny_dsa.graph_api import available_backends
+            from __SERIES_GRAPH_PACKAGE__.graph_api import available_backends
 
             _json_response(
                 self,
@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     server = ThreadingHTTPServer((args.host, args.port), GraphApiHandler)
-    print(f"Tiny DSA graph API on http://{args.host}:{args.port}/")
+    print(f"Series graph API on http://{args.host}:{args.port}/")
     print("  GET  /api/health")
     print("  GET  /api/graph")
     print("  POST /api/evaluate")

@@ -10,6 +10,7 @@ Fullscreen Cytoscape explorer for the exported package. Values recompute via
 | `app.js` | Cytoscape wiring; `GET /api/graph`, `POST /api/evaluate` |
 | `bootstrap.json` | Optional static snapshot when the API is offline |
 | `style.css` | Layout and role colors |
+| `API.md` | Full HTTP contract the UI expects |
 
 ## Run locally
 
@@ -22,7 +23,7 @@ uv run python scripts/serve_graph_api.py
 ```
 
 Author `{package}/graph_schema.py` (`NODES` / `EDGES`) before the viz is useful.
-See `examples/tiny_dsa_graph_schema.py` and `../README.md`.
+See `examples/reference_graph_schema.py` and `../README.md`.
 
 ```bash
 uv run python scripts/write_graph_bootstrap.py

@@ -269,7 +269,7 @@ Export also seeds an **interactive series dependency graph** into `dist/`
 `assets/graph/`, FormulaEvaluator API modules under `{package}/graph_*.py`, and
 local scripts (`serve_graph_api.py`, …). Author `{package}/graph_schema.py`
 (`NODES` / `EDGES`) from bindings + `data.*` cells — see
-`examples/tiny_dsa_graph_schema.py`. The document agent embeds a short landing-page
+`examples/reference_graph_schema.py`. The document agent embeds a short landing-page
 section (no long topology blurb); fragment notes live in
 [templates/series-graph/docs/user-guide-graph-section.md](templates/series-graph/docs/user-guide-graph-section.md).
 
