@@ -1,4 +1,4 @@
-"""The dist publish path is scripts/publish_dist.sh.
+"""The dist deploy path is scripts/deploy_dist.sh.
 
 ``.github/workflows/deploy.yml`` checked out the package repository with a
 token and was removed. Do not restore it.
