@@ -35,9 +35,10 @@ class DistProjectMetadata:
     def repository_slug(self) -> str | None:
         """Return ``owner/repo`` when ``repository_url`` is a GitHub repository.
 
-        ``scripts/publish_dist.sh`` uses this slug as the target repository
-        for publishing the generated ``dist/`` package. Returns ``None`` for
-        non-GitHub or unset URLs, in which case that script refuses to publish.
+        ``scripts/deploy_dist.sh`` uses this slug as the default target
+        repository for deploying the generated ``dist/`` package. Returns
+        ``None`` for non-GitHub or unset URLs, in which case that script
+        requires ``--remote``.
         """
         if self.repository_url is None:
             return None

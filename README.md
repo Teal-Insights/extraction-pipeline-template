@@ -426,15 +426,25 @@ Pull requests run the same test suite on Ubuntu via `.github/workflows/test.yml`
 
 ### Deploying the generated package
 
-Publish the committed `dist/` with `scripts/publish_dist.sh`. Run that script when asked to publish `dist/`.
+Deploy the committed `dist/` with `scripts/deploy_dist.sh`. Run that script when asked to deploy or publish `dist/`.
 
 ```bash
 uv run python -m src.extraction_pipeline
 git add -f dist && git commit -m "Regenerate dist/"
-bash scripts/publish_dist.sh
+bash scripts/deploy_dist.sh            # or --dry-run to build and test the merge without pushing
 ```
 
-The script reads the target repository from `DIST_METADATA.repository_url`, exports the committed `dist/` tree with `git archive` (ignored build output such as `.venv/` and `great-docs/_site/` stays behind), rsyncs that tree onto a fresh clone, and pushes `main`. It exits if `dist/` is missing from the commit or has uncommitted changes. The package repository builds its user guide to GitHub Pages from `dist/.github/workflows/deploy-docs.yml` on that push.
+The script reads the target repository from `DIST_METADATA.repository_url` (override with `--remote URL`) and clones it. It finds the most recent commit on `main` whose subject starts with `Deploy generated package from `, replaces that commit's tree with the committed `dist/` (exported with `git archive`, so ignored build output such as `.venv/` and `great-docs/_site/` stays behind), and commits it as a new deploy commit. It then merges that deploy commit into `main`. Commits made directly in the package repository survive the merge, and files dropped from `dist/` are removed.
+
+The script pushes nothing when:
+
+- `dist/` is missing from `HEAD` or has uncommitted changes.
+- The package repository has no earlier deploy commit to use as a base.
+- `dist/` matches the last deploy ("Nothing to deploy").
+- The merge conflicts with a commit made directly in the package repository. The script lists the conflicted files; bring those edits into the pipeline, regenerate `dist/`, and redeploy.
+- `uv run --locked --with pytest pytest -q` fails on the merged tree. Pass `--skip-tests` to skip this step.
+
+Otherwise it pushes `main` with your local git credentials. The package repository builds its user guide to GitHub Pages from `dist/.github/workflows/deploy-docs.yml` on that push.
 
 Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (workbook audits auto-select from a warm `.cache/dependency-graph/`; optional `GRAPH_AUDIT_CASES` steers pins/labels; synthetic fixture audits run without extra setup; provider API key required for `LLM_GRAPH_AUDIT_MODEL`).
 
