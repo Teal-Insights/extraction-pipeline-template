@@ -188,6 +188,28 @@ def test_user_guide_agent_prompt_reserves_99_parity_page() -> None:
     assert "03-excel-parity-validation.qmd" not in prompt
 
 
+def test_user_guide_agent_prompt_embeds_graph_with_absolute_urls() -> None:
+    config = load_pipeline_config()
+    config = replace(
+        config,
+        dist_metadata=replace(
+            config.dist_metadata, documentation_url="https://docs.example.org/pkg/"
+        ),
+    )
+    prompt = build_user_guide_agent_prompt(config)
+    assert "https://docs.example.org/pkg/assets/graph/index.html" in prompt
+    assert "https://docs.example.org/pkg/assets/graph/index.html?preview=1" in prompt
+    assert "resources: [../assets/graph/**]" not in prompt
+
+
+def test_user_guide_agent_prompt_teaches_input_discovery() -> None:
+    config = load_pipeline_config()
+    prompt = build_user_guide_agent_prompt(config)
+    assert "inspect.signature" in prompt
+    assert "*Inputs.describe()" in prompt
+    assert "Lead with the model's result" in prompt
+
+
 def test_document_agent_model_defaults_to_luna(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

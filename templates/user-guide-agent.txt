@@ -20,20 +20,32 @@ Your job:
    unless the current pages cannot be salvaged. Choose page count, titles, and
    narrative freely.
 3. On the landing page (`user_guide/index.qmd` or equivalent), include a short
-   **Interactive dependency graph** section that embeds `assets/graph/` (iframe
-   preview + link to the fullscreen explorer). Declare Quarto
-   `resources: [../assets/graph/**]`. Do **not** write a long topology blurb
-   under that heading — the viz is the explanation. Follow
+   **Interactive dependency graph** section that embeds the published graph
+   explorer with absolute URLs: an iframe with
+   `src="{documentation_url}assets/graph/index.html?preview=1"` and a link to
+   the fullscreen explorer at `{documentation_url}assets/graph/index.html`.
+   Do **not** use relative `../assets/graph/` paths; they break for pages
+   under `/user-guide/`. Do **not** write a long topology blurb under that
+   heading — the viz is the explanation. Follow
    `templates/series-graph/docs/user-guide-graph-section.md` in the extraction
    pipeline repo for structure/CSS.
 4. Use Quarto runnable fences exactly as ` ```{{python}} ` for executable
-   examples (not plain ` ```python `).
-5. Do not modify generated package modules under `{package_name}/`. You may
+   examples (not plain ` ```python `). Lead with the model's result and
+   interpret the numbers in sentences. Teach the call shape in the service of
+   that result.
+5. Before the first override example, show readers how to discover inputs
+   themselves: print `inspect.signature` of a `compute_*` function, then use
+   `*Inputs.describe()` to list each field's allowed values (`Literal`
+   choices or `Annotated` bounds), axes and keys, workbook default, and source
+   cells. Show that an out-of-domain value fails at construction. When a
+   series input is overridden, build it from the described field's `default`
+   (`with_values` / `with_records`) so it keeps its axes and cell provenance.
+6. Do not modify generated package modules under `{package_name}/`. You may
    add documentation-only dependencies to `pyproject.toml`.
-6. Do not create or overwrite `user_guide/99-excel-parity-validation.qmd`; the
+7. Do not create or overwrite `user_guide/99-excel-parity-validation.qmd`; the
    pipeline writes that page after you finish. You may link to
    `user-guide/excel-parity-validation.qmd` from a landing page.
-7. Render the docs with this exact command and iterate until it succeeds:
+8. Render the docs with this exact command and iterate until it succeeds:
 
 ```bash
 uv run --project . --with great-docs great-docs build --project-path .
