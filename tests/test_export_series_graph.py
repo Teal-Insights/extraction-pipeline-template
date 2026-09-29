@@ -89,6 +89,35 @@ def test_seeded_evaluator_defaults_to_the_differential_workbook_fixture(
     )
 
 
+def test_seeded_evaluator_builds_the_graph_with_pipeline_blank_ranges(
+    tmp_path: Path,
+) -> None:
+    config = _seed(tmp_path)
+    tree = ast.parse(
+        (config.package_root / "graph_formula_evaluator.py").read_text(encoding="utf-8")
+    )
+
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "blank_ranges"
+        and node.level == 1
+        and [alias.name for alias in node.names] == ["BLANK_RANGES"]
+        for node in tree.body
+    )
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "create_dependency_graph"
+    ]
+    assert calls
+    for call in calls:
+        blank_ranges = {kw.arg: kw.value for kw in call.keywords}["blank_ranges"]
+        assert isinstance(blank_ranges, ast.Name)
+        assert blank_ranges.id == "BLANK_RANGES"
+
+
 def test_seeded_evaluator_reads_input_ids_from_graph_schema(tmp_path: Path) -> None:
     config = _seed(tmp_path)
     evaluator = (config.package_root / "graph_formula_evaluator.py").read_text(

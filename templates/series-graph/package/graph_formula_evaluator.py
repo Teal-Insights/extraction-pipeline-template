@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .blank_ranges import BLANK_RANGES
 from .graph_schema import (
     INPUT_IDS,
     NODES_BY_ID,
@@ -86,6 +87,7 @@ class _FormulaEvaluatorDriver:
             list(all_cell_addresses()),
             load_values=True,
             dynamic_refs=_build_dynamic_refs(workbook),
+            blank_ranges=BLANK_RANGES,
         )
         self.evaluator = FormulaEvaluator(self.graph)
         self._baselines: dict[str, object] = {}

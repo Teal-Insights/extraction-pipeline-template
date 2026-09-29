@@ -272,6 +272,37 @@ local scripts (`serve_graph_api.py`, …). Author `{package}/graph_schema.py`
 `examples/reference_graph_schema.py`. The document agent embeds a short landing-page
 section (no long topology blurb); fragment notes live in
 [templates/series-graph/docs/user-guide-graph-section.md](templates/series-graph/docs/user-guide-graph-section.md).
+Export also writes `{package}/blank_ranges.py` from `BLANK_RANGES` in
+[workbook_config.py](workbook_config.py), and the seeded evaluator passes it to
+`create_dependency_graph`, so the runtime graph matches the pipeline's.
+
+### Durable `dist/` customizations: `dist-overlay/`
+
+`dist/` is rebuilt on every export, so do not hand-edit it. Put workbook-specific
+files that belong in the package but are not generated in `dist-overlay/` at the
+repository root, at their `dist/` relative paths: a filled-in
+`{package}/graph_schema.py`, deploy config (`Dockerfile`, `railway.toml`,
+`Procfile`), `LICENSE.md`, editor or agent config. Export copies them over
+`dist/` last. They may replace seeded series-graph files, so you can author the
+graph schema without forking [templates/series-graph/](templates/series-graph/).
+
+Export fails with `ValueError` if the overlay supplies a path the pipeline
+writes, because a later stage or the next run would overwrite it silently. These
+paths are:
+
+- Codegen package modules and `{package}/blank_ranges.py`
+- `pyproject.toml`, `uv.lock`, `README.md`, `.gitignore`, `great-docs.yml`,
+  `.github/workflows/deploy-docs.yml`, `tests/README.md`, `tests/__init__.py`,
+  `.pipeline-cache-keys.json`, `.package-overlay-manifest.json`
+- Anything under `bindings/`, `docs-source/`, `great-docs/`, `user_guide/`,
+  `tests/differential/`, `tests/fixtures/`, or `tests/results/`
+
+Export records the copied paths in `dist/.package-overlay-manifest.json`. On the
+next export, files you removed from the overlay are removed from `dist/`, and a
+seeded file you stopped overriding goes back to the template version.
+`__pycache__/` is skipped. Ruff, ty, and pytest ignore `dist-overlay/`, because
+overlay package fragments use relative imports that only resolve inside `dist/`.
+Tests under `dist-overlay/tests/` run in `dist/`.
 
 Run the FormulaEvaluator-backed viz from `dist/`:
 
@@ -441,7 +472,7 @@ The script pushes nothing when:
 - `dist/` is missing from `HEAD` or has uncommitted changes.
 - The package repository has no earlier deploy commit to use as a base.
 - `dist/` matches the last deploy ("Nothing to deploy").
-- The merge conflicts with a commit made directly in the package repository. The script lists the conflicted files; bring those edits into the pipeline, regenerate `dist/`, and redeploy.
+- The merge conflicts with a commit made directly in the package repository. The script lists the conflicted files; bring those edits into the pipeline (usually `dist-overlay/`), regenerate `dist/`, and redeploy.
 - `uv run --locked --with pytest pytest -q` fails on the merged tree. Pass `--skip-tests` to skip this step.
 
 Otherwise it pushes `main` with your local git credentials. The package repository builds its user guide to GitHub Pages from `dist/.github/workflows/deploy-docs.yml` on that push.
@@ -457,6 +488,7 @@ Opt-in LLM graph spot-check tests: `uv run pytest --run-skipped` (workbook audit
 | `bindings/` | Series binding sidecars (user-authored) |
 | `data/` | Workbook, guide, differential reports |
 | `dist/` | Generated distributable package (gitignored) |
+| `dist-overlay/` | Optional hand-authored files copied over `dist/` on export |
 | `templates/` | Binding prompt and canonical API usage reference |
 | `.github/workflows/` | Template CI (PR tests) |
 | `technical_standard.md` | Acceptance bar and stage gates |
