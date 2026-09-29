@@ -494,7 +494,7 @@ def load_pipeline_dependency_graph(
         _warn_if_cached_graph_is_stale(config, cache_key)
         return graph, cache_key
 
-    dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints, {})
+    dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints)
     result = get_or_build_dependency_graph(
         workbook_path=config.workbook_path,
         targets=config.targets,

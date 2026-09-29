@@ -287,7 +287,7 @@ class MvpGraphDriver:
         constraints: dict[str, object],
         blank_ranges: tuple[str, ...] = (),
     ) -> None:
-        config = DynamicRefConfig.from_constraints(constraints, {})
+        config = DynamicRefConfig.from_constraints(constraints)
         cached = try_load_cached_dependency_graph(
             workbook_path=workbook_path,
             targets=targets,

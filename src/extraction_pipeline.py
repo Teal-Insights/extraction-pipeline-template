@@ -465,7 +465,7 @@ def build_dependency_graph(
         )
 
     with stage("create_dependency_graph"):
-        dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints, {})
+        dynamic_ref_config = DynamicRefConfig.from_constraints(config.constraints)
         graph_result = get_or_build_dependency_graph(
             workbook_path=config.workbook_path,
             targets=config.targets,
