@@ -25,6 +25,24 @@ dev = [
 
 [tool.pytest.ini_options]
 addopts = "-v -p no:faulthandler -p no:cacheprovider"
+# pytest defaults plus dist-overlay/, whose tests run after materialization
+# in dist/.
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "dist-overlay",
+]
+
+[tool.ruff]
+# Overlay package fragments use relative imports that resolve only in dist/.
+extend-exclude = ["dist-overlay"]
 
 [tool.ruff.lint]
 # Ruff 0.16+ expanded defaults (413 rules): see
@@ -40,8 +58,9 @@ addopts = "-v -p no:faulthandler -p no:cacheprovider"
 
 [tool.ty.src]
 # Series-graph templates are copied into a generated package. Their relative
-# imports and ``tiny_dsa`` imports resolve only after that copy.
-exclude = ["templates"]
+# imports and ``tiny_dsa`` imports resolve only after that copy. The same holds
+# for ``dist-overlay/`` fragments.
+exclude = ["templates", "dist-overlay"]
 
 [tool.ruff.format]
 # Keep formatted Python on LF so Windows checkouts cannot reintroduce the CRLF
