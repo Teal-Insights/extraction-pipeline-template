@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -76,9 +77,15 @@ def test_seeded_evaluator_defaults_to_the_differential_workbook_fixture(
         encoding="utf-8"
     )
 
-    assert (
-        'DEFAULT_WORKBOOK = _REPO_ROOT / "tests" / "fixtures" / "model-fixture.xlsx"'
-        in evaluator
+    assignments = {
+        target.id: ast.unparse(node.value)
+        for node in ast.parse(evaluator).body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert assignments["DEFAULT_WORKBOOK"] == (
+        "_REPO_ROOT / 'tests' / 'fixtures' / 'model-fixture.xlsx'"
     )
 
 
