@@ -50,6 +50,7 @@ uv run python scripts/check_graph_eval.py        # FE vs Model defaults
 ## Docs homepage embed
 
 The document-stage agent should add a short **Interactive dependency graph**
-section on the landing page (iframe + link to `assets/graph/index.html`) and
-declare Quarto `resources: [../assets/graph/**]`. Avoid long explanatory
+section on the landing page (iframe + link to
+`{documentation_url}assets/graph/index.html`, absolute URLs rather than
+relative `../assets/graph/` paths). Avoid long explanatory
 blurbs under the heading — the viz is the explanation.

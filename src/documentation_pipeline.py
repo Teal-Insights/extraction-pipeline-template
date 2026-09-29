@@ -43,7 +43,7 @@ from src.qmd_python_validation import (
 
 DOCUMENT_AGENT_MODEL_ENV = "DOCUMENT_AGENT_MODEL"
 DEFAULT_DOCUMENT_AGENT_MODEL = "gpt-5.6-luna"
-USER_GUIDE_AGENT_PROMPT_VERSION = 2
+USER_GUIDE_AGENT_PROMPT_VERSION = 3
 DOCUMENT_AGENT_DEADLINE_ENV = "DOCUMENT_AGENT_DEADLINE"
 DEFAULT_DOCUMENT_AGENT_DEADLINE_SECONDS = 1800.0
 CURSOR_API_KEY_ENV = "CURSOR_API_KEY"
@@ -132,6 +132,7 @@ def build_user_guide_agent_prompt(config: PipelineConfig) -> str:
         api_import_path=config.api_import_path,
         install_command=config.dist_metadata.resolved_install_command(),
         package_name=config.dist_metadata.package_name,
+        documentation_url=config.dist_metadata.documentation_url,
     ).strip()
 
 

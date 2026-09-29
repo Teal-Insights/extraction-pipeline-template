@@ -4,23 +4,21 @@ Add a short **Interactive dependency graph** section on `user_guide/index.qmd`
 (or the site landing page). Do **not** write a long topology blurb under the
 heading — the viz is the explanation.
 
-## Quarto front matter
-
-Declare resources so the UI ships with the site:
-
-```yaml
-resources:
-  - ../assets/graph/**
-```
+## Styling
 
 Style the embed with a small `include-in-header` block using a
 `series-graph-*` class prefix.
 
 ## HTML embed
 
-Link + iframe pointing at `assets/graph/index.html` (fullscreen) and
-`assets/graph/index.html?preview=1` (docs paint). Resolve relative bases for
-both `/user-guide/` and site-root publishes.
+The docs deploy workflow copies `assets/graph/` to the site root, so embed it
+with absolute URLs built from the package's `documentation_url`:
+
+- iframe `src="{documentation_url}assets/graph/index.html?preview=1"` (docs paint)
+- fullscreen link `{documentation_url}assets/graph/index.html`
+
+Do not use relative `../assets/graph/` paths; they break for pages under
+`/user-guide/`.
 
 ## Local FormulaEvaluator API
 
