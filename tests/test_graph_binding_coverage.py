@@ -16,7 +16,7 @@ from tests.conftest import SyntheticConfiguredPipeline
 
 
 def _empty_bindings() -> WorkbookSeriesBindings:
-    return cast(WorkbookSeriesBindings, {"schema_version": "1.19.0", "series": []})
+    return cast(WorkbookSeriesBindings, {"schema_version": "1.22.0", "series": []})
 
 
 def test_require_graph_binding_coverage_raises_with_missing_address(
@@ -87,7 +87,7 @@ def test_audit_binding_resolutions_keeps_other_findings_with_unbound_cells(
     bindings = cast(
         WorkbookSeriesBindings,
         {
-            "schema_version": "1.19.0",
+            "schema_version": "1.22.0",
             "series": [
                 {
                     "id": "partial",

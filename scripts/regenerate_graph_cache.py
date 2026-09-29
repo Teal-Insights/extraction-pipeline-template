@@ -77,7 +77,7 @@ def regenerate_graph_cache(
 ) -> set[str]:
     config = load_pipeline_config()
     validate_pipeline_config(config)
-    dynamic_refs = DynamicRefConfig.from_constraints(config.constraints, {})
+    dynamic_refs = DynamicRefConfig.from_constraints(config.constraints)
     bindings = load_series_bindings(config.bindings_path)
 
     if force:
