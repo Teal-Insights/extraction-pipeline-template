@@ -9,7 +9,7 @@
 
   const BACKEND = "formula_evaluator";
   const LAYER_ORIGIN_X = 140;
-  const LAYER_GAP_X = 280;
+  const LAYER_GAP = 80;
   const LAYER_ROW = 78;
   const LAYER_TOP = 70;
   const FORCE_GAP_X = 40;
@@ -42,6 +42,9 @@
   let STARTER_LAYOUT = null;
   /** @type {"force" | "layered"} */
   let layoutMode = "layered";
+  /** Layered columns (series ids) and their x, kept to re-space after values change. */
+  let layeredColumns = [];
+  let layeredXs = [];
 
   function trimSlash(url) {
     return String(url || "").replace(/\/+$/, "");
@@ -364,32 +367,54 @@
     return columns;
   }
 
+  function layeredColumnXs(cyInstance, columns) {
+    const widths = {};
+    for (const id of columns.flat()) widths[id] = cyInstance.$id(id).data("width");
+    return globalThis.SeriesGraphLayeredLayout.columnXs({
+      columns,
+      widths,
+      originX: LAYER_ORIGIN_X,
+      gap: LAYER_GAP,
+    });
+  }
+
   function applyNeuralLayout(cyInstance) {
     const layersById = computeLayers();
-    if (!layersById) {
-      const columns = { input: [], internal: [], output: [] };
-      for (const series of SERIES) columns[series.role].push(series.id);
-      const roleX = { input: 140, internal: 520, output: 900 };
-      for (const role of ["input", "internal", "output"]) {
-        columns[role].forEach((id, index) => {
-          cyInstance.$id(id).position({
-            x: roleX[role],
-            y: LAYER_TOP + index * LAYER_ROW,
-          });
-        });
-      }
-      return;
+    let columns;
+    if (layersById) {
+      columns = orderWithinLayers(layersById);
+    } else {
+      const byRole = { input: [], internal: [], output: [] };
+      for (const series of SERIES) byRole[series.role].push(series.id);
+      columns = [byRole.input, byRole.internal, byRole.output];
     }
 
-    const columns = orderWithinLayers(layersById);
+    const xs = layeredColumnXs(cyInstance, columns);
     columns.forEach((col, layerIndex) => {
       col.forEach((id, rowIndex) => {
         cyInstance.$id(id).position({
-          x: LAYER_ORIGIN_X + layerIndex * LAYER_GAP_X,
+          x: xs[layerIndex],
           y: LAYER_TOP + rowIndex * LAYER_ROW,
         });
       });
     });
+    layeredColumns = columns;
+    layeredXs = xs;
+  }
+
+  /** Box widths follow values, so shift each layered column by its new spacing. */
+  function respaceLayeredColumns(cyInstance) {
+    if (layoutMode !== "layered") return;
+    const xs = layeredColumnXs(cyInstance, layeredColumns);
+    layeredColumns.forEach((col, layerIndex) => {
+      const dx = xs[layerIndex] - layeredXs[layerIndex];
+      if (!dx) return;
+      col.forEach((id) => {
+        const node = cyInstance.$id(id);
+        node.position({ x: node.position("x") + dx, y: node.position("y") });
+      });
+    });
+    layeredXs = xs;
   }
 
   function applyForceLayout(cyInstance) {
@@ -454,6 +479,7 @@
         setTimeout(() => node.removeClass("changed"), 700);
       }
     }
+    respaceLayeredColumns(cyInstance);
     cyInstance.nodes().forEach((node) => node.trigger("position"));
   }
 
