@@ -120,3 +120,45 @@ def restore_pipeline_disk_cache() -> None:
 def reset_pipeline_test_state() -> None:
     for module_name in _PROBE_MODULE_NAMES:
         sys.modules.pop(module_name, None)
+
+
+def _repo_pipeline_artifact_paths(repo_root: Path) -> list[Path]:
+    artifacts = repo_root / "artifacts"
+    return [
+        *sorted((artifacts / "stages").glob("*.json")),
+        artifacts / "stage-timings.json",
+    ]
+
+
+def snapshot_repo_pipeline_artifacts(
+    repo_root: Path = _REPO_ROOT,
+) -> dict[str, tuple[int, bytes] | None]:
+    """Capture stage manifests and stage timings under ``repo_root``.
+
+    Tests must write these under ``tmp_path``; a real ``artifacts/stages/*.json``
+    written from a synthetic config makes the next staged pipeline run fail with
+    ``StageManifestDriftError``.
+    """
+    return {
+        path.relative_to(repo_root).as_posix(): (
+            (path.stat().st_mtime_ns, path.read_bytes()) if path.is_file() else None
+        )
+        for path in _repo_pipeline_artifact_paths(repo_root)
+    }
+
+
+def assert_repo_pipeline_artifacts_unchanged(
+    before: dict[str, tuple[int, bytes] | None],
+    repo_root: Path = _REPO_ROOT,
+) -> None:
+    after = snapshot_repo_pipeline_artifacts(repo_root)
+    changed = sorted(
+        path
+        for path in before.keys() | after.keys()
+        if before.get(path) != after.get(path)
+    )
+    if changed:
+        raise AssertionError(
+            "test modified real pipeline artifacts (pass repo_root=tmp_path): "
+            + ", ".join(changed)
+        )

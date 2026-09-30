@@ -49,6 +49,7 @@ def test_extract_dependency_graph_writes_artifacts(
     output_dir = tmp_path / "dependency-graph"
     config = replace(
         synthetic_pipeline_config_fixture,
+        repo_root=tmp_path,
         graph_output_dir=output_dir,
     )
 
@@ -87,6 +88,7 @@ def test_extract_dependency_graph_succeeds_with_empty_binding_shards(
     output_dir = tmp_path / "dependency-graph"
     config = replace(
         synthetic_pipeline_config_fixture,
+        repo_root=tmp_path,
         bindings_path=bindings,
         graph_output_dir=output_dir,
     )
@@ -128,6 +130,7 @@ def test_extract_dependency_graph_succeeds_without_binding_yaml_files(
     output_dir = tmp_path / "dependency-graph"
     config = replace(
         synthetic_pipeline_config_fixture,
+        repo_root=tmp_path,
         bindings_path=bindings,
         graph_output_dir=output_dir,
     )
@@ -146,6 +149,7 @@ def test_extract_graph_cli_exits_zero_on_synthetic_workbook(
     output_dir = tmp_path / "artifacts" / "dependency-graph"
     config = replace(
         synthetic_pipeline_config_fixture,
+        repo_root=tmp_path,
         graph_output_dir=output_dir,
     )
 
