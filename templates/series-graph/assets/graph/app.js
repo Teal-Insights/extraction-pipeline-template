@@ -8,10 +8,7 @@
   "use strict";
 
   const BACKEND = "formula_evaluator";
-  const LAYER_ORIGIN_X = 140;
-  const LAYER_GAP = 80;
-  const LAYER_ROW = 78;
-  const LAYER_TOP = 70;
+  const DEFAULT_TITLE = "Dependency graph";
   const FORCE_GAP_X = 40;
   const FORCE_GAP_Y = 18;
 
@@ -38,13 +35,9 @@
   const positionUndo = [];
   let dragOrigin = null;
   let apiBase = "";
-  /** Precomputed force layout from layout.json, or null. */
+  /** Precomputed force layout from layout.json. */
   let STARTER_LAYOUT = null;
-  /** @type {"force" | "layered"} */
-  let layoutMode = "layered";
-  /** Layered columns (series ids) and their x, kept to re-space after values change. */
-  let layeredColumns = [];
-  let layeredXs = [];
+  const Panel = globalThis.SeriesGraphPanel;
 
   function trimSlash(url) {
     return String(url || "").replace(/\/+$/, "");
@@ -187,14 +180,25 @@
     throw lastError || new Error("Could not load graph bootstrap");
   }
 
-  /** layout.json is written by the export pipeline; absent when no series are authored. */
+  /** A missing or stale layout.json is a pipeline bug, shown in the graph pane. */
+  function layoutError(message) {
+    const err = new Error(
+      `${message} Re-run the export stage so it rewrites assets/graph/layout.json from graph_schema.py.`
+    );
+    err.layout = true;
+    return err;
+  }
+
+  /** layout.json is written by the export pipeline whenever graph_schema.py has series. */
   async function loadStarterLayout() {
+    let data;
     try {
-      const data = await fetchJson(new URL("./layout.json", window.location.href).href);
-      return data && data.positions ? data : null;
-    } catch (_err) {
-      return null;
+      data = await fetchJson(new URL("./layout.json", window.location.href).href);
+    } catch (err) {
+      throw layoutError(`Could not load layout.json (${err.message}).`);
     }
+    if (!data || !data.positions) throw layoutError("layout.json has no positions.");
+    return data;
   }
 
   async function evaluateRemote(nextInputs) {
@@ -236,16 +240,20 @@
     if (series.keys.length === 1 && series.keys[0] == null) {
       return formatValue(raw);
     }
-    return series.keys.map((key) => formatValue(raw[key])).join(", ");
+    return Panel.summarize(
+      series.keys.map((key) => formatValue(raw[key])),
+      "values"
+    );
   }
 
   function addressText(series) {
     if (series.address) return series.address;
     if (series.addresses) {
-      return series.keys.map((key) => {
-        const addresses = series.addresses;
-        return addresses[key] ?? addresses[String(key)];
-      }).join(", ");
+      const addresses = series.addresses;
+      return Panel.summarize(
+        series.keys.map((key) => addresses[key] ?? addresses[String(key)]),
+        "cells"
+      );
     }
     return "";
   }
@@ -286,138 +294,7 @@
     return elements;
   }
 
-  function computeLayers() {
-    const ids = SERIES.map((s) => s.id);
-    const preds = Object.fromEntries(ids.map((id) => [id, []]));
-    const succs = Object.fromEntries(ids.map((id) => [id, []]));
-    for (const [source, target] of SERIES_EDGES) {
-      preds[target].push(source);
-      succs[source].push(target);
-    }
-
-    const layer = Object.fromEntries(ids.map((id) => [id, 0]));
-    const indegree = Object.fromEntries(ids.map((id) => [id, preds[id].length]));
-    const queue = ids.filter((id) => indegree[id] === 0);
-    let seen = 0;
-    while (queue.length) {
-      const u = queue.shift();
-      seen += 1;
-      for (const v of succs[u]) {
-        layer[v] = Math.max(layer[v], layer[u] + 1);
-        indegree[v] -= 1;
-        if (indegree[v] === 0) queue.push(v);
-      }
-    }
-    if (seen !== ids.length) {
-      console.warn("Series graph has a cycle; falling back to role columns");
-      return null;
-    }
-    return layer;
-  }
-
-  function orderWithinLayers(layersById) {
-    const maxLayer = Math.max(...Object.values(layersById));
-    const columns = Array.from({ length: maxLayer + 1 }, () => []);
-    for (const series of SERIES) {
-      columns[layersById[series.id]].push(series.id);
-    }
-
-    const succs = Object.fromEntries(SERIES.map((s) => [s.id, []]));
-    const preds = Object.fromEntries(SERIES.map((s) => [s.id, []]));
-    for (const [source, target] of SERIES_EDGES) {
-      succs[source].push(target);
-      preds[target].push(source);
-    }
-
-    const rank = {};
-    columns.forEach((col) => {
-      col.forEach((id, index) => {
-        rank[id] = index;
-      });
-    });
-
-    for (let sweep = 0; sweep < 2; sweep += 1) {
-      for (let L = 1; L <= maxLayer; L += 1) {
-        columns[L].sort((a, b) => {
-          const bary = (id) => {
-            const neighbors = preds[id];
-            if (!neighbors.length) return rank[id];
-            return neighbors.reduce((sum, n) => sum + rank[n], 0) / neighbors.length;
-          };
-          return bary(a) - bary(b);
-        });
-        columns[L].forEach((id, index) => {
-          rank[id] = index;
-        });
-      }
-      for (let L = maxLayer - 1; L >= 0; L -= 1) {
-        columns[L].sort((a, b) => {
-          const bary = (id) => {
-            const neighbors = succs[id];
-            if (!neighbors.length) return rank[id];
-            return neighbors.reduce((sum, n) => sum + rank[n], 0) / neighbors.length;
-          };
-          return bary(a) - bary(b);
-        });
-        columns[L].forEach((id, index) => {
-          rank[id] = index;
-        });
-      }
-    }
-    return columns;
-  }
-
-  function layeredColumnXs(cyInstance, columns) {
-    const widths = {};
-    for (const id of columns.flat()) widths[id] = cyInstance.$id(id).data("width");
-    return globalThis.SeriesGraphLayeredLayout.columnXs({
-      columns,
-      widths,
-      originX: LAYER_ORIGIN_X,
-      gap: LAYER_GAP,
-    });
-  }
-
-  function applyNeuralLayout(cyInstance) {
-    const layersById = computeLayers();
-    let columns;
-    if (layersById) {
-      columns = orderWithinLayers(layersById);
-    } else {
-      const byRole = { input: [], internal: [], output: [] };
-      for (const series of SERIES) byRole[series.role].push(series.id);
-      columns = [byRole.input, byRole.internal, byRole.output];
-    }
-
-    const xs = layeredColumnXs(cyInstance, columns);
-    columns.forEach((col, layerIndex) => {
-      col.forEach((id, rowIndex) => {
-        cyInstance.$id(id).position({
-          x: xs[layerIndex],
-          y: LAYER_TOP + rowIndex * LAYER_ROW,
-        });
-      });
-    });
-    layeredColumns = columns;
-    layeredXs = xs;
-  }
-
-  /** Box widths follow values, so shift each layered column by its new spacing. */
-  function respaceLayeredColumns(cyInstance) {
-    if (layoutMode !== "layered") return;
-    const xs = layeredColumnXs(cyInstance, layeredColumns);
-    layeredColumns.forEach((col, layerIndex) => {
-      const dx = xs[layerIndex] - layeredXs[layerIndex];
-      if (!dx) return;
-      col.forEach((id) => {
-        const node = cyInstance.$id(id);
-        node.position({ x: node.position("x") + dx, y: node.position("y") });
-      });
-    });
-    layeredXs = xs;
-  }
-
-  function applyForceLayout(cyInstance) {
+  function applyLayout(cyInstance) {
     const sizes = {};
     cyInstance.nodes("node.series").forEach((node) => {
       sizes[node.id()] = { width: node.data("width"), height: node.data("height") };
@@ -429,38 +306,10 @@
       gapX: FORCE_GAP_X,
       gapY: FORCE_GAP_Y,
     });
-    if (!placed) {
-      console.warn("layout.json does not cover every series; using the layered layout");
-      return false;
-    }
+    if (!placed) throw layoutError("layout.json does not cover every series.");
     for (const [id, pos] of Object.entries(placed)) {
       cyInstance.$id(id).position(pos);
     }
-    return true;
-  }
-
-  function applyLayout(cyInstance) {
-    if (layoutMode === "force" && !applyForceLayout(cyInstance)) {
-      layoutMode = "layered";
-    }
-    if (layoutMode === "layered") applyNeuralLayout(cyInstance);
-    // Layered edges leave the right side and enter the left; force edges may run any way.
-    cyInstance.edges("edge.dep").toggleClass("force", layoutMode === "force");
-    syncLayoutButton();
-  }
-
-  function syncLayoutButton() {
-    const button = document.getElementById("btn-layout");
-    if (!button) return;
-    button.hidden = !STARTER_LAYOUT;
-    button.textContent = layoutMode === "force" ? "Layered layout" : "Force layout";
-  }
-
-  function toggleLayout() {
-    layoutMode = layoutMode === "force" ? "layered" : "force";
-    positionUndo.length = 0;
-    applyLayout(cy);
-    cy.fit(undefined, 48);
   }
 
   function patchValues(cyInstance, allValues, changedIds) {
@@ -479,7 +328,6 @@
         setTimeout(() => node.removeClass("changed"), 700);
       }
     }
-    respaceLayeredColumns(cyInstance);
     cyInstance.nodes().forEach((node) => node.trigger("position"));
   }
 
@@ -517,16 +365,11 @@
     }
   }
 
-  function optionLabel(series, option) {
-    const labels = series.optionLabels || {};
-    return labels[option] ?? labels[String(option)] ?? String(option);
-  }
-
   function renderSide(nodeId) {
     const panel = document.getElementById("side");
     if (!nodeId) {
       panel.innerHTML =
-        '<p class="empty">Select a series node. Amber inputs are editable (comma-separated values). Drag nodes to rearrange; Ctrl+Z undoes a move. Values come from excel-grapher FormulaEvaluator.</p>';
+        '<p class="empty">Select a series node. Amber inputs are editable. Drag nodes to rearrange; Ctrl+Z undoes a move. Values come from excel-grapher FormulaEvaluator.</p>';
       selectedId = null;
       return;
     }
@@ -540,40 +383,20 @@
     const editable = series.role === "input";
     const vals = valuesText(series, values);
     const keysHint =
-      series.keys[0] == null ? "scalar" : series.keys.join(", ");
+      series.keys[0] == null ? "scalar" : Panel.summarize(series.keys, "keys");
 
     let editor = "";
     if (editable) {
-      if (series.kind === "enum") {
-        editor = `<label for="edit-value">Value</label><select id="edit-value">${series.options
-          .map(
-            (o) =>
-              `<option value="${o}" ${o === inputs.country_name ? "selected" : ""}>${o}</option>`
-          )
-          .join("")}</select>`;
-      } else if (series.kind === "enum_int") {
-        editor = `<label for="edit-value">Value</label><select id="edit-value">${series.options
-          .map(
-            (o) =>
-              `<option value="${o}" ${Number(o) === Number(inputs.shock_type) ? "selected" : ""}>${optionLabel(
-                series,
-                o
-              )}</option>`
-          )
-          .join("")}</select>`;
-      } else if (series.kind === "int") {
-        editor = `<label for="edit-value">Value (integer ${series.domain.min}–${series.domain.max})</label><input id="edit-value" type="number" step="1" min="${series.domain.min}" max="${series.domain.max}" value="${inputs.shock_year}" />`;
-      } else {
-        editor = `<label for="edit-value">Values (comma-separated · ${keysHint})</label><input id="edit-value" type="text" value="${vals}" />`;
-      }
+      editor = Panel.editorHtml(series, inputs[series.id]);
       editor += `<button class="primary" type="button" id="apply-edit">Apply</button>`;
     } else {
       editor = `<p class="hint">Read-only ${series.role} series. Edit an amber input upstream to change these values.</p>`;
     }
 
     panel.innerHTML = `
-      <h2>${series.label}</h2>
+      <h2>${Panel.escapeHtml(series.label)}</h2>
       <div class="meta">${addressText(series) || "—"} · ${series.role} · ${series.sheet}</div>
+      ${Panel.hintHtml(series)}
       <div class="values-display">${vals}</div>
       <div style="margin-top:0.75rem">${editor}</div>
       <p class="hint" style="margin-top:0.85rem">Keys: ${keysHint}. Double-click an input node to focus the editor. Ctrl+Z undoes node moves.</p>
@@ -594,41 +417,7 @@
 
   function commitEdit(series, raw) {
     try {
-      if (series.kind === "enum") {
-        if (!series.options.includes(raw)) throw new Error("Invalid country");
-        inputs.country_name = raw;
-        return true;
-      }
-      if (series.kind === "enum_int") {
-        const n = Number(raw);
-        if (!series.options.map(Number).includes(n)) throw new Error("Invalid shock type");
-        inputs.shock_type = n;
-        return true;
-      }
-      if (series.kind === "int") {
-        const n = Number(raw);
-        if (!Number.isInteger(n) || n < series.domain.min || n > series.domain.max) {
-          throw new Error("Out of range");
-        }
-        inputs.shock_year = n;
-        return true;
-      }
-      const parts = String(raw)
-        .split(",")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0);
-      if (parts.length !== series.keys.length) {
-        throw new Error(`Expected ${series.keys.length} values`);
-      }
-      const next = {};
-      series.keys.forEach((key, index) => {
-        const n = Number(parts[index]);
-        if (!Number.isFinite(n) || n < series.domain.min || n > series.domain.max) {
-          throw new Error(`Out of range at ${key}`);
-        }
-        next[key] = n;
-      });
-      inputs[series.id] = next;
+      inputs[series.id] = Panel.parseEdit(series, raw);
       return true;
     } catch (err) {
       toast(err.message || "Invalid value");
@@ -746,21 +535,14 @@
           style: {
             width: 2,
             "curve-style": "bezier",
-            "source-endpoint": "50% 0",
-            "target-endpoint": "-50% 0",
+            "source-endpoint": "outside-to-node",
+            "target-endpoint": "outside-to-node",
             "target-arrow-shape": "triangle",
             "target-arrow-color": "#a8a29e",
             "line-color": "#a8a29e",
             "arrow-scale": 1,
             opacity: 0.85,
             "z-index": 1,
-          },
-        },
-        {
-          selector: "edge.dep.force",
-          style: {
-            "source-endpoint": "outside-to-node",
-            "target-endpoint": "outside-to-node",
           },
         },
       ],
@@ -850,10 +632,22 @@
     evaluateRemote,
   };
 
+  /** config.js may set window.SERIES_GRAPH_TITLE for this workbook. */
+  function applyTitle() {
+    const title =
+      typeof window.SERIES_GRAPH_TITLE === "string" && window.SERIES_GRAPH_TITLE
+        ? window.SERIES_GRAPH_TITLE
+        : DEFAULT_TITLE;
+    document.title = title;
+    const heading = document.querySelector(".toolbar h1");
+    if (heading) heading.textContent = title;
+  }
+
   async function main() {
     const cyEl = typeof document !== "undefined" ? document.getElementById("cy") : null;
     if (!cyEl || typeof cytoscape !== "function") return;
 
+    applyTitle();
     cyEl.innerHTML =
       '<p style="padding:1rem;font:14px system-ui;color:#57534e;">Loading FormulaEvaluator graph…</p>';
 
@@ -861,14 +655,12 @@
       const [data, starterLayout] = await Promise.all([loadBootstrap(), loadStarterLayout()]);
       applyBootstrap(data);
       STARTER_LAYOUT = starterLayout;
-      layoutMode = STARTER_LAYOUT ? "force" : "layered";
       cyEl.innerHTML = "";
       if (!PREVIEW) {
         document.getElementById("btn-reset").addEventListener("click", () => {
           resetAll();
         });
         document.getElementById("btn-fit").addEventListener("click", fitGraph);
-        document.getElementById("btn-layout").addEventListener("click", toggleLayout);
         document.addEventListener("keydown", (event) => {
           const key = event.key.toLowerCase();
           if (!(event.ctrlKey || event.metaKey) || key !== "z" || event.shiftKey) return;
@@ -885,8 +677,13 @@
       }
     } catch (err) {
       console.error("Series graph failed to initialize", err);
-      cyEl.innerHTML =
-        '<p style="padding:1rem;font:14px system-ui;color:#b91c1c;">Graph failed to load. Serve with <code>uv run python scripts/serve_graph_api.py</code> (FormulaEvaluator) or provide <code>bootstrap.json</code>.</p>';
+      if (cy) {
+        cy.destroy();
+        cy = null;
+      }
+      cyEl.innerHTML = err.layout
+        ? `<p style="padding:1rem;font:14px system-ui;color:#b91c1c;">Graph layout error: ${Panel.escapeHtml(err.message)}</p>`
+        : '<p style="padding:1rem;font:14px system-ui;color:#b91c1c;">Graph failed to load. Serve with <code>uv run python scripts/serve_graph_api.py</code> (FormulaEvaluator) or provide <code>bootstrap.json</code>.</p>';
     }
   }
 
