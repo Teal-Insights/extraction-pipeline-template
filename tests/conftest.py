@@ -24,9 +24,11 @@ from tests.fixtures.synthetic_pipeline import (
     write_synthetic_workbook,
 )
 from tests.fixtures.test_state import (
+    assert_repo_pipeline_artifacts_unchanged,
     redirect_pipeline_disk_cache,
     reset_pipeline_test_state,
     restore_pipeline_disk_cache,
+    snapshot_repo_pipeline_artifacts,
 )
 
 
@@ -72,6 +74,13 @@ def pytest_collection_modifyitems(
 def _reset_shared_pipeline_state_after_test() -> Iterator[None]:
     yield
     reset_pipeline_test_state()
+
+
+@pytest.fixture(autouse=True)
+def _forbid_writes_to_repo_pipeline_artifacts() -> Iterator[None]:
+    before = snapshot_repo_pipeline_artifacts()
+    yield
+    assert_repo_pipeline_artifacts_unchanged(before)
 
 
 @pytest.fixture(scope="session")
