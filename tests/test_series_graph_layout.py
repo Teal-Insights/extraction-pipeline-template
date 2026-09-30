@@ -133,3 +133,39 @@ def test_overlay_may_not_supply_layout(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="layout.json"):
         _materialize(config)
     assert (tmp_path / DIST_OVERLAY_REL / SERIES_GRAPH_LAYOUT_REL).is_file()
+
+
+# 1 <-> 2 is a may-cycle (conditional mutual reference) between two internals.
+_CYCLIC_TOPOLOGY = SeriesGraphTopology(
+    node_ids=("in", "left", "right", "out"),
+    roles=("input", "internal", "internal", "output"),
+    edges=(("in", "left"), ("left", "right"), ("right", "left"), ("right", "out")),
+)
+
+
+def test_layout_places_every_node_of_a_cyclic_graph() -> None:
+    positions = compute_series_graph_layout(_CYCLIC_TOPOLOGY)
+
+    assert set(positions) == set(_CYCLIC_TOPOLOGY.node_ids)
+    assert positions["in"][0] < positions["out"][0]
+
+
+def test_materialize_writes_layout_for_a_cyclic_graph_schema(tmp_path: Path) -> None:
+    config = _prepare_repo(tmp_path)
+    _write_overlay(
+        tmp_path,
+        "my_model/graph_schema.py",
+        "NODES = (\n"
+        '    {"id": "in", "role": "input"},\n'
+        '    {"id": "left", "role": "internal"},\n'
+        '    {"id": "right", "role": "internal"},\n'
+        '    {"id": "out", "role": "output"},\n'
+        ")\n"
+        'EDGES = (("in", "left"), ("left", "right"), ("right", "left"), ("right", "out"))\n',
+    )
+    _materialize(config)
+
+    payload = json.loads(
+        (config.dist_root / SERIES_GRAPH_LAYOUT_REL).read_text(encoding="utf-8")
+    )
+    assert set(payload["positions"]) == set(_CYCLIC_TOPOLOGY.node_ids)

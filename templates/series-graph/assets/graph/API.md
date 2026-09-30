@@ -82,7 +82,7 @@ Returns topology, defaults, and evaluated default values in one round trip. `bac
 | `axes` | Named axis domains, display only. May be `{}`. |
 | `defaults` | Workbook inputs, flat. Keys are input node ids. Seeds the editor and Reset. |
 | `nodes` | One per series, in display order. |
-| `edges` | `[producer, consumer]` pairs forming a DAG. |
+| `edges` | `[producer, consumer]` pairs. May contain cycles. |
 | `values` | Evaluated series for `defaults`, flat, covering every node. Inputs echo their defaults. |
 | `backend` / `backends` | Backend used; backends available. |
 
@@ -100,14 +100,18 @@ All fields are required.
 | `address` \| `addresses` | Exactly one: a single cell, or `key → cell`. Display-only provenance. |
 | `domain` | Optional `{min, max}` numeric range. |
 | `options`, `optionLabels` | Allowed values and their labels, for enum kinds. |
+| `hint` | Optional text shown in the side panel under the label. |
 
 | `kind` | Editor | Validation |
 |--------|--------|------------|
 | `scalar` | read-only | — |
 | `enum` | select over `options` | value ∈ `options` |
 | `enum_int` | select over `options` | numeric value ∈ `options` |
-| `int` | number input | integer within `domain` |
-| any other kind with `domain` (e.g. `year_map`) | comma-separated text | one finite number per key, within `domain` |
+| `int` | number input | integer, within `domain` if given |
+| any other scalar kind (`keys: [null]`, e.g. `float`) | number input | finite number, within `domain` if given |
+| any other keyed kind (e.g. `year_map`) | comma-separated text | one finite number per key, within `domain` if given |
+
+Only `input` nodes get an editor. Edits are stored under the node's own `id` in `inputs`.
 
 ### `POST /api/evaluate`
 
@@ -167,7 +171,7 @@ The reference server also serves this directory at `/`. It resolves directories 
 
 1. Every `nodes[].id` is a key in `GET /api/graph` `values`.
 2. Every edge endpoint is a known node id.
-3. `edges` form a DAG. On a cycle, the UI warns and falls back to role columns.
+3. `./layout.json` (written by the export pipeline) has a position for every node. The UI has no other layout: a missing or incomplete file shows an error in the graph pane.
 4. Every `defaults` key is an `input` node, and every `input` node is in `defaults`.
 5. For keyed nodes, `values[id]` has every member of `keys`.
 6. `POST /api/evaluate` with `{"inputs": defaults}` returns the same `values` as `GET /api/graph` on the same backend.
